@@ -16,6 +16,37 @@ Actors do not have to be root-tracked occupants to speak. Any actor that knows
 the room DID-URL can send `:say` or `:emote`; the room broadcasts the text to
 the current root-tracked occupants.
 
+## Room ownership
+
+Rooms store their owner as a user DID in the room-local `owner` prop. Avatars
+are not owners; for user-facing commands they act as delegates and prepend their
+stored user DID before forwarding to the room. Direct room RPCs use `msg-from`
+as the caller identity.
+
+Protected room commands accept both shapes:
+
+```scheme
+(:claim)
+(:owner [<new-owner-did>])
+(:dig <direction> [to <new-room-name>])
+
+(:claim <user-did>)
+(:owner <user-did> [<new-owner-did>])
+(:dig <user-did> <direction> [to <new-room-name>])
+```
+
+The second shape is accepted only from known room occupants, which are avatar
+actors maintained by root context.
+
+`:claim` only succeeds when the room has no owner. `:owner` with no target
+prints the owner; with a target DID it transfers ownership and requires the
+caller to be the current owner. `:dig` requires ownership of the current room
+and assigns the digger's user DID to any newly-created target room.
+
+Exits to already-existing rooms are rejected until there is a root-mediated or
+room-to-room ownership check. That keeps the invariant simple: no actor creates
+an exit to or from a room unless ownership can be verified.
+
 ## Context flow
 
 Normal flow is push-based: whenever root registers that someone enters or

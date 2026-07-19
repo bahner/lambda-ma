@@ -6,8 +6,10 @@
 
 (define (self) (ma-get-config-key "self"))
 (define (runtime) (ma-get-config-key "runtime"))
-(define (root) (ma-get-config-key "root"))
 (define (entity-url fragment) (string-append (runtime) "#" fragment))
+(define (root)
+  (let ((configured (ma-get-config-key "root")))
+    (if configured configured (entity-url "root"))))
 
 (define (join-words words)
   (cond ((null? words) "")
@@ -80,6 +82,41 @@
 (define (from-root? msg)
   (equal? (msg-from msg) (root)))
 
+(define (owner) (get-prop "owner"))
+(define (owned?) (if (owner) #t #f))
+(define (owner? user) (equal? user (owner)))
+
+(define (valid-owner? value)
+  (and (string? value) (not (equal? value ""))))
+
+(define (set-owner! user)
+  (set-prop! "owner" user)
+  (ma-save-state!))
+
+(define (reply-to-sender msg text)
+  (ma-send! (msg-from msg) (list :print text)))
+
+(define (delegated-call? args msg)
+  (and (not (null? args)) (member? (msg-from msg) (occupants))))
+
+(define (caller-user args msg)
+  (if (delegated-call? args msg) (car args) (msg-from msg)))
+
+(define (command-args args msg)
+  (if (delegated-call? args msg) (cdr args) args))
+
+(define (require-valid-owner user msg thunk)
+  (if (valid-owner? user)
+      (thunk)
+      (reply-to-sender msg "Owner must be a non-empty user DID.")))
+
+(define (require-owner user msg thunk)
+  (cond ((not (owned?))
+         (reply-to-sender msg "This room is unowned. Claim it before building here."))
+        ((owner? user) (thunk))
+        (else
+         (reply-to-sender msg "Only this room's owner can build exits here."))))
+
 (define (on-event event args msg)
   (cond ((equal? event :join-avatar)
          (let ((avatar (car args)))
@@ -103,12 +140,38 @@
 
 (define (exit-key direction) (string-append "exit:" direction))
 
-(define (room-init) #f)
+(define (room-init name owner-did)
+  (if name
+      (string-append
+        "(set-prop! \"root\" \"" (root) "\")\n"
+        "(set-prop! \"name\" \"" name "\")\n"
+        "(set-prop! \"owner\" \"" owner-did "\")\n"
+        "(ma-save-state!)")
+      (string-append
+        "(set-prop! \"root\" \"" (root) "\")\n"
+        "(set-prop! \"owner\" \"" owner-did "\")\n"
+        "(ma-save-state!)")))
 
 (define (exit-init direction target-room)
   (string-append
     "(set-prop! \"direction\" \"" direction "\")\n"
     "(set-prop! \"target-room\" \"" target-room "\")"))
+
+(define (dig-target-args args)
+  (if (null? args)
+      '()
+      (let ((rest (cdr args)))
+        (if (and (not (null? rest)) (equal? (car rest) "to"))
+            (cdr rest)
+            rest))))
+
+(define (dig-target-text args)
+  (let ((target-args (dig-target-args args)))
+    (if (null? target-args) #f (join-words target-args))))
+
+(define (existing-room-target target)
+  (cond ((equal? target "#construct") (entity-url "construct"))
+        (else #f)))
 
 (set-method! :join-avatar
   (lambda (args msg)
@@ -157,19 +220,60 @@
           (text (join-words args)))
       (broadcast (string-append (speaker-name speaker) " " text)))))
 
+(set-method! :claim
+  (lambda (args msg)
+    (let ((user (caller-user args msg)))
+      (require-valid-owner user msg
+        (lambda ()
+          (if (owned?)
+              (reply-to-sender msg (string-append "This room is already owned by " (owner) "."))
+              (begin
+                (set-owner! user)
+                (reply-to-sender msg (string-append "You now own " (room-name) ".")))))))))
+
+(set-method! :owner
+  (lambda (args msg)
+    (let ((user (caller-user args msg))
+          (owner-args (command-args args msg)))
+      (if (null? owner-args)
+          (let ((current-owner (owner)))
+            (if current-owner
+                (reply-to-sender msg (string-append "Owner: " current-owner))
+                (reply-to-sender msg "This room is unowned.")))
+          (require-valid-owner user msg
+            (lambda ()
+              (require-owner user msg
+                (lambda ()
+                  (let ((new-owner (car owner-args)))
+                    (if (valid-owner? new-owner)
+                        (begin
+                          (set-owner! new-owner)
+                          (reply-to-sender msg (string-append "Owner set to " new-owner ".")))
+                        (reply-to-sender msg "New owner must be a non-empty user DID.")))))))))))
+
 (set-method! :dig
   (lambda (args msg)
-    (let ((avatar (msg-from msg))
-          (direction (if (null? args) "out" (car args))))
-      (add-occupant! avatar)
-      (let* ((room-fragment (ma-create-actor ROOM_KIND #f (room-init)))
-             (target-room (entity-url room-fragment))
-             (exit-fragment (ma-create-actor EXIT_KIND #f (exit-init direction target-room)))
-             (exit (entity-url exit-fragment)))
-        (set-prop! (exit-key direction) exit)
-        (ma-save-state!)
-        (broadcast (string-append avatar " digs " direction "."))
-        (ma-send! avatar (list :print (string-append "You dig " direction " and open a new exit.")))))))
+    (let* ((user (caller-user args msg))
+           (dig-args (command-args args msg))
+           (direction (if (null? dig-args) "out" (car dig-args))))
+      (require-valid-owner user msg
+        (lambda ()
+          (require-owner user msg
+            (lambda ()
+              (let ((existing-exit (get-prop (exit-key direction))))
+                (if existing-exit
+                    (reply-to-sender msg (string-append "There is already an exit " direction "."))
+                          (let* ((target (dig-target-text dig-args))
+                           (existing-room (existing-room-target target)))
+                      (if existing-room
+                          (reply-to-sender msg "Existing-room links need ownership of both rooms and are not supported yet.")
+                          (let* ((target-room (entity-url (ma-create-actor ROOM_KIND #f (room-init target user))))
+                                 (exit-fragment (ma-create-actor EXIT_KIND #f (exit-init direction target-room)))
+                                 (exit (entity-url exit-fragment)))
+                            (set-prop! (exit-key direction) exit)
+                            (ma-save-state!)
+                            (broadcast (string-append user " digs " direction "."))
+                            (reply-to-sender msg (string-append "You dig " direction " and open a new exit."))))))))))))))
 
 (set-method! :go
   (lambda (args msg)

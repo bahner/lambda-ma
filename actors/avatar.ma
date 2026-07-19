@@ -2,8 +2,12 @@
 ; Root owns protected state. The user may call exposed command methods only.
 
 (define (self) (ma-get-config-key "self"))
+(define (runtime) (ma-get-config-key "runtime"))
+(define (entity-url fragment) (string-append (runtime) "#" fragment))
 (define (user) (get-prop "user"))
-(define (root) (ma-get-config-key "root"))
+(define (root)
+  (let ((configured (ma-get-config-key "root")))
+    (if configured configured (entity-url "root"))))
 (define (room) (get-prop "room"))
 (define (nick)
   (let ((value (get-prop "nick")))
@@ -27,6 +31,9 @@
     (if target
         (ma-send! target (cons verb args))
         (ma-send! (user) (list :print "You are nowhere.")))))
+
+(define (send-room-as-user verb args)
+  (send-room verb (cons (user) args)))
 
 (set-method! :set-location
   (lambda (args msg)
@@ -101,11 +108,25 @@
         (send-room :duck args)
         (ma-reply! msg (list :ok "duck"))))))
 
+(set-method! :claim
+  (lambda (args msg)
+    (require-user msg
+      (lambda ()
+        (send-room-as-user :claim args)
+        (ma-reply! msg (list :ok "claiming"))))))
+
+(set-method! :owner
+  (lambda (args msg)
+    (require-user msg
+      (lambda ()
+        (send-room-as-user :owner args)
+        (ma-reply! msg (list :ok "owner"))))))
+
 (set-method! :dig
   (lambda (args msg)
     (require-user msg
       (lambda ()
-        (send-room :dig args)
+        (send-room-as-user :dig args)
         (ma-reply! msg (list :ok "digging"))))))
 
 (set-method! :go

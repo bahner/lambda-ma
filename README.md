@@ -7,7 +7,7 @@
 ```text
 actors/root.ma          placement registry, avatar creation, zion :ctx receipts
 actors/avatar.ma        user command endpoint
-actors/room.ma          room policy, occupants, dig/go, exit ownership
+actors/room.ma          room policy, occupants, claim/owner, dig/go, exit ownership
 actors/exit.ma          traversal between rooms
 actors/duck.ma          stationary rubber duck that can say kvakk
 actors/python/          reserved for Python actors when a concrete feature needs them
@@ -65,6 +65,26 @@ The command prints a runtime root CID. Start `ma` with that CID or save it in th
 ```
 
 After that, zion routes focus shorthand through the avatar created by `#root`.
+
+## Building rooms
+
+Rooms are owned by user DIDs, not avatars. An avatar is only the user's current
+command costume. For normal focus commands the avatar acts as a delegate and
+forwards the user's DID to the room; direct room RPCs still use the message
+`from` DID as the caller.
+
+```text
+claim                  claim an unowned room through your avatar
+owner                  show the current room owner through your avatar
+owner did:ma:<target>  transfer the room to another user DID through your avatar
+dig north to Garden    create an exit and a new room owned by you
+```
+
+Only the current owner may create exits from a room. Newly dug rooms are owned
+by the digger automatically, so a builder can give someone a room with `owner`
+and that user can then build outward from there. Linking to an already-existing
+room is intentionally rejected for now because the room actor cannot yet verify
+that the caller owns the target room too.
 
 ## Develop
 

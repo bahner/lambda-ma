@@ -86,6 +86,7 @@ runtime:
         genesis: true
       acl: open
       init: |
+        (set-prop! "root" (string-append (ma-get-config-key "runtime") "#root"))
         (set-prop! "name" "The Construct")
         (set-prop! "description" "This is the Construct. It's our loading program. We can load anything... From clothing to equipment, weapons, training simulations; anything we need.")
         (ma-save-state!)

@@ -57,31 +57,35 @@
 (define (send-room-ctx room)
   (ma-send! room (list :ctx :avatars (avatar-summaries-in-room room))))
 
-(define (room-init) #f)
+(define (room-init)
+  (string-append "(set-prop! \"root\" \"" (self) "\")"))
 
 (define (exit-init direction target-room)
   (string-append
+    "(set-prop! \"root\" \"" (self) "\")\n"
     "(set-prop! \"direction\" \"" direction "\")\n"
     "(set-prop! \"target-room\" \"" target-room "\")"))
 
 (define (avatar-init user nick)
   (string-append
     "(set-prop! \"user\" \"" user "\")\n"
+    "(set-prop! \"root\" \"" (self) "\")\n"
     "(set-prop! \"nick\" \"" (nick-or-default nick) "\")"))
 
+(define (configured-start-room)
+  (let ((configured (ma-get-config-key "start")))
+    (if configured configured (get-prop "start"))))
+
 (define (ensure-start-room)
-  (let ((existing (ma-get-config-key "start")))
-    (if existing
-        existing
-        (let ((legacy (get-prop "start-room")))
-          (if legacy
-              (begin
-                (set-prop! "start" legacy)
-                legacy)
-              (let* ((fragment (ma-create-actor ROOM_KIND #f (room-init)))
-                     (room (entity-url fragment)))
-                (set-prop! "start" room)
-                room))))))
+  (let ((start (configured-start-room)))
+    (if start
+        (if (equal? (get-prop "start") start)
+            start
+            (begin
+              (set-prop! "start" start)
+              (ma-save-state!)
+              start))
+        (error "entry start room is not configured"))))
 
 (define (entry-exit-key room)
   (string-append "entry-exit:" room))
