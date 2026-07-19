@@ -11,10 +11,11 @@ actors/room.ma          room policy, occupants, claim/owner, dig/go, exit owners
 actors/exit.ma          traversal between rooms
 actors/duck.ma          stationary rubber duck that can say kvakk
 actors/python/          reserved for Python actors when a concrete feature needs them
+scheme-actor/           generic ma-scheme actor Wasm crate and stdlib
 Makefile                publishes actor sources and generates dist/lambda-ma.yaml
 ```
 
-The generated bootstrap currently contains only what this MVP needs: the generic ma-scheme actor kind, a genesis variant, the λ-間 actor kinds, the scheduler, `#root`, and the initial `#construct` room.
+The generated bootstrap currently contains only what this MVP needs: the generic ma-scheme actor kind built from `scheme-actor/`, a genesis variant, the λ-間 actor kinds, the scheduler, `#root`, and the initial `#construct` room.
 
 Python actors are intentionally not bulk-copied yet. The existing Python actor libraries still live in the workspace-level `python-ma-actors` repo; they should move into `actors/python/` when a concrete λ-間 feature uses them, along with a Makefile path that builds their Wasm and wires their kind CIDs into the generated bootstrap.
 
@@ -22,17 +23,23 @@ Python actors are intentionally not bulk-copied yet. The existing Python actor l
 
 Kubo/IPFS must be running locally.
 
+The Rust Wasm target must be installed because `make` builds the local scheme actor before publishing the bootstrap inputs:
+
+```sh
+rustup target add wasm32-unknown-unknown
+```
+
 ```sh
 make
 ```
 
-This publishes `actors/*.ma` with `ipfs add` and writes:
+This builds `scheme-actor/actor.wasm`, publishes it together with `scheme-actor/stdlib.ma` and `actors/*.ma` using `ipfs add`, and writes:
 
 ```text
 dist/lambda-ma.yaml
 ```
 
-To see the world behaviour CIDs:
+To see the scheme actor, stdlib, and world behaviour CIDs:
 
 ```sh
 make show-cids
@@ -88,11 +95,11 @@ that the caller owns the target room too.
 
 ## Develop
 
-Edit the `.ma` files, then run:
+Edit the `.ma` files or the local scheme actor crate, then run:
 
 ```sh
 make clean
 make
 ```
 
-Commit the source files and template, not `dist/`.
+Commit the source files and template, not `dist/`, `scheme-actor/target/`, or `scheme-actor/actor.wasm`.
