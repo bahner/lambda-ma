@@ -176,11 +176,11 @@
            (previous-room (if existing-avatar (get-prop (avatar-room-key existing-avatar)) #f))
            (room (entry-room (requested-room args) previous-room))
            (nick (effective-nick (requested-nick args) existing-avatar))
-       (avatar (ensure-avatar user nick))
-       (entry-exit (ensure-entry-exit room)))
+           (avatar (ensure-avatar user nick)))
       (set-avatar-nick! avatar nick)
-      (ma-reply! msg (ctx-term (live-avatar-for-ctx avatar) nick room "Entering."))
-     (ma-send! entry-exit (list :traverse avatar (self))))))
+          (ma-reply! msg (ctx-term "" nick room "Entering."))
+          (ma-send! avatar (list :print "You go in."))
+          (ma-send! room (list :enter-avatar avatar (self))))))
 
 (set-method! :avatar?
   (lambda (args msg)
