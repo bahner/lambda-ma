@@ -57,23 +57,20 @@
 (define (send-room-ctx room)
   (ma-send! room (list :ctx :avatars (avatar-summaries-in-room room))))
 
-(define (room-init)
-  (string-append "(set-prop! \"root\" \"" (self) "\")"))
+(define (room-init) #f)
 
 (define (exit-init direction target-room)
   (string-append
-    "(set-prop! \"root\" \"" (self) "\")\n"
     "(set-prop! \"direction\" \"" direction "\")\n"
     "(set-prop! \"target-room\" \"" target-room "\")"))
 
 (define (avatar-init user nick)
   (string-append
     "(set-prop! \"user\" \"" user "\")\n"
-    "(set-prop! \"root\" \"" (self) "\")\n"
     "(set-prop! \"nick\" \"" (nick-or-default nick) "\")"))
 
 (define (ensure-start-room)
-  (let ((existing (get-prop "start")))
+  (let ((existing (ma-get-config-key "start")))
     (if existing
         existing
         (let ((legacy (get-prop "start-room")))
@@ -194,12 +191,3 @@
                 (if user (send-ctx user avatar room #f) #f)
                 (ma-reply! msg (list :ok nick)))
               (ma-reply! msg (list :error "nick sender must be an avatar")))))))
-
-(set-method! :avatars
-  (lambda (args msg)
-    (let ((room (if (null? args) (msg-from msg) (car args))))
-      (if (equal? (msg-from msg) room)
-          (begin
-            (send-room-ctx room)
-            (ma-reply! msg (list :ok "avatars")))
-          (ma-reply! msg (list :error "avatar context request sender mismatch"))))))

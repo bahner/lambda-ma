@@ -3,7 +3,7 @@
 
 (define (self) (ma-get-config-key "self"))
 (define (user) (get-prop "user"))
-(define (root) (get-prop "root"))
+(define (root) (ma-get-config-key "root"))
 (define (room) (get-prop "room"))
 (define (nick)
   (let ((value (get-prop "nick")))

@@ -44,16 +44,8 @@ Rooms also accept the older `(<avatar> ...)` shape as a repair/backwards-
 compatibility input, but root now sends nick-bearing entries.
 
 Room accepts `:join-avatar`, `:leave-avatar`, and `:ctx` only from root.
-
-Rooms may also request fresh occupant context from root as a repair/resync
-mechanism, but normal operation does not depend on pull:
-
-```scheme
-(ma-send! root (list :avatars room))
-```
-
-Room exposes this as `:avatars` for explicit repair/resync. It is not called
-automatically during normal movement.
+Root sends fresh occupant context directly after every movement or nick change;
+rooms do not pull avatar context.
 
 ## Movement flow
 

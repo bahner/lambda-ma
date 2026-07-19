@@ -3,7 +3,7 @@ MA ?= ma
 OUT ?= dist/lambda-ma.yaml
 CID_DIR ?= dist/cids
 
-SCHEME_ACTOR_CID ?= bafkreid7sentz3z73jjsywrb24bqghgnvggoujcyqethken2w6y4g6tt7a
+SCHEME_ACTOR_CID ?= bafkreicpvj2akfbtry4d2qgxpu5n7uhftosyod5dxuumkj2nfvmawtjwu4
 SCHEME_STDLIB_CID ?= bafkreialwzyindzb53xgwchpnb5f6cuatrixbdmsbr3gkdykanbilq6ecy
 
 ACTORS := root avatar room exit duck

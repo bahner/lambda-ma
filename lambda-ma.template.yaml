@@ -35,13 +35,10 @@ runtime:
         - ma_ipfs_include
         - ma_create_entity
 
-    /ma/genesis/0.0.1:
+    /ma/root/0.0.1:
       extends: /ma/scheme/actor/0.0.1
       attributes:
         genesis: true
-
-    /ma/root/0.0.1:
-      extends: /ma/genesis/0.0.1
       behaviour:
         "/": __ROOT_BEHAVIOUR_CID__
 
@@ -69,6 +66,7 @@ runtime:
       type: native
       attributes:
         stateful: true
+        genesis: true
 
   entities:
     scheduler:
@@ -83,8 +81,9 @@ runtime:
 
     construct:
       kind: /ma/room/0.0.1
+      attributes:
+        genesis: true
       acl: open
       init: |
-        (set-prop! "root" (string-append (ma-get-config-key "runtime") "#root"))
         (set-prop! "name" "The Construct")
         (set-prop! "description" "This is the Construct. It's our loading program. We can load anything... From clothing to equipment, weapons, training simulations; anything we need.")

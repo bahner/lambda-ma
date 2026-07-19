@@ -194,12 +194,3 @@
                 (if user (send-ctx user avatar room #f) #f)
                 (ma-reply! msg (list :ok nick)))
               (ma-reply! msg (list :error "nick sender must be an avatar")))))))
-
-(set-method! :avatars
-  (lambda (args msg)
-    (let ((room (if (null? args) (msg-from msg) (car args))))
-      (if (equal? (msg-from msg) room)
-          (begin
-            (send-room-ctx room)
-            (ma-reply! msg (list :ok "avatars")))
-          (ma-reply! msg (list :error "avatar context request sender mismatch"))))))

@@ -7,7 +7,7 @@
 
 (define (self) (ma-get-config-key "self"))
 (define (runtime) (ma-get-config-key "runtime"))
-(define (root) (get-prop "root"))
+(define (root) (ma-get-config-key "root"))
 (define (entity-url fragment) (string-append (runtime) "#" fragment))
 
 (define (join-words words)
@@ -113,12 +113,10 @@
 
 (define (exit-key direction) (string-append "exit:" direction))
 
-(define (room-init)
-  (string-append "(set-prop! \"root\" \"" (root) "\")"))
+(define (room-init) #f)
 
 (define (exit-init direction target-room)
   (string-append
-    "(set-prop! \"root\" \"" (root) "\")\n"
     "(set-prop! \"direction\" \"" direction "\")\n"
     "(set-prop! \"target-room\" \"" target-room "\")"))
 
@@ -149,10 +147,6 @@
                 (ma-save-state!))
               #f))
         #f)))
-
-(set-method! :avatars
-  (lambda (args msg)
-    (ma-send! (root) (list :avatars (self)))))
 
 (set-method! :look
   (lambda (args msg)
