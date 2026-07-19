@@ -43,6 +43,16 @@ prints the owner; with a target DID it transfers ownership and requires the
 caller to be the current owner. `:dig` requires ownership of the current room
 and assigns the digger's user DID to any newly-created target room.
 
+Colon-prefixed methods are not avatar-mediated. Room metadata is a direct room
+RPC:
+
+```scheme
+(:prop <key> [<value> ...])
+```
+
+`:prop` requires the direct caller to be the room owner, sets an arbitrary room
+prop to the joined text value, and deletes that prop when no value is supplied.
+
 Exits to already-existing rooms are rejected until there is a root-mediated or
 room-to-room ownership check. That keeps the invariant simple: no actor creates
 an exit to or from a room unless ownership can be verified.

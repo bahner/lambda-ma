@@ -78,6 +78,19 @@ mod tests {
     }
 
     #[test]
+    fn lambda_ma_actor_files_parse() {
+        for (name, source) in [
+            ("avatar.ma", include_str!("../../actors/avatar.ma")),
+            ("room.ma", include_str!("../../actors/room.ma")),
+            ("root.ma", include_str!("../../actors/root.ma")),
+            ("exit.ma", include_str!("../../actors/exit.ma")),
+            ("duck.ma", include_str!("../../actors/duck.ma")),
+        ] {
+            Parser::parse_all(source).unwrap_or_else(|err| panic!("{name}: {err}"));
+        }
+    }
+
+    #[test]
     fn arithmetic() {
         assert_eq!(run("(+ 1 2 3)"), Value::Int(6));
         assert_eq!(run("(- 10 3 2)"), Value::Int(5));

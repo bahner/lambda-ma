@@ -87,6 +87,19 @@ owner did:ma:<target>  transfer the room to another user DID through your avatar
 dig north to Garden    create an exit and a new room owned by you
 ```
 
+Colon-prefixed methods bypass the avatar and target the focused room directly:
+
+```text
+:prop name Biblioteket
+:prop description Et stille bibliotek.
+:prop description
+@ma#construct!prop name Biblioteket
+@ma#construct!prop description Et stille bibliotek.
+@ma#construct!prop description
+```
+
+The last form resets `description` to the default.
+
 Only the current owner may create exits from a room. Newly dug rooms are owned
 by the digger automatically, so a builder can give someone a room with `owner`
 and that user can then build outward from there. Linking to an already-existing

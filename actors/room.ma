@@ -93,8 +93,35 @@
   (set-prop! "owner" user)
   (ma-save-state!))
 
+(define (set-room-prop! key value)
+  (set-prop! key value)
+  (ma-save-state!))
+
 (define (reply-to-sender msg text)
   (ma-send! (msg-from msg) (list :print text)))
+
+(define (apply-room-prop! msg key value-args)
+  (if (null? value-args)
+      (begin
+        (del-prop! key)
+        (ma-save-state!)
+        (reply-to-sender msg (string-append "Reset prop " key ".")))
+      (begin
+        (set-room-prop! key (join-words value-args))
+        (reply-to-sender msg (string-append "Set prop " key ".")))))
+
+(define (handle-room-prop! msg args)
+  (let ((user (msg-from msg)))
+    (cond ((null? args)
+           (reply-to-sender msg "Usage: prop <key> [value]"))
+          ((equal? (car args) "")
+           (reply-to-sender msg "Prop key must be non-empty."))
+          (else
+           (require-valid-owner user msg
+             (lambda ()
+               (require-owner user msg
+                 (lambda ()
+                   (apply-room-prop! msg (car args) (cdr args))))))))))
 
 (define (delegated-call? args msg)
   (and (not (null? args)) (member? (msg-from msg) (occupants))))
@@ -250,6 +277,10 @@
                           (set-owner! new-owner)
                           (reply-to-sender msg (string-append "Owner set to " new-owner ".")))
                         (reply-to-sender msg "New owner must be a non-empty user DID.")))))))))))
+
+(set-method! :prop
+  (lambda (args msg)
+    (handle-room-prop! msg args)))
 
 (set-method! :dig
   (lambda (args msg)
