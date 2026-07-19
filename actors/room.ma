@@ -3,7 +3,6 @@
 
 (define ROOM_KIND "/ma/room/0.0.1")
 (define EXIT_KIND "/ma/exit/0.0.1")
-(define DUCK_KIND "/ma/rubber-duck/0.0.1")
 
 (define (self) (ma-get-config-key "self"))
 (define (runtime) (ma-get-config-key "runtime"))
@@ -24,19 +23,10 @@
   (let ((xs (get-prop "occupants")))
     (if xs xs '())))
 
-(define (ducks)
-  (let ((xs (get-prop "ducks")))
-    (if xs xs '())))
-
 (define (add-occupant! avatar)
   (if (member? avatar (occupants))
       #f
       (set-prop! "occupants" (cons avatar (occupants)))))
-
-(define (add-duck! duck)
-  (if (member? duck (ducks))
-      #f
-      (set-prop! "ducks" (cons duck (ducks)))))
 
 (define (remove-one x xs)
   (cond ((null? xs) '())
@@ -120,9 +110,6 @@
     "(set-prop! \"direction\" \"" direction "\")\n"
     "(set-prop! \"target-room\" \"" target-room "\")"))
 
-(define (duck-init)
-  (string-append "(set-prop! \"room\" \"" (self) "\")"))
-
 (set-method! :join-avatar
   (lambda (args msg)
     (if (from-root? msg)
@@ -151,10 +138,7 @@
 (set-method! :look
   (lambda (args msg)
     (let ((avatar (msg-from msg)))
-      (ma-send! avatar (list :print (room-text)))
-      (if (null? (ducks))
-          #f
-          (ma-send! avatar (list :print (string-append "You see: " (names-of (ducks)) ".")))))))
+      (ma-send! avatar (list :print (room-text))))))
 
 (set-method! :exits
   (lambda (args msg)
@@ -172,16 +156,6 @@
     (let ((speaker (msg-from msg))
           (text (join-words args)))
       (broadcast (string-append (speaker-name speaker) " " text)))))
-
-(set-method! :duck
-  (lambda (args msg)
-    (let* ((fragment (ma-create-actor DUCK_KIND #f (duck-init)))
-           (duck (entity-url fragment)))
-      (set-prop! (label-key duck) "rubber duck")
-      (add-duck! duck)
-      (ma-save-state!)
-      (broadcast "A rubber duck appears.")
-      (ma-send! duck :quack))))
 
 (set-method! :dig
   (lambda (args msg)
