@@ -65,11 +65,11 @@
 
 (define (room-name)
   (let ((name (get-prop "name")))
-    (if name name "A Room")))
+    (if name name "Construct")))
 
 (define (room-description)
   (let ((description (get-prop "description")))
-    (if description description "You are in a room.")))
+    (if description description "“This is the Construct. It's our loading program. We can load anything... From clothing to equipment, weapons, training simulations; anything we need.”")))
 
 (define (room-text)
   (string-append (room-name) "\n" (room-description)))
