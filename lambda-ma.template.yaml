@@ -78,6 +78,7 @@ runtime:
       acl: open
       init: |
         (set-prop! "start" (string-append (ma-get-config-key "runtime") "#construct"))
+        (ma-save-state!)
 
     construct:
       kind: /ma/room/0.0.1
@@ -87,3 +88,4 @@ runtime:
       init: |
         (set-prop! "name" "The Construct")
         (set-prop! "description" "This is the Construct. It's our loading program. We can load anything... From clothing to equipment, weapons, training simulations; anything we need.")
+        (ma-save-state!)
