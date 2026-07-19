@@ -100,28 +100,36 @@
 (define (reply-to-sender msg text)
   (ma-send! (msg-from msg) (list :print text)))
 
+(define (reply-ok msg text)
+  (ma-reply! msg (list :ok text)))
+
+(define (reply-error msg text)
+  (ma-reply! msg (list :error text)))
+
 (define (apply-room-prop! msg key value-args)
   (if (null? value-args)
       (begin
         (del-prop! key)
         (ma-save-state!)
-        (reply-to-sender msg (string-append "Reset prop " key ".")))
+        (reply-ok msg (string-append "Reset prop " key ".")))
       (begin
         (set-room-prop! key (join-words value-args))
-        (reply-to-sender msg (string-append "Set prop " key ".")))))
+        (reply-ok msg (string-append "Set prop " key ".")))))
 
 (define (handle-room-prop! msg args)
   (let ((user (msg-from msg)))
     (cond ((null? args)
-           (reply-to-sender msg "Usage: prop <key> [value]"))
+           (reply-error msg "Usage: prop <key> [value]"))
           ((equal? (car args) "")
-           (reply-to-sender msg "Prop key must be non-empty."))
+           (reply-error msg "Prop key must be non-empty."))
+          ((not (valid-owner? user))
+           (reply-error msg "Owner must be a non-empty user DID."))
+          ((not (owned?))
+           (reply-error msg "This room is unowned. Claim it before building here."))
+          ((not (owner? user))
+           (reply-error msg "Only this room's owner can build exits here."))
           (else
-           (require-valid-owner user msg
-             (lambda ()
-               (require-owner user msg
-                 (lambda ()
-                   (apply-room-prop! msg (car args) (cdr args))))))))))
+           (apply-room-prop! msg (car args) (cdr args))))))
 
 (define (delegated-call? args msg)
   (and (not (null? args)) (member? (msg-from msg) (occupants))))

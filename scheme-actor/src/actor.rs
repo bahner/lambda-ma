@@ -15,6 +15,7 @@ mod host {
     #[host_fn]
     extern "ExtismHost" {
         fn ma_create_entity(input: Vec<u8>) -> Vec<u8>;
+        fn ma_entity_exists(input: Vec<u8>) -> Vec<u8>;
     }
 
     /// `input` is CBOR-encoded `{"kind": text, "behaviour": text/null,
@@ -23,6 +24,21 @@ mod host {
     pub fn create_entity(input: &[u8]) -> Result<Vec<u8>, String> {
         unsafe { ma_create_entity(input.to_vec()) }.map_err(|e| e.to_string())
     }
+
+    /// `input` is raw UTF-8: `fragment`, `#fragment`, or a local DID-URL.
+    /// Returns raw UTF-8 `true` or `false`.
+    pub fn entity_exists(input: &str) -> Result<bool, String> {
+        let out =
+            unsafe { ma_entity_exists(input.as_bytes().to_vec()) }.map_err(|e| e.to_string())?;
+        match std::str::from_utf8(&out).map(str::trim) {
+            Ok("true") => Ok(true),
+            Ok("false") => Ok(false),
+            Ok(other) => Err(format!(
+                "ma_entity_exists returned invalid boolean: {other}"
+            )),
+            Err(e) => Err(format!("ma_entity_exists returned invalid UTF-8: {e}")),
+        }
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -30,6 +46,13 @@ mod host {
     pub fn create_entity(_input: &[u8]) -> Result<Vec<u8>, String> {
         Err(
             "ma_create_entity is only available compiled to wasm32 (no host to call natively)"
+                .to_string(),
+        )
+    }
+
+    pub fn entity_exists(_input: &str) -> Result<bool, String> {
+        Err(
+            "ma_entity_exists is only available compiled to wasm32 (no host to call natively)"
                 .to_string(),
         )
     }
@@ -46,6 +69,29 @@ pub fn install(env: &Rc<Env>) {
         Rc::from("ma-create-actor"),
         Value::Builtin("ma-create-actor", b_ma_create_actor),
     );
+    env.define(
+        Rc::from("ma-entity-exists?"),
+        Value::Builtin("ma-entity-exists?", b_ma_entity_exists),
+    );
+}
+
+/// `(ma-entity-exists? actor)` — true if `actor` names a live local entity.
+fn b_ma_entity_exists(args: &[Value]) -> EvalResult<Value> {
+    let [target] = args else {
+        return Err(EvalError::new(format!(
+            "ma-entity-exists?: expected exactly 1 argument, got {}",
+            args.len()
+        )));
+    };
+    let Value::Str(target) = target else {
+        return Err(EvalError::new(format!(
+            "ma-entity-exists?: target must be a string, found {}",
+            target.type_name()
+        )));
+    };
+    host::entity_exists(target)
+        .map(Value::Bool)
+        .map_err(|e| EvalError::new(format!("ma-entity-exists?: {e}")))
 }
 
 /// `(ma-create-actor kind behaviour init)` — requests creation of a new

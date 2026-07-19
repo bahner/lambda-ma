@@ -27,10 +27,18 @@
   (let ((room (get-prop (avatar-room-key avatar))))
     (if room room fallback)))
 
+(define (entity-live? actor)
+  (and actor (ma-entity-exists? actor)))
+
 (define (member? x xs)
   (cond ((null? xs) #f)
         ((equal? x (car xs)) #t)
         (else (member? x (cdr xs)))))
+
+(define (remove-one x xs)
+  (cond ((null? xs) '())
+        ((equal? x (car xs)) (remove-one x (cdr xs)))
+        (else (cons (car xs) (remove-one x (cdr xs))))))
 
 (define (avatars)
   (let ((xs (get-prop "avatars")))
@@ -40,6 +48,9 @@
   (if (member? avatar (avatars))
       #f
       (set-prop! "avatars" (cons avatar (avatars)))))
+
+(define (remove-avatar! avatar)
+  (if avatar (set-prop! "avatars" (remove-one avatar (avatars))) #f))
 
 (define (avatars-in-room room)
   (let loop ((xs (avatars)))
@@ -78,7 +89,7 @@
 
 (define (ensure-start-room)
   (let ((start (configured-start-room)))
-    (if start
+    (if (entity-live? start)
         (if (equal? (get-prop "start") start)
             start
             (begin
@@ -102,9 +113,10 @@
 
 (define (ensure-avatar user nick)
   (let ((existing (get-prop (avatar-key user))))
-    (if existing
+    (if (entity-live? existing)
         existing
-        (let* ((fragment (ma-create-actor AVATAR_KIND #f (avatar-init user nick)))
+        (let* ((_ (remove-avatar! existing))
+               (fragment (ma-create-actor AVATAR_KIND #f (avatar-init user nick)))
                (avatar (entity-url fragment)))
           (set-prop! (avatar-key user) avatar)
           (set-prop! (avatar-user-key avatar) user)
@@ -113,25 +125,41 @@
           (ma-save-state!)
           avatar))))
 
+(define (ctx-term avatar nick room text)
+  (list :ctx
+    (list (list :root (self))
+          (list :avatar avatar)
+          (list :nick (nick-or-default nick))
+          (list :room room)
+          (list :text text))))
+
+(define (live-avatar-for-ctx avatar)
+  (if (entity-live? avatar) avatar ""))
+
 (define (send-ctx user avatar room text)
-  (ma-send! user
-    (list :ctx
-      (list (list :root (self))
-            (list :avatar avatar)
-            (list :nick (avatar-nick avatar))
-            (list :room room)
-            (list :text text)))))
+  (ma-send! user (ctx-term avatar (avatar-nick avatar) room text)))
 
 (define (requested-room args)
-  (if (or (null? args) (equal? (car args) ""))
-      (ensure-start-room)
-      (car args)))
+  (if (or (null? args) (equal? (car args) "")) #f (car args)))
+
+(define (entry-room requested previous)
+  (cond ((entity-live? requested) requested)
+        ((entity-live? previous) previous)
+        (else (ensure-start-room))))
 
 (define (requested-nick args)
   (cond ((null? args) #f)
         ((equal? (car args) "") (if (null? (cdr args)) #f (car (cdr args))))
         ((null? (cdr args)) #f)
         (else (car (cdr args)))))
+
+(define (effective-nick requested existing-avatar)
+  (if requested
+      requested
+      (if existing-avatar
+          (let ((nick (get-prop (avatar-nick-key existing-avatar))))
+            (if nick nick (default-nick)))
+          (default-nick))))
 
 (define (set-avatar-nick! avatar nick)
   (if nick
@@ -144,11 +172,14 @@
 (set-method! :enter
   (lambda (args msg)
     (let* ((user (msg-from msg))
-           (room (requested-room args))
-           (nick (requested-nick args))
+           (existing-avatar (get-prop (avatar-key user)))
+           (previous-room (if existing-avatar (get-prop (avatar-room-key existing-avatar)) #f))
+           (room (entry-room (requested-room args) previous-room))
+           (nick (effective-nick (requested-nick args) existing-avatar))
        (avatar (ensure-avatar user nick))
        (entry-exit (ensure-entry-exit room)))
       (set-avatar-nick! avatar nick)
+      (ma-reply! msg (ctx-term (live-avatar-for-ctx avatar) nick room "Entering."))
      (ma-send! entry-exit (list :traverse avatar (self))))))
 
 (set-method! :avatar?
