@@ -10,6 +10,7 @@ mod host {
         fn ma_send(input: Vec<u8>) -> Vec<u8>;
         fn ma_reply(input: Vec<u8>) -> Vec<u8>;
         fn ma_set_state(input: Vec<u8>) -> Vec<u8>;
+        fn ma_set_behaviour(input: Vec<u8>) -> Vec<u8>;
     }
 
     pub fn send(input: &[u8]) -> Result<(), String> {
@@ -29,6 +30,12 @@ mod host {
             .map(|_| ())
             .map_err(|e| e.to_string())
     }
+
+    pub fn set_behaviour(input: &str) -> Result<(), String> {
+        unsafe { ma_set_behaviour(input.as_bytes().to_vec()) }
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -44,6 +51,13 @@ mod host {
     pub fn set_state(_input: &[u8]) -> Result<(), String> {
         Err(
             "ma_set_state is only available compiled to wasm32 (no host to call natively)"
+                .to_string(),
+        )
+    }
+
+    pub fn set_behaviour(_input: &str) -> Result<(), String> {
+        Err(
+            "ma_set_behaviour is only available compiled to wasm32 (no host to call natively)"
                 .to_string(),
         )
     }
@@ -68,6 +82,10 @@ pub fn install(env: &Rc<Env>) {
     env.define(
         Rc::from("ma-save-state!"),
         Value::Builtin("ma-save-state!", b_ma_save_state),
+    );
+    env.define(
+        Rc::from("ma-set-behaviour!"),
+        Value::Builtin("ma-set-behaviour!", b_ma_set_behaviour),
     );
 }
 
@@ -119,6 +137,25 @@ fn b_ma_save_state(args: &[Value]) -> EvalResult<Value> {
 
     let state = crate::state::dump_to_cbor()?;
     host::set_state(&state).map_err(|e| EvalError::new(format!("ma-save-state!: {e}")))?;
+    Ok(Value::Nil)
+}
+
+fn b_ma_set_behaviour(args: &[Value]) -> EvalResult<Value> {
+    let [reference] = args else {
+        return Err(EvalError::new(format!(
+            "ma-set-behaviour!: expected exactly 1 argument, got {}",
+            args.len()
+        )));
+    };
+    let Value::Str(reference) = reference else {
+        return Err(EvalError::new(format!(
+            "ma-set-behaviour!: reference must be a string, found {}",
+            reference.type_name()
+        )));
+    };
+
+    host::set_behaviour(reference)
+        .map_err(|e| EvalError::new(format!("ma-set-behaviour!: {e}")))?;
     Ok(Value::Nil)
 }
 

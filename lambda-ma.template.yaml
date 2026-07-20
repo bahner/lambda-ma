@@ -35,6 +35,7 @@ runtime:
         - ma_ipfs_include
         - ma_create_entity
         - ma_entity_exists
+        - ma_set_behaviour
 
     /ma/root/0.0.1:
       extends: /ma/scheme/actor/0.0.1

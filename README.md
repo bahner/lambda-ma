@@ -2,6 +2,19 @@
 
 λ-間 is a small actor space for `ma-runtime` and zion. It is not runtime code; it is a flat set of actors and a generated bootstrap YAML for people who want to clone, fork, and reshape it.
 
+Think of it as our rough equivalent of `lambdamoo-core`: a basic functional
+set of world objects that gives a new runtime enough language to become a
+place. The point is not to preserve λ-間 exactly as shipped, but to give builders
+something useful to extend, replace, and mutate inside their own runtime.
+
+LambdaMOO grew out of the MUD tradition at Xerox PARC in the early 1990s. Its
+lasting idea was not just rooms and exits, but a programmable social world: the
+database, verbs, objects, and local customs could be changed by the people
+living in it. `lambdamoo-core` was the small seed database that made a fresh MOO
+bootable and habitable before its own culture took over. λ-間 aims for that same
+role in the `ma` stack: enough root, avatar, room, and exit behaviour to start
+creating, while staying small enough that a runtime can make it its own.
+
 ## What is here
 
 ```text
@@ -17,6 +30,10 @@ Makefile                publishes actor sources and generates dist/lambda-ma.yam
 The generated bootstrap currently contains only what this MVP needs: the generic ma-scheme actor kind built from `scheme-actor/`, a genesis variant, the λ-間 actor kinds, the scheduler, `#root`, and the initial `#construct` room.
 
 Python actors are intentionally not bulk-copied yet. The existing Python actor libraries still live in the workspace-level `python-ma-actors` repo; they should move into `actors/python/` when a concrete λ-間 feature uses them, along with a Makefile path that builds their Wasm and wires their kind CIDs into the generated bootstrap.
+
+For a full first-run guide, including Kubo/IPFS setup, installing `ma`,
+generating `dist/lambda-ma.yaml`, bootstrapping a runtime, generating a reusable
+root CID, and changing your first rooms, see [HOWTO.md](HOWTO.md).
 
 ## Build
 

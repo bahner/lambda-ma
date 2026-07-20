@@ -51,7 +51,7 @@
     "  go <direction>    move through an exit\n"
     "  claim             claim an unowned room\n"
     "  owner [did]       show or transfer room ownership\n"
-    "  dig <dir> [to name] create an exit\n"
+    "  dig <dir> [to name] [with code] create an exit\n"
     "  nick [name]       show or set your display name\n"
     "Use :help for the focused actor directly."))
 

@@ -116,7 +116,8 @@
     "  go <direction>    move through an exit\n"
     "  claim             claim this room if it is unowned\n"
     "  owner [did]       show or transfer ownership\n"
-    "  dig <dir> [to name] create an exit\n"
+    "  dig <dir> [to name] [with code] create an exit\n"
+    "  :behaviour /ipfs/<cid> add or replace this room's own code\n"
     "  :prop <key> [value] set or reset room text\n"
     "Commands with : hit this place directly; commands without : go through your avatar."))
 
@@ -174,6 +175,27 @@
            (reply-error msg "Only this room's owner can build exits here."))
           (else
            (apply-room-prop! msg (car args) (cdr args))))))
+
+(define (handle-room-behaviour! msg args)
+  (let ((user (msg-from msg)))
+    (cond ((null? args)
+           (let ((current (ma-get-config-key "behaviour")))
+             (if current
+                 (reply-ok msg current)
+                 (reply-ok msg "No custom behaviour is set for this room."))))
+          ((null? (cdr args))
+           (cond ((not (valid-owner? user))
+                  (reply-error msg "Owner must be a non-empty user DID."))
+                 ((not (owned?))
+                  (reply-error msg "This room is unowned. Claim it before editing behaviour."))
+                 ((not (owner? user))
+                  (reply-error msg "Only this room's owner can edit behaviour."))
+                 (else
+                  (begin
+                    (ma-set-behaviour! (car args))
+                    (reply-ok msg "Behaviour update queued.")))))
+          (else
+           (reply-error msg "Usage: behaviour /ipfs/<cid>")))))
 
 (define (delegated-call? args msg)
   (and (not (null? args)) (member? (msg-from msg) (occupants))))
@@ -236,17 +258,13 @@
     (put-exit! direction exit)
     exit))
 
-(define (room-init name owner-did)
-  (if name
-      (string-append
-        "(set-prop! \"root\" \"" (root) "\")\n"
-        "(set-prop! \"name\" \"" name "\")\n"
-        "(set-prop! \"owner\" \"" owner-did "\")\n"
-        "(ma-save-state!)")
-      (string-append
-        "(set-prop! \"root\" \"" (root) "\")\n"
-        "(set-prop! \"owner\" \"" owner-did "\")\n"
-        "(ma-save-state!)")))
+(define (room-init name owner-did custom-init)
+  (string-append
+    "(set-prop! \"root\" \"" (root) "\")\n"
+    (if name (string-append "(set-prop! \"name\" \"" name "\")\n") "")
+    "(set-prop! \"owner\" \"" owner-did "\")\n"
+    "(ma-save-state!)\n"
+    (if custom-init custom-init "")))
 
 (define (exit-init direction target-room)
   (string-append
@@ -262,8 +280,28 @@
             rest))))
 
 (define (dig-target-text args)
-  (let ((target-args (dig-target-args args)))
+  (let ((target-args (take-before "with" (dig-target-args args))))
     (if (null? target-args) #f (join-words target-args))))
+
+(define (take-before marker words)
+  (cond ((null? words) '())
+        ((equal? (car words) marker) '())
+        (else (cons (car words) (take-before marker (cdr words))))))
+
+(define (drop-through marker words)
+  (cond ((null? words) '())
+        ((equal? (car words) marker) (cdr words))
+        (else (drop-through marker (cdr words)))))
+
+(define (dig-custom-init-text args)
+  (let ((init-args (drop-through "with" (dig-target-args args))))
+    (if (or (null? init-args) (null? (cdr init-args))) #f (join-words init-args))))
+
+(define (dig-custom-behaviour-ref args)
+  (let ((code-args (drop-through "with" (dig-target-args args))))
+    (if (and (not (null? code-args)) (null? (cdr code-args)))
+        (car code-args)
+        #f)))
 
 (define (existing-room-target target)
   (cond ((equal? target "#construct") (entity-url "construct"))
@@ -389,6 +427,10 @@
   (lambda (args msg)
     (handle-room-prop! msg args)))
 
+(set-method! :behaviour
+  (lambda (args msg)
+    (handle-room-behaviour! msg args)))
+
 (set-method! :authorize-link
   (lambda (args msg)
     (if (or (null? args) (null? (cdr args)) (null? (cdr (cdr args))))
@@ -457,13 +499,17 @@
             (lambda ()
               (let* ((existing-exit (exit-target direction))
                      (target (dig-target-text dig-args))
+                     (custom-init (dig-custom-init-text dig-args))
+                     (custom-behaviour (dig-custom-behaviour-ref dig-args))
                      (existing-room (existing-room-target target)))
                 (cond (existing-exit
                        (reply-to-sender msg (string-append "There is already an exit " direction ".")))
+                      ((and existing-room (or custom-init custom-behaviour))
+                       (reply-to-sender msg "Custom room code only applies when digging a new room."))
                       (existing-room
                        (request-existing-link! msg user direction existing-room))
                       (else
-                       (let ((target-room (entity-url (ma-create-actor ROOM_KIND #f (room-init target user)))))
+                       (let ((target-room (entity-url (ma-create-actor ROOM_KIND custom-behaviour (room-init target user custom-init)))))
                          (create-exit! direction target-room)
                          (ma-save-state!)
                          (broadcast (string-append user " digs " direction "."))
