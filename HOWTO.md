@@ -241,11 +241,11 @@ dig mirror to @sky#FQWJA5V3
 dig mirror to #FQWJA5V3
 ```
 
-The local `#fragment` form is convenience syntax only; the room stores and sends
-the full runtime DID-URL. A full `did:ma:...#room` target may point at another
-runtime. The target room must run compatible room code and confirm that you own
-it before the source room creates the exit. The source room first sends `:ping`
-to the target room; after `:pong`, it asks for ownership authorization.
+The local `#fragment` form is a local runtime target and stays local through the
+handshake. A full `did:ma:...#room` target may point at another runtime. The
+target room must run compatible room code and confirm that you own it before the
+source room creates the exit. The source room first sends `:ping` to the target
+room; after `:pong`, it asks for ownership authorization.
 
 The important rule is simple:
 

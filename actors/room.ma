@@ -319,7 +319,7 @@
 
 (define (existing-room-target target)
   (cond ((and target (string-prefix? "#" target) (ma-entity-exists? target))
-         (string-append (runtime) target))
+         target)
         ((and target (string-prefix? "did:ma:" target)) target)
         ((and target (ma-entity-exists? target)) target)
         (else #f)))

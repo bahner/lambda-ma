@@ -84,9 +84,8 @@ to an existing room unless the target room is reachable and ownership of both
 rooms can be verified.
 
 Existing-room targets may be full DID-URLs or local runtime fragments. A local
-fragment such as `#garden` is checked against this runtime and normalized to
-this runtime's full DID-URL before it is stored or sent across the runtime
-boundary. Full `did:ma:...#room` targets are left unchanged and may point at
+fragment such as `#garden` is checked against this runtime and kept as a local
+target throughout the handshake. Full `did:ma:...#room` targets may point at
 another runtime; the same room-to-room ownership handshake must still succeed
 before the exit is created.
 
