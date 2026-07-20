@@ -201,6 +201,23 @@
 
 (define (exit-key direction) (string-append "exit:" direction))
 
+(define (pending-link-key direction) (string-append "pending-link:" direction))
+(define (pending-link-user-key direction) (string-append "pending-link-user:" direction))
+(define (pending-link-requester-key direction) (string-append "pending-link-requester:" direction))
+
+(define (clear-pending-link! direction)
+  (begin
+    (del-prop! (pending-link-key direction))
+    (del-prop! (pending-link-user-key direction))
+    (del-prop! (pending-link-requester-key direction))))
+
+(define (create-exit! direction target-room)
+  (let* ((exit-fragment (ma-create-actor EXIT_KIND #f (exit-init direction target-room)))
+         (exit (entity-url exit-fragment)))
+    (set-prop! (exit-key direction) exit)
+    (put-exit! direction exit)
+    exit))
+
 (define (room-init name owner-did)
   (if name
       (string-append
@@ -232,7 +249,22 @@
 
 (define (existing-room-target target)
   (cond ((equal? target "#construct") (entity-url "construct"))
+        ((and target (ma-entity-exists? target)) target)
         (else #f)))
+
+(define (request-existing-link! msg user direction target-room)
+  (let ((requester (msg-from msg)))
+    (set-prop! (pending-link-key direction) target-room)
+    (set-prop! (pending-link-user-key direction) user)
+    (set-prop! (pending-link-requester-key direction) requester)
+    (ma-save-state!)
+    (ma-send! target-room (list :authorize-link user direction requester))
+    (reply-to-sender msg (string-append "Checking ownership of " target-room "."))))
+
+(define (pending-link-matches? direction user target-room requester)
+  (and (equal? (get-prop (pending-link-key direction)) target-room)
+       (equal? (get-prop (pending-link-user-key direction)) user)
+       (equal? (get-prop (pending-link-requester-key direction)) requester)))
 
 (set-method! :join-avatar
   (lambda (args msg)
@@ -326,6 +358,62 @@
   (lambda (args msg)
     (handle-room-prop! msg args)))
 
+(set-method! :authorize-link
+  (lambda (args msg)
+    (if (or (null? args) (null? (cdr args)) (null? (cdr (cdr args))))
+        #f
+        (let ((user (car args))
+              (direction (car (cdr args)))
+              (requester (car (cdr (cdr args))))
+              (source-room (msg-from msg)))
+          (if (owner? user)
+              (ma-send! source-room (list :link-authorized user direction requester))
+              (ma-send! source-room (list :link-denied user direction requester "You must own both rooms to link them.")))))))
+
+(set-method! :link-denied
+  (lambda (args msg)
+    (if (or (null? args) (null? (cdr args)) (null? (cdr (cdr args))) (null? (cdr (cdr (cdr args)))))
+        #f
+        (let ((user (car args))
+              (direction (car (cdr args)))
+              (requester (car (cdr (cdr args))))
+              (reason (car (cdr (cdr (cdr args)))))
+              (target-room (msg-from msg)))
+          (if (pending-link-matches? direction user target-room requester)
+              (begin
+                (clear-pending-link! direction)
+                (ma-save-state!)
+                (ma-send! requester (list :print reason)))
+              #f)))))
+
+(set-method! :link-authorized
+  (lambda (args msg)
+    (if (or (null? args) (null? (cdr args)) (null? (cdr (cdr args))))
+        #f
+        (let ((user (car args))
+              (direction (car (cdr args)))
+              (requester (car (cdr (cdr args))))
+              (target-room (msg-from msg)))
+          (if (pending-link-matches? direction user target-room requester)
+              (cond ((exit-target direction)
+                     (begin
+                       (clear-pending-link! direction)
+                       (ma-save-state!)
+                       (ma-send! requester (list :print (string-append "There is already an exit " direction ".")))))
+                    ((not (owner? user))
+                     (begin
+                       (clear-pending-link! direction)
+                       (ma-save-state!)
+                       (ma-send! requester (list :print "You no longer own this room."))))
+                    (else
+                     (begin
+                       (create-exit! direction target-room)
+                       (clear-pending-link! direction)
+                       (ma-save-state!)
+                       (broadcast (string-append user " digs " direction "."))
+                       (ma-send! requester (list :print (string-append "You dig " direction " and link to an existing room."))))))
+              #f)))))
+
 (set-method! :dig
   (lambda (args msg)
     (let* ((user (caller-user args msg))
@@ -341,12 +429,9 @@
                           (let* ((target (dig-target-text dig-args))
                            (existing-room (existing-room-target target)))
                       (if existing-room
-                          (reply-to-sender msg "Existing-room links need ownership of both rooms and are not supported yet.")
-                          (let* ((target-room (entity-url (ma-create-actor ROOM_KIND #f (room-init target user))))
-                                 (exit-fragment (ma-create-actor EXIT_KIND #f (exit-init direction target-room)))
-                                 (exit (entity-url exit-fragment)))
-                            (set-prop! (exit-key direction) exit)
-                                 (put-exit! direction exit)
+                           (request-existing-link! msg user direction existing-room)
+                           (let ((target-room (entity-url (ma-create-actor ROOM_KIND #f (room-init target user)))))
+                             (create-exit! direction target-room)
                             (ma-save-state!)
                             (broadcast (string-append user " digs " direction "."))
                             (reply-to-sender msg (string-append "You dig " direction " and open a new exit."))))))))))))))

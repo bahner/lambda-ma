@@ -53,9 +53,11 @@ RPC:
 `:prop` requires the direct caller to be the room owner, sets an arbitrary room
 prop to the joined text value, and deletes that prop when no value is supplied.
 
-Exits to already-existing rooms are rejected until there is a root-mediated or
-room-to-room ownership check. That keeps the invariant simple: no actor creates
-an exit to or from a room unless ownership can be verified.
+Exits to already-existing rooms use a room-to-room ownership check. The source
+room stores a pending link request, asks the target room to authorize the same
+user DID, and only creates the exit if the target room confirms that user owns
+it too. That keeps the invariant simple: no actor creates an exit to an existing
+room unless ownership of both rooms can be verified.
 
 ## Context flow
 

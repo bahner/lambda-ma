@@ -102,8 +102,7 @@ The last form resets `description` to the default.
 Only the current owner may create exits from a room. Newly dug rooms are owned
 by the digger automatically, so a builder can give someone a room with `owner`
 and that user can then build outward from there. Linking to an already-existing
-room is intentionally rejected for now because the room actor cannot yet verify
-that the caller owns the target room too.
+room is allowed when the target room confirms that the same user owns it too.
 
 ## Develop
 
