@@ -80,6 +80,8 @@ forwards the user's DID to the room; direct room RPCs still use the message
 `from` DID as the caller.
 
 ```text
+help                   show avatar/user commands
+help here              ask the current room what is possible here
 claim                  claim an unowned room through your avatar
 owner                  show the current room owner through your avatar
 owner did:ma:<target>  transfer the room to another user DID through your avatar
@@ -89,9 +91,11 @@ dig north to Garden    create an exit and a new room owned by you
 Colon-prefixed methods bypass the avatar and target the focused room directly:
 
 ```text
+:help
 :prop name Biblioteket
 :prop description Et stille bibliotek.
 :prop description
+@ma#construct!help
 @ma#construct!prop name Biblioteket
 @ma#construct!prop description Et stille bibliotek.
 @ma#construct!prop description

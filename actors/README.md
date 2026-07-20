@@ -53,6 +53,19 @@ RPC:
 `:prop` requires the direct caller to be the room owner, sets an arbitrary room
 prop to the joined text value, and deletes that prop when no value is supplied.
 
+## Help
+
+`help` is an avatar-mediated user command. It shows the avatar's general command
+index: movement, speech, ownership, building, nickname, and `help here`.
+
+`help here` asks the current room/place for its own `:help`. The avatar does not
+need to know what is locally possible; room authors can make `:help` describe
+the affordances of that specific place.
+
+`:help` is a direct room/place RPC. A room replies with its help text so direct
+zion calls complete, and when the caller is a current avatar occupant the room
+also sends the text via `:print` for user-facing display.
+
 Exits to already-existing rooms use a room-to-room ownership check. The source
 room stores a pending link request, asks the target room to authorize the same
 user DID, and only creates the exit if the target room confirms that user owns

@@ -105,6 +105,24 @@
         "Nobody is here."
         (string-append "Here: " (names-of actors)))))
 
+(define (room-help-text)
+  (string-append
+    (room-name) " help\n"
+    "  look              look around\n"
+    "  exits             list exits\n"
+    "  who?              show who is here\n"
+    "  say <text>        speak here\n"
+    "  emote <text>      act here\n"
+    "  go <direction>    move through an exit\n"
+    "  claim             claim this room if it is unowned\n"
+    "  owner [did]       show or transfer ownership\n"
+    "  dig <dir> [to name] create an exit\n"
+    "  :prop <key> [value] set or reset room text\n"
+    "Commands with : hit this place directly; commands without : go through your avatar."))
+
+(define (avatar-caller? msg)
+  (member? (msg-from msg) (occupants)))
+
 (define (from-root? msg)
   (equal? (msg-from msg) (root)))
 
@@ -266,6 +284,11 @@
        (equal? (get-prop (pending-link-user-key direction)) user)
        (equal? (get-prop (pending-link-requester-key direction)) requester)))
 
+(define (enter-dig-target! requester target-room)
+  (if (member? requester (occupants))
+      (ma-send! target-room (list :enter-avatar requester (self)))
+      #f))
+
 (set-method! :join-avatar
   (lambda (args msg)
     (if (from-root? msg)
@@ -310,6 +333,14 @@
   (lambda (args msg)
     (let ((avatar (msg-from msg)))
       (ma-send! avatar (list :print (who-text))))))
+
+(set-method! :help
+  (lambda (args msg)
+    (let ((text (room-help-text)))
+      (if (avatar-caller? msg)
+          (ma-send! (msg-from msg) (list :print text))
+          #f)
+      (reply-ok msg text))))
 
 (set-method! :say
   (lambda (args msg)
@@ -411,7 +442,8 @@
                        (clear-pending-link! direction)
                        (ma-save-state!)
                        (broadcast (string-append user " digs " direction "."))
-                       (ma-send! requester (list :print (string-append "You dig " direction " and link to an existing room."))))))
+                       (ma-send! requester (list :print (string-append "You dig " direction " and link to an existing room.")))
+                       (enter-dig-target! requester target-room))))
               #f)))))
 
 (set-method! :dig
@@ -423,18 +455,20 @@
         (lambda ()
           (require-owner user msg
             (lambda ()
-              (let ((existing-exit (exit-target direction)))
-                (if existing-exit
-                    (reply-to-sender msg (string-append "There is already an exit " direction "."))
-                          (let* ((target (dig-target-text dig-args))
-                           (existing-room (existing-room-target target)))
-                      (if existing-room
-                           (request-existing-link! msg user direction existing-room)
-                           (let ((target-room (entity-url (ma-create-actor ROOM_KIND #f (room-init target user)))))
-                             (create-exit! direction target-room)
-                            (ma-save-state!)
-                            (broadcast (string-append user " digs " direction "."))
-                            (reply-to-sender msg (string-append "You dig " direction " and open a new exit."))))))))))))))
+              (let* ((existing-exit (exit-target direction))
+                     (target (dig-target-text dig-args))
+                     (existing-room (existing-room-target target)))
+                (cond (existing-exit
+                       (reply-to-sender msg (string-append "There is already an exit " direction ".")))
+                      (existing-room
+                       (request-existing-link! msg user direction existing-room))
+                      (else
+                       (let ((target-room (entity-url (ma-create-actor ROOM_KIND #f (room-init target user)))))
+                         (create-exit! direction target-room)
+                         (ma-save-state!)
+                         (broadcast (string-append user " digs " direction "."))
+                         (reply-to-sender msg (string-append "You dig " direction " and open a new exit."))
+                         (enter-dig-target! (msg-from msg) target-room))))))))))))
 
 (set-method! :go
   (lambda (args msg)

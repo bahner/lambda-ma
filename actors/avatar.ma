@@ -35,6 +35,29 @@
 (define (send-room-as-user verb args)
   (send-room verb (cons (user) args)))
 
+(define (send-user-text text)
+  (ma-send! (user) (list :print text)))
+
+(define (avatar-help-text)
+  (string-append
+    "Help\n"
+    "  help              show this help\n"
+    "  help here         ask this place what is possible here\n"
+    "  look              look around\n"
+    "  exits             list exits\n"
+    "  who?              show who is here\n"
+    "  say <text>        speak here\n"
+    "  emote <text>      act here\n"
+    "  go <direction>    move through an exit\n"
+    "  claim             claim an unowned room\n"
+    "  owner [did]       show or transfer room ownership\n"
+    "  dig <dir> [to name] create an exit\n"
+    "  nick [name]       show or set your display name\n"
+    "Use :help for the focused actor directly."))
+
+(define (unknown-help-text topic)
+  (string-append "No help topic: " topic "\nTry help or help here."))
+
 (set-method! :set-location
   (lambda (args msg)
     (if (root? msg)
@@ -60,6 +83,23 @@
     (require-user msg
       (lambda ()
         (ma-reply! msg (list :ok (room)))))))
+
+(set-method! :help
+  (lambda (args msg)
+    (require-user msg
+      (lambda ()
+        (cond ((null? args)
+               (begin
+                 (send-user-text (avatar-help-text))
+                 (ma-reply! msg (list :ok "help"))))
+              ((equal? (car args) "here")
+               (begin
+                 (send-room :help '())
+                 (ma-reply! msg (list :ok "help here"))))
+              (else
+               (begin
+                 (send-user-text (unknown-help-text (car args)))
+                 (ma-reply! msg (list :ok "help")))))))))
 
 (set-method! :nick
   (lambda (args msg)
