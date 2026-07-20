@@ -28,11 +28,11 @@ Protected room commands accept both shapes:
 ```scheme
 (:claim)
 (:owner [<new-owner-did>])
-(:dig <direction> [to <new-room-name>])
+(:dig <direction> [to <new-room-name-or-room-target>])
 
 (:claim <user-did>)
 (:owner <user-did> [<new-owner-did>])
-(:dig <user-did> <direction> [to <new-room-name>])
+(:dig <user-did> <direction> [to <new-room-name-or-room-target>])
 ```
 
 The second shape is accepted only from known room occupants, which are avatar
@@ -42,6 +42,10 @@ actors maintained by root context.
 prints the owner; with a target DID it transfers ownership and requires the
 caller to be the current owner. `:dig` requires ownership of the current room
 and assigns the digger's user DID to any newly-created target room.
+
+Digging an existing direction replaces that exit instead of failing. This lets
+room owners rewire mistakes or rebuild a topology without deleting the old exit
+first.
 
 Colon-prefixed methods are not avatar-mediated. Room metadata is a direct room
 RPC:
@@ -62,15 +66,29 @@ index: movement, speech, ownership, building, nickname, and `help here`.
 need to know what is locally possible; room authors can make `:help` describe
 the affordances of that specific place.
 
+If the avatar does not know a user command, it forwards that verb and its
+arguments to the current room. This lets room-local commands such as `duck` work
+through ordinary avatar-mediated input without teaching every avatar each local
+method ahead of time.
+
 `:help` is a direct room/place RPC. A room replies with its help text so direct
 zion calls complete, and when the caller is a current avatar occupant the room
 also sends the text via `:print` for user-facing display.
 
-Exits to already-existing rooms use a room-to-room ownership check. The source
-room stores a pending link request, asks the target room to authorize the same
-user DID, and only creates the exit if the target room confirms that user owns
-it too. That keeps the invariant simple: no actor creates an exit to an existing
-room unless ownership of both rooms can be verified.
+Exits to already-existing rooms use a room-to-room reachability and ownership
+check. The source room stores a pending link request, sends `:ping` to the
+target room, then asks the target room to authorize the same user DID only after
+receiving `:pong`. The source only creates the exit if the target room confirms
+that user owns it too. That keeps the invariant simple: no actor creates an exit
+to an existing room unless the target room is reachable and ownership of both
+rooms can be verified.
+
+Existing-room targets may be full DID-URLs or local runtime fragments. A local
+fragment such as `#garden` is checked against this runtime and normalized to
+this runtime's full DID-URL before it is stored or sent across the runtime
+boundary. Full `did:ma:...#room` targets are left unchanged and may point at
+another runtime; the same room-to-room ownership handshake must still succeed
+before the exit is created.
 
 ## Context flow
 

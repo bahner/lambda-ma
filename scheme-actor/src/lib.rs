@@ -256,6 +256,8 @@ mod tests {
     #[test]
     fn string_and_type_builtins() {
         assert_eq!(run(r#"(string-append "foo" "bar")"#), Value::str("foobar"));
+        assert_eq!(run(r##"(string-prefix? "#" "#room")"##), Value::Bool(true));
+        assert_eq!(run(r##"(string-prefix? "#" "did:ma:abc#room")"##), Value::Bool(false));
         assert_eq!(run("(number->string 42)"), Value::str("42"));
         assert_eq!(run(r#"(string->number "42")"#), Value::Int(42));
         assert_eq!(run("(string? \"x\")"), Value::Bool(true));

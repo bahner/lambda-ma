@@ -229,12 +229,29 @@ dig north to Name      create an exit and a new room
 :prop name Name        set the focused room name
 :prop description ...  set the focused room description
 :prop description      reset the focused room description
+prop name Name         shorthand for setting the focused room name
 ```
+
+Digging an existing direction replaces that exit. To link to an existing room
+instead of creating a new one, use a room DID-URL or a local fragment from the
+same runtime:
+
+```text
+dig mirror to @sky#FQWJA5V3
+dig mirror to #FQWJA5V3
+```
+
+The local `#fragment` form is convenience syntax only; the room stores and sends
+the full runtime DID-URL. A full `did:ma:...#room` target may point at another
+runtime. The target room must run compatible room code and confirm that you own
+it before the source room creates the exit. The source room first sends `:ping`
+to the target room; after `:pong`, it asks for ownership authorization.
 
 The important rule is simple:
 
 - Commands without a leading colon, such as `look`, `go north`, `say hello`, and
-  `dig north`, are avatar-mediated user commands.
+  `dig north`, are avatar-mediated user commands. `prop` is a room-metadata
+  shorthand and targets the focused room directly.
 - Commands with a leading colon, such as `:prop name ...` and `:help`, are sent
   directly to the focused room.
 

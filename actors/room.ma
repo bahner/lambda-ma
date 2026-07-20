@@ -151,30 +151,44 @@
 (define (reply-error msg text)
   (ma-reply! msg (list :error text)))
 
-(define (apply-room-prop! msg key value-args)
+(define (reply-room-prop-ok msg delegated text)
+  (if delegated
+      (reply-to-sender msg text)
+      (reply-ok msg text)))
+
+(define (reply-room-prop-error msg delegated text)
+  (if delegated
+      (reply-to-sender msg text)
+      (reply-error msg text)))
+
+(define (apply-room-prop! msg key value-args delegated)
   (if (null? value-args)
       (begin
         (del-prop! key)
         (ma-save-state!)
-        (reply-ok msg (string-append "Reset prop " key ".")))
+        (reply-room-prop-ok msg delegated (string-append "Reset prop " key ".")))
       (begin
         (set-room-prop! key (join-words value-args))
-        (reply-ok msg (string-append "Set prop " key ".")))))
+        (reply-room-prop-ok msg delegated (string-append "Set prop " key ".")))))
 
 (define (handle-room-prop! msg args)
-  (let ((user (msg-from msg)))
+  (let ((delegated (delegated-call? args msg))
+        (user (caller-user args msg))
+        (prop-args (command-args args msg)))
     (cond ((null? args)
-           (reply-error msg "Usage: prop <key> [value]"))
-          ((equal? (car args) "")
-           (reply-error msg "Prop key must be non-empty."))
+           (reply-room-prop-error msg delegated "Usage: prop <key> [value]"))
+          ((null? prop-args)
+           (reply-room-prop-error msg delegated "Usage: prop <key> [value]"))
+          ((equal? (car prop-args) "")
+           (reply-room-prop-error msg delegated "Prop key must be non-empty."))
           ((not (valid-owner? user))
-           (reply-error msg "Owner must be a non-empty user DID."))
+           (reply-room-prop-error msg delegated "Owner must be a non-empty user DID."))
           ((not (owned?))
-           (reply-error msg "This room is unowned. Claim it before building here."))
+           (reply-room-prop-error msg delegated "This room is unowned. Claim it before building here."))
           ((not (owner? user))
-           (reply-error msg "Only this room's owner can build exits here."))
+           (reply-room-prop-error msg delegated "Only this room's owner can set props here."))
           (else
-           (apply-room-prop! msg (car args) (cdr args))))))
+           (apply-room-prop! msg (car prop-args) (cdr prop-args) delegated)))))
 
 (define (handle-room-behaviour! msg args)
   (let ((user (msg-from msg)))
@@ -304,9 +318,16 @@
         #f)))
 
 (define (existing-room-target target)
-  (cond ((equal? target "#construct") (entity-url "construct"))
+  (cond ((and target (string-prefix? "#" target) (ma-entity-exists? target))
+         (string-append (runtime) target))
+        ((and target (string-prefix? "did:ma:" target)) target)
         ((and target (ma-entity-exists? target)) target)
         (else #f)))
+
+(define (request-link-authorization! requester user direction target-room)
+  (begin
+    (ma-send! target-room (list :authorize-link user direction requester))
+    (ma-send! requester (list :print (string-append "Checking ownership of " target-room ".")))))
 
 (define (request-existing-link! msg user direction target-room)
   (let ((requester (msg-from msg)))
@@ -314,8 +335,8 @@
     (set-prop! (pending-link-user-key direction) user)
     (set-prop! (pending-link-requester-key direction) requester)
     (ma-save-state!)
-    (ma-send! target-room (list :authorize-link user direction requester))
-    (reply-to-sender msg (string-append "Checking ownership of " target-room "."))))
+    (ma-send! target-room (list :ping user direction requester))
+    (reply-to-sender msg (string-append "Checking reachability of " target-room "."))))
 
 (define (pending-link-matches? direction user target-room requester)
   (and (equal? (get-prop (pending-link-key direction)) target-room)
@@ -431,6 +452,22 @@
   (lambda (args msg)
     (handle-room-behaviour! msg args)))
 
+(set-method! :ping
+  (lambda (args msg)
+    (ma-reply! msg (cons :pong args))))
+
+(set-method! :pong
+  (lambda (args msg)
+    (if (or (null? args) (null? (cdr args)) (null? (cdr (cdr args))))
+        #f
+        (let ((user (car args))
+              (direction (car (cdr args)))
+              (requester (car (cdr (cdr args))))
+              (target-room (msg-from msg)))
+          (if (pending-link-matches? direction user target-room requester)
+              (request-link-authorization! requester user direction target-room)
+              #f)))))
+
 (set-method! :authorize-link
   (lambda (args msg)
     (if (or (null? args) (null? (cdr args)) (null? (cdr (cdr args))))
@@ -468,12 +505,7 @@
               (requester (car (cdr (cdr args))))
               (target-room (msg-from msg)))
           (if (pending-link-matches? direction user target-room requester)
-              (cond ((exit-target direction)
-                     (begin
-                       (clear-pending-link! direction)
-                       (ma-save-state!)
-                       (ma-send! requester (list :print (string-append "There is already an exit " direction ".")))))
-                    ((not (owner? user))
+              (cond ((not (owner? user))
                      (begin
                        (clear-pending-link! direction)
                        (ma-save-state!)
@@ -497,14 +529,11 @@
         (lambda ()
           (require-owner user msg
             (lambda ()
-              (let* ((existing-exit (exit-target direction))
-                     (target (dig-target-text dig-args))
+              (let* ((target (dig-target-text dig-args))
                      (custom-init (dig-custom-init-text dig-args))
                      (custom-behaviour (dig-custom-behaviour-ref dig-args))
                      (existing-room (existing-room-target target)))
-                (cond (existing-exit
-                       (reply-to-sender msg (string-append "There is already an exit " direction ".")))
-                      ((and existing-room (or custom-init custom-behaviour))
+                (cond ((and existing-room (or custom-init custom-behaviour))
                        (reply-to-sender msg "Custom room code only applies when digging a new room."))
                       (existing-room
                        (request-existing-link! msg user direction existing-room))

@@ -50,6 +50,7 @@ pub fn install(env: &Rc<Env>) {
 
     // Strings
     def!("string-append", b_string_append);
+    def!("string-prefix?", b_string_prefix_p);
     def!("number->string", b_number_to_string);
     def!("string->number", b_string_to_number);
 
@@ -313,6 +314,18 @@ fn b_string_append(args: &[Value]) -> EvalResult<Value> {
         }
     }
     Ok(Value::str(out))
+}
+
+fn b_string_prefix_p(args: &[Value]) -> EvalResult<Value> {
+    let [prefix, text] = args else {
+        return Err(EvalError::new(format!(
+            "string-prefix?: expected exactly 2 arguments, got {}",
+            args.len()
+        )));
+    };
+    let prefix = as_string("string-prefix?", prefix)?;
+    let text = as_string("string-prefix?", text)?;
+    Ok(Value::Bool(text.starts_with(&prefix)))
 }
 
 fn as_string(name: &str, v: &Value) -> EvalResult<String> {

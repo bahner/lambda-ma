@@ -38,6 +38,9 @@
 (define (send-user-text text)
   (ma-send! (user) (list :print text)))
 
+(define (reply-ok-silent msg)
+  (ma-reply! msg (list :ok "")))
+
 (define (avatar-help-text)
   (string-append
     "Help\n"
@@ -52,6 +55,7 @@
     "  claim             claim an unowned room\n"
     "  owner [did]       show or transfer room ownership\n"
     "  dig <dir> [to name] [with code] create an exit\n"
+    "  prop <key> [value] set or reset room text\n"
     "  nick [name]       show or set your display name\n"
     "Use :help for the focused actor directly."))
 
@@ -118,67 +122,81 @@
     (require-user msg
       (lambda ()
         (send-room :look '())
-        (ma-reply! msg (list :ok "looking"))))))
+        (reply-ok-silent msg)))))
 
 (set-method! :exits
   (lambda (args msg)
     (require-user msg
       (lambda ()
         (send-room :exits '())
-        (ma-reply! msg (list :ok "checking exits"))))))
+        (reply-ok-silent msg)))))
 
 (set-method! :exits?
   (lambda (args msg)
     (require-user msg
       (lambda ()
         (send-room :exits? '())
-        (ma-reply! msg (list :ok "checking exits"))))))
+        (reply-ok-silent msg)))))
 
 (set-method! :who?
   (lambda (args msg)
     (require-user msg
       (lambda ()
         (send-room :who? '())
-        (ma-reply! msg (list :ok "checking who"))))))
+        (reply-ok-silent msg)))))
 
 (set-method! :say
   (lambda (args msg)
     (require-user msg
       (lambda ()
         (send-room :say (list (join-words args)))
-        (ma-reply! msg (list :ok "said"))))))
+        (reply-ok-silent msg)))))
 
 (set-method! :emote
   (lambda (args msg)
     (require-user msg
       (lambda ()
         (send-room :emote (list (join-words args)))
-        (ma-reply! msg (list :ok "emoted"))))))
+        (reply-ok-silent msg)))))
 
 (set-method! :claim
   (lambda (args msg)
     (require-user msg
       (lambda ()
         (send-room-as-user :claim args)
-        (ma-reply! msg (list :ok "claiming"))))))
+        (reply-ok-silent msg)))))
 
 (set-method! :owner
   (lambda (args msg)
     (require-user msg
       (lambda ()
         (send-room-as-user :owner args)
-        (ma-reply! msg (list :ok "owner"))))))
+        (reply-ok-silent msg)))))
 
 (set-method! :dig
   (lambda (args msg)
     (require-user msg
       (lambda ()
         (send-room-as-user :dig args)
-        (ma-reply! msg (list :ok "digging"))))))
+        (reply-ok-silent msg)))))
+
+(set-method! :prop
+  (lambda (args msg)
+    (require-user msg
+      (lambda ()
+        (send-room-as-user :prop args)
+        (reply-ok-silent msg)))))
 
 (set-method! :go
   (lambda (args msg)
     (require-user msg
       (lambda ()
         (send-room :go args)
-        (ma-reply! msg (list :ok "going"))))))
+        (reply-ok-silent msg)))))
+
+(set-default-method!
+  (lambda (verb args msg)
+    (require-user msg
+      (lambda ()
+        (send-room verb args)
+        (reply-ok-silent msg)))))

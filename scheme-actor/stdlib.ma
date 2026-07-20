@@ -52,9 +52,13 @@
 ; other signals must call `(ma-save-state!)` itself in its own `on-signal`.
 
 (define *methods* '())
+(define *default-method* #f)
 
 (define (set-method! verb fn)
   (set! *methods* (cons (cons verb fn) *methods*)))
+
+(define (set-default-method! fn)
+  (set! *default-method* fn))
 
 (define (find-method verb)
   (let loop ((table *methods*))
@@ -69,4 +73,6 @@
          (fn (find-method verb)))
     (if fn
         (fn args msg)
-        (ma-reply! msg (list :error "unknown verb")))))
+      (if *default-method*
+        (*default-method* verb args msg)
+        (ma-reply! msg (list :error "unknown verb"))))))
