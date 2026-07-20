@@ -8,13 +8,28 @@
 (define (root)
   (let ((configured (ma-get-config-key "root")))
     (if configured configured (entity-url "root"))))
+(define (canonical-actor actor)
+  (if (and actor (string-prefix? "#" actor)) (string-append (runtime) actor) actor))
+(define (same-actor? a b)
+  (equal? (canonical-actor a) (canonical-actor b)))
 (define (room) (get-prop "room"))
 (define (nick)
   (let ((value (get-prop "nick")))
     (if value value "avatar")))
 
+(define (ctx-term text)
+  (list :ctx
+    (list (list :root (root))
+          (list :avatar (self))
+          (list :nick (nick))
+          (list :room (room))
+          (list :text text))))
+
+(define (send-ctx text)
+  (ma-send! (user) (ctx-term text)))
+
 (define (user? msg) (equal? (msg-from msg) (user)))
-(define (root? msg) (equal? (msg-from msg) (root)))
+(define (root? msg) (same-actor? (msg-from msg) (root)))
 
 (define (join-words words)
   (cond ((null? words) "")
@@ -65,9 +80,11 @@
 (set-method! :set-location
   (lambda (args msg)
     (if (root? msg)
-        (begin
-          (set-prop! "room" (car args))
-          (ma-save-state!))
+        (let ((new-room (car args))
+              (text (if (or (null? (cdr args)) (equal? (car (cdr args)) "")) #f (car (cdr args)))))
+          (set-prop! "room" new-room)
+          (ma-save-state!)
+          (send-ctx text))
         #f)))
 
 (set-method! :set-nick
@@ -75,8 +92,15 @@
     (if (root? msg)
         (begin
           (set-prop! "nick" (car args))
-          (ma-save-state!))
+          (ma-save-state!)
+          (send-ctx #f))
         #f)))
+
+(set-method! :ctx?
+  (lambda (args msg)
+    (require-user msg
+      (lambda ()
+        (ma-reply! msg (list :ok (ctx-term #f)))))))
 
 (set-method! :print
   (lambda (args msg)
@@ -191,7 +215,7 @@
   (lambda (args msg)
     (require-user msg
       (lambda ()
-        (send-room :go args)
+        (send-room-as-user :go args)
         (reply-ok-silent msg)))))
 
 (set-default-method!

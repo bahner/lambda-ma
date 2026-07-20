@@ -8,11 +8,15 @@
 (define (self) (ma-get-config-key "self"))
 (define (runtime) (ma-get-config-key "runtime"))
 (define (entity-url fragment) (string-append (runtime) "#" fragment))
+(define (canonical-actor actor)
+  (if (and actor (string-prefix? "#" actor)) (string-append (runtime) actor) actor))
+(define (same-actor? a b)
+  (equal? (canonical-actor a) (canonical-actor b)))
 
 (define (avatar-key user) (string-append "avatar:" user))
-(define (avatar-user-key avatar) (string-append "user:" avatar))
-(define (avatar-room-key avatar) (string-append "room:" avatar))
-(define (avatar-nick-key avatar) (string-append "nick:" avatar))
+(define (avatar-user-key avatar) (string-append "user:" (canonical-actor avatar)))
+(define (avatar-room-key avatar) (string-append "room:" (canonical-actor avatar)))
+(define (avatar-nick-key avatar) (string-append "nick:" (canonical-actor avatar)))
 
 (define (default-nick) "avatar")
 
@@ -125,20 +129,6 @@
           (ma-save-state!)
           avatar))))
 
-(define (ctx-term avatar nick room text)
-  (list :ctx
-    (list (list :root (self))
-          (list :avatar avatar)
-          (list :nick (nick-or-default nick))
-          (list :room room)
-          (list :text text))))
-
-(define (live-avatar-for-ctx avatar)
-  (if (entity-live? avatar) avatar ""))
-
-(define (send-ctx user avatar room text)
-  (ma-send! user (ctx-term avatar (avatar-nick avatar) room text)))
-
 (define (requested-room args)
   (if (or (null? args) (equal? (car args) "")) #f (car args)))
 
@@ -178,7 +168,7 @@
            (nick (effective-nick (requested-nick args) existing-avatar))
            (avatar (ensure-avatar user nick)))
       (set-avatar-nick! avatar nick)
-          (ma-reply! msg (ctx-term "" nick room "Entering."))
+            (ma-reply! msg (list :ok avatar))
           (ma-send! avatar (list :print "You go in."))
           (ma-send! room (list :enter-avatar avatar (self))))))
 
@@ -192,12 +182,12 @@
   (lambda (args msg)
     (let ((avatar (car args))
           (room (car (cdr args))))
-      (if (equal? (msg-from msg) room)
+  (if (same-actor? (msg-from msg) room)
           (let ((user (get-prop (avatar-user-key avatar)))
                 (old-room (get-prop (avatar-room-key avatar))))
             (set-prop! (avatar-room-key avatar) room)
             (ma-save-state!)
-            (ma-send! avatar (list :set-location room))
+            (ma-send! avatar (list :set-location room "You arrive."))
             (if (and old-room (not (equal? old-room room)))
                 (begin
                   (ma-send! old-room (list :leave-avatar avatar room))
@@ -205,9 +195,23 @@
                 #f)
             (send-room-ctx room)
             (ma-send! room (list :join-avatar avatar old-room))
-            (if user
-                (send-ctx user avatar room "You arrive.")
-                #f)
+            (ma-reply! msg (list :ok "arrived")))
+          (ma-reply! msg (list :error "arrival sender must be target room"))))))
+
+(set-method! :arrive-user
+  (lambda (args msg)
+    (let* ((user (car args))
+           (room (car (cdr args)))
+           (nick (if (or (null? (cdr args)) (null? (cdr (cdr args)))) #f (car (cdr (cdr args)))))
+           (avatar (ensure-avatar user nick)))
+         (if (same-actor? (msg-from msg) room)
+          (begin
+            (set-prop! (avatar-room-key avatar) room)
+            (if nick (set-prop! (avatar-nick-key avatar) nick) #f)
+            (ma-save-state!)
+            (ma-send! avatar (list :set-location room "You arrive."))
+            (send-room-ctx room)
+            (ma-send! room (list :join-avatar avatar #f))
             (ma-reply! msg (list :ok "arrived")))
           (ma-reply! msg (list :error "arrival sender must be target room"))))))
 
@@ -215,14 +219,14 @@
   (lambda (args msg)
     (if (null? args)
         (ma-reply! msg (list :error "nick requires a value"))
-        (let ((avatar (msg-from msg))
+        (let ((avatar (canonical-actor (msg-from msg)))
               (nick (car args)))
           (if (get-prop (avatar-user-key avatar))
               (let ((room (avatar-room avatar #f))
                     (user (get-prop (avatar-user-key avatar))))
                 (set-prop! (avatar-nick-key avatar) nick)
                 (ma-save-state!)
+                (ma-send! avatar (list :set-nick nick))
                 (if room (send-room-ctx room) #f)
-                (if user (send-ctx user avatar room #f) #f)
                 (ma-reply! msg (list :ok nick)))
               (ma-reply! msg (list :error "nick sender must be an avatar")))))))

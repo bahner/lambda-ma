@@ -10,6 +10,10 @@
 (define (root)
   (let ((configured (ma-get-config-key "root")))
     (if configured configured (entity-url "root"))))
+(define (canonical-actor actor)
+  (if (and actor (string-prefix? "#" actor)) (string-append (runtime) actor) actor))
+(define (same-actor? a b)
+  (equal? (canonical-actor a) (canonical-actor b)))
 
 (define (join-words words)
   (cond ((null? words) "")
@@ -20,6 +24,11 @@
   (cond ((null? xs) #f)
         ((equal? x (car xs)) #t)
         (else (member? x (cdr xs)))))
+
+(define (member-actor? actor xs)
+  (cond ((null? xs) #f)
+        ((same-actor? actor (car xs)) #t)
+        (else (member-actor? actor (cdr xs)))))
 
 (define (occupants)
   (let ((xs (get-prop "occupants")))
@@ -38,7 +47,7 @@
 (define (remove-occupant! avatar)
   (set-prop! "occupants" (remove-one avatar (occupants))))
 
-(define (label-key actor) (string-append "label:" actor))
+(define (label-key actor) (string-append "label:" (canonical-actor actor)))
 
 (define (avatar-ref entry)
   (if (pair? entry) (car entry) entry))
@@ -122,14 +131,15 @@
     "Commands with : hit this place directly; commands without : go through your avatar."))
 
 (define (avatar-caller? msg)
-  (member? (msg-from msg) (occupants)))
+  (member-actor? (msg-from msg) (occupants)))
 
 (define (from-root? msg)
-  (equal? (msg-from msg) (root)))
+  (same-actor? (msg-from msg) (root)))
 
 (define (owner) (get-prop "owner"))
 (define (owned?) (if (owner) #t #f))
-(define (owner? user) (equal? user (owner)))
+(define (owner? user)
+  (equal? user (owner)))
 
 (define (valid-owner? value)
   (and (string? value) (not (equal? value ""))))
@@ -211,14 +221,31 @@
           (else
            (reply-error msg "Usage: behaviour /ipfs/<cid>")))))
 
+(define (delegated-user-arg? args)
+  (and (not (null? args)) (string-prefix? "did:ma:" (car args))))
+
+(define (local-actor-caller? msg)
+  (string-prefix? "#" (msg-from msg)))
+
 (define (delegated-call? args msg)
-  (and (not (null? args)) (member? (msg-from msg) (occupants))))
+  (and (delegated-user-arg? args)
+       (or (member-actor? (msg-from msg) (occupants))
+           (local-actor-caller? msg))))
 
 (define (caller-user args msg)
   (if (delegated-call? args msg) (car args) (msg-from msg)))
 
 (define (command-args args msg)
   (if (delegated-call? args msg) (cdr args) args))
+
+(define (go-delegated-call? args)
+  (delegated-user-arg? args))
+
+(define (go-caller-user args msg)
+  (if (go-delegated-call? args) (car args) (msg-from msg)))
+
+(define (go-command-args args)
+  (if (go-delegated-call? args) (cdr args) args))
 
 (define (require-valid-owner user msg thunk)
   (if (valid-owner? user)
@@ -330,7 +357,7 @@
     (ma-send! requester (list :print (string-append "Checking ownership of " target-room ".")))))
 
 (define (request-existing-link! msg user direction target-room)
-  (let ((requester (msg-from msg)))
+  (let ((requester (canonical-actor (msg-from msg))))
     (set-prop! (pending-link-key direction) target-room)
     (set-prop! (pending-link-user-key direction) user)
     (set-prop! (pending-link-requester-key direction) requester)
@@ -339,13 +366,13 @@
     (reply-to-sender msg (string-append "Checking reachability of " target-room "."))))
 
 (define (pending-link-matches? direction user target-room requester)
-  (and (equal? (get-prop (pending-link-key direction)) target-room)
+  (and (same-actor? (get-prop (pending-link-key direction)) target-room)
        (equal? (get-prop (pending-link-user-key direction)) user)
-       (equal? (get-prop (pending-link-requester-key direction)) requester)))
+       (same-actor? (get-prop (pending-link-requester-key direction)) requester)))
 
-(define (enter-dig-target! requester target-room)
-  (if (member? requester (occupants))
-      (ma-send! target-room (list :enter-avatar requester (self)))
+(define (enter-dig-target! requester user target-room)
+  (if (member-actor? requester (occupants))
+      (ma-send! target-room (list :enter-user user requester (self) (speaker-name requester)))
       #f))
 
 (set-method! :join-avatar
@@ -454,7 +481,7 @@
 
 (set-method! :ping
   (lambda (args msg)
-    (ma-reply! msg (cons :pong args))))
+    (ma-send! (msg-from msg) (cons :pong args))))
 
 (set-method! :pong
   (lambda (args msg)
@@ -517,7 +544,7 @@
                        (ma-save-state!)
                        (broadcast (string-append user " digs " direction "."))
                        (ma-send! requester (list :print (string-append "You dig " direction " and link to an existing room.")))
-                       (enter-dig-target! requester target-room))))
+                       (enter-dig-target! requester user target-room))))
               #f)))))
 
 (set-method! :dig
@@ -543,18 +570,26 @@
                          (ma-save-state!)
                          (broadcast (string-append user " digs " direction "."))
                          (reply-to-sender msg (string-append "You dig " direction " and open a new exit."))
-                         (enter-dig-target! (msg-from msg) target-room))))))))))))
+                         (enter-dig-target! (msg-from msg) user target-room))))))))))))
 
 (set-method! :go
   (lambda (args msg)
-    (let ((avatar (msg-from msg))
-          (direction (if (null? args) "out" (car args))))
+    (let* ((avatar (msg-from msg))
+           (user (go-caller-user args msg))
+           (go-args (go-command-args args))
+           (direction (if (null? go-args) "out" (car go-args))))
       (let ((exit (exit-target direction)))
         (if exit
-            (ma-send! exit (list :traverse avatar (self)))
+            (ma-send! exit (list :traverse avatar (self) user (speaker-name avatar)))
             (ma-send! avatar (list :print (string-append "No exit " direction "."))))))))
 
 (set-method! :enter-avatar
   (lambda (args msg)
     (let ((avatar (car args)))
       (ma-send! (root) (list :arrived avatar (self))))))
+
+(set-method! :enter-user
+  (lambda (args msg)
+    (let ((user (car args))
+          (nick (if (or (null? (cdr args)) (null? (cdr (cdr args))) (null? (cdr (cdr (cdr args))))) #f (car (cdr (cdr (cdr args)))))))
+      (ma-send! (root) (list :arrive-user user (self) nick)))))

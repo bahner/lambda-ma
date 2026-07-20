@@ -91,6 +91,13 @@ before the exit is created.
 
 ## Context flow
 
+Zion's normal contact point is the active avatar. Root creates or finds that
+avatar and owns the authoritative placement registry, but avatar owns the client
+context it reports to Zion: current root, avatar, room, nick, and optional text.
+Root corrects avatar placement with `:set-location`; avatar persists it and
+pushes `:ctx` to the user. Zion may cache the room for direct `:` commands, but
+plain commands are addressed to the avatar.
+
 Normal flow is push-based: whenever root registers that someone enters or
 leaves a room, root sends the affected room an event and then sends a fresh
 context snapshot.
@@ -117,25 +124,31 @@ Rooms also accept the older `(<avatar> ...)` shape as a repair/backwards-
 compatibility input, but root now sends nick-bearing entries.
 
 Room accepts `:join-avatar`, `:leave-avatar`, and `:ctx` only from root.
-Root sends fresh occupant context directly after every movement or nick change;
-rooms do not pull avatar context.
+Root sends fresh occupant context to rooms after movement or nick change; rooms
+do not pull avatar context. User-facing context is sent by avatar.
 
 ## Movement flow
 
 External entry uses the same exit traversal contract as ordinary movement:
 
 1. User asks root to enter with `:enter [nick]`.
-2. Root creates/fetches the user's avatar without placing it in a room.
+2. Root creates/fetches the user's avatar and replies with the avatar URL.
 3. Root sends the avatar through the stable entry exit with `:traverse`.
 4. The entry exit sends `:enter-avatar` to its target room.
 5. The room asks root to register arrival with `:arrived <avatar> <target-room>`.
-6. Root updates the authoritative `room:<avatar>` register and pushes zion context.
+6. Root updates the authoritative `room:<avatar>` register and sends
+	`:set-location` to avatar.
+7. Avatar persists the room and pushes zion context to the user.
 
-Room-to-room movement uses the same tail of that flow:
+Room-to-room movement uses the same tail of that flow inside one runtime. When
+the exit crosses to another runtime, the source avatar carries the user DID and
+nick through the exit; the target runtime root creates or reuses that user's
+local avatar before publishing the new context.
 
 1. Avatar sends `:go <direction>` to its current room.
-2. Room sends `:traverse <avatar> <source-room>` to the exit.
-3. Exit sends `:enter-avatar <avatar> <exit>` to the target room.
-4. Target room asks root to register arrival with `:arrived <avatar> <target-room>`.
-5. Root updates the authoritative `room:<avatar>` register.
+2. Room sends `:traverse <avatar> <source-room> <user> <nick>` to the exit.
+3. Exit sends `:enter-user <user> <avatar> <exit> <nick>` to the target room.
+4. Target room asks root to register arrival with `:arrive-user <user> <target-room> <nick>`.
+5. Root creates or reuses the local avatar, updates its authoritative
+	`room:<avatar>` register, and sends fresh client context.
 6. Root pushes `:leave-avatar` + `:ctx` to the old room and `:join-avatar` + `:ctx` to the new room.
