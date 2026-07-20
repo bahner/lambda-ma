@@ -87,6 +87,20 @@
         (send-room :exits '())
         (ma-reply! msg (list :ok "checking exits"))))))
 
+(set-method! :exits?
+  (lambda (args msg)
+    (require-user msg
+      (lambda ()
+        (send-room :exits? '())
+        (ma-reply! msg (list :ok "checking exits"))))))
+
+(set-method! :who?
+  (lambda (args msg)
+    (require-user msg
+      (lambda ()
+        (send-room :who? '())
+        (ma-reply! msg (list :ok "checking who"))))))
+
 (set-method! :say
   (lambda (args msg)
     (require-user msg
@@ -100,13 +114,6 @@
       (lambda ()
         (send-room :emote (list (join-words args)))
         (ma-reply! msg (list :ok "emoted"))))))
-
-(set-method! :duck
-  (lambda (args msg)
-    (require-user msg
-      (lambda ()
-        (send-room :duck args)
-        (ma-reply! msg (list :ok "duck"))))))
 
 (set-method! :claim
   (lambda (args msg)

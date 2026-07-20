@@ -8,15 +8,16 @@
 //! builtin reachable from ma-scheme itself), not about the host's own
 //! internal implementation strategy.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::rc::Rc;
 
 use crate::env::Env;
 
 /// A conforming host's core value type (§5): integers, floats, strings,
-/// booleans, symbols, proper lists (pairs + the empty list), lambdas, and
-/// (added in a later phase) the opaque `msg` record type. No vector, no
-/// map/record type beyond `msg`.
+/// booleans, symbols, proper lists (pairs + the empty list), maps,
+/// lambdas, and the opaque `msg` record type. No vector/record type
+/// beyond string-keyed maps and `msg`.
 #[derive(Clone)]
 pub enum Value {
     Int(i64),
@@ -28,6 +29,9 @@ pub enum Value {
     Nil,
     /// A cons cell. Proper lists are chains of these ending in `Nil`.
     Pair(Rc<(Value, Value)>),
+    /// A deterministic, string-keyed map. Values may be any ordinary
+    /// ma-scheme data value that can be CBOR-encoded.
+    Map(BTreeMap<String, Value>),
     Lambda(Rc<Lambda>),
     /// A host-provided builtin procedure (§8). The `&'static str` is its
     /// name, used for error messages and `procedure?`/display purposes.
@@ -165,6 +169,7 @@ impl Value {
             Value::Bool(_) => "boolean",
             Value::Nil => "nil",
             Value::Pair(_) => "pair",
+            Value::Map(_) => "map",
             Value::Lambda(_) => "lambda",
             Value::Builtin(..) => "procedure",
             Value::Msg(_) => "msg",
@@ -206,6 +211,16 @@ impl fmt::Display for Value {
                 }
                 write!(f, ")")
             }
+            Value::Map(m) => {
+                write!(f, "#<map (")?;
+                for (idx, (key, value)) in m.iter().enumerate() {
+                    if idx > 0 {
+                        write!(f, " ")?;
+                    }
+                    write!(f, "({key:?} . {value})")?;
+                }
+                write!(f, ")>")
+            }
             Value::Lambda(l) => match &l.name {
                 Some(n) => write!(f, "#<lambda:{n}>"),
                 None => write!(f, "#<lambda>"),
@@ -240,6 +255,7 @@ impl PartialEq for Value {
             (Value::Bool(a), Value::Bool(b)) => a == b,
             (Value::Nil, Value::Nil) => true,
             (Value::Pair(a), Value::Pair(b)) => a.0 == b.0 && a.1 == b.1,
+            (Value::Map(a), Value::Map(b)) => a == b,
             (Value::IpfsRef(a), Value::IpfsRef(b)) => a == b,
             _ => false,
         }

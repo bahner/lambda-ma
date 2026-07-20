@@ -2,6 +2,7 @@
 //! is either user-written ma-scheme or a convention prelude (§15), never
 //! grown here without a version bump.
 
+use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use crate::env::Env;
@@ -44,12 +45,24 @@ pub fn install(env: &Rc<Env>) {
     def!("number?", b_number_p);
     def!("boolean?", b_boolean_p);
     def!("symbol?", b_symbol_p);
+    def!("map?", b_map_p);
     def!("procedure?", b_procedure_p);
 
     // Strings
     def!("string-append", b_string_append);
     def!("number->string", b_number_to_string);
     def!("string->number", b_string_to_number);
+
+    // Maps
+    def!("make-map", b_make_map);
+    def!("map-ref", b_map_ref);
+    def!("map-set", b_map_set);
+    def!("map-delete", b_map_delete);
+    def!("map-has-key?", b_map_has_key_p);
+    def!("map-keys", b_map_keys);
+    def!("map-values", b_map_values);
+    def!("map->alist", b_map_to_alist);
+    def!("alist->map", b_alist_to_map);
 
     // Equality
     def!("equal?", b_equal_p);
@@ -275,6 +288,10 @@ fn b_symbol_p(args: &[Value]) -> EvalResult<Value> {
     )))
 }
 
+fn b_map_p(args: &[Value]) -> EvalResult<Value> {
+    Ok(Value::Bool(matches!(one_arg("map?", args)?, Value::Map(_))))
+}
+
 fn b_procedure_p(args: &[Value]) -> EvalResult<Value> {
     Ok(Value::Bool(matches!(
         one_arg("procedure?", args)?,
@@ -296,6 +313,128 @@ fn b_string_append(args: &[Value]) -> EvalResult<Value> {
         }
     }
     Ok(Value::str(out))
+}
+
+fn as_string(name: &str, v: &Value) -> EvalResult<String> {
+    match v {
+        Value::Str(s) => Ok(s.to_string()),
+        other => Err(EvalError::new(format!(
+            "{name}: expected a string, found {}",
+            other.type_name()
+        ))),
+    }
+}
+
+fn as_map<'a>(name: &str, v: &'a Value) -> EvalResult<&'a BTreeMap<String, Value>> {
+    match v {
+        Value::Map(m) => Ok(m),
+        other => Err(EvalError::new(format!(
+            "{name}: expected a map, found {}",
+            other.type_name()
+        ))),
+    }
+}
+
+fn b_make_map(args: &[Value]) -> EvalResult<Value> {
+    if args.len() % 2 != 0 {
+        return Err(EvalError::new(format!(
+            "make-map: expected an even number of key/value arguments, got {}",
+            args.len()
+        )));
+    }
+    let mut map = BTreeMap::new();
+    for pair in args.chunks(2) {
+        let key = as_string("make-map", &pair[0])?;
+        map.insert(key, pair[1].clone());
+    }
+    Ok(Value::Map(map))
+}
+
+fn b_map_ref(args: &[Value]) -> EvalResult<Value> {
+    if args.len() != 2 && args.len() != 3 {
+        return Err(EvalError::new(format!(
+            "map-ref: expected 2 or 3 arguments, got {}",
+            args.len()
+        )));
+    }
+    let map = as_map("map-ref", &args[0])?;
+    let key = as_string("map-ref", &args[1])?;
+    Ok(map
+        .get(&key)
+        .cloned()
+        .unwrap_or_else(|| args.get(2).cloned().unwrap_or(Value::Bool(false))))
+}
+
+fn b_map_set(args: &[Value]) -> EvalResult<Value> {
+    if args.len() != 3 {
+        return Err(EvalError::new(format!(
+            "map-set: expected exactly 3 arguments, got {}",
+            args.len()
+        )));
+    }
+    let mut map = as_map("map-set", &args[0])?.clone();
+    let key = as_string("map-set", &args[1])?;
+    map.insert(key, args[2].clone());
+    Ok(Value::Map(map))
+}
+
+fn b_map_delete(args: &[Value]) -> EvalResult<Value> {
+    let (map, key) = two_args("map-delete", args)?;
+    let mut map = as_map("map-delete", map)?.clone();
+    let key = as_string("map-delete", key)?;
+    map.remove(&key);
+    Ok(Value::Map(map))
+}
+
+fn b_map_has_key_p(args: &[Value]) -> EvalResult<Value> {
+    let (map, key) = two_args("map-has-key?", args)?;
+    let map = as_map("map-has-key?", map)?;
+    let key = as_string("map-has-key?", key)?;
+    Ok(Value::Bool(map.contains_key(&key)))
+}
+
+fn b_map_keys(args: &[Value]) -> EvalResult<Value> {
+    let map = as_map("map-keys", one_arg("map-keys", args)?)?;
+    Ok(Value::list(map.keys().cloned().map(Value::str).collect()))
+}
+
+fn b_map_values(args: &[Value]) -> EvalResult<Value> {
+    let map = as_map("map-values", one_arg("map-values", args)?)?;
+    Ok(Value::list(map.values().cloned().collect()))
+}
+
+fn b_map_to_alist(args: &[Value]) -> EvalResult<Value> {
+    let map = as_map("map->alist", one_arg("map->alist", args)?)?;
+    Ok(Value::list(
+        map.iter()
+            .map(|(key, value)| Value::cons(Value::str(key), value.clone()))
+            .collect(),
+    ))
+}
+
+fn alist_entry(entry: &Value) -> EvalResult<(String, Value)> {
+    let Value::Pair(p) = entry else {
+        return Err(EvalError::new(format!(
+            "alist->map: entry must be a pair, found {}",
+            entry.type_name()
+        )));
+    };
+    let key = as_string("alist->map", &p.0)?;
+    let value = match &p.1 {
+        Value::Pair(rest) if rest.1.is_nil() => rest.0.clone(),
+        other => other.clone(),
+    };
+    Ok((key, value))
+}
+
+fn b_alist_to_map(args: &[Value]) -> EvalResult<Value> {
+    let entries = one_arg("alist->map", args)?.to_vec()?;
+    let mut map = BTreeMap::new();
+    for entry in entries {
+        let (key, value) = alist_entry(&entry)?;
+        map.insert(key, value);
+    }
+    Ok(Value::Map(map))
 }
 
 fn b_number_to_string(args: &[Value]) -> EvalResult<Value> {

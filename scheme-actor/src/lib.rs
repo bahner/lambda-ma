@@ -84,7 +84,6 @@ mod tests {
             ("room.ma", include_str!("../../actors/room.ma")),
             ("root.ma", include_str!("../../actors/root.ma")),
             ("exit.ma", include_str!("../../actors/exit.ma")),
-            ("duck.ma", include_str!("../../actors/duck.ma")),
         ] {
             Parser::parse_all(source).unwrap_or_else(|err| panic!("{name}: {err}"));
         }
@@ -262,7 +261,21 @@ mod tests {
         assert_eq!(run("(string? \"x\")"), Value::Bool(true));
         assert_eq!(run("(number? 1)"), Value::Bool(true));
         assert_eq!(run("(symbol? 'x)"), Value::Bool(true));
+        assert_eq!(run("(map? (make-map))"), Value::Bool(true));
         assert_eq!(run("(procedure? car)"), Value::Bool(true));
+    }
+
+    #[test]
+    fn map_builtins() {
+        assert_eq!(run(r#"(map-ref (make-map "a" 1 "b" 2) "a")"#), Value::Int(1));
+        assert_eq!(run(r#"(map-ref (make-map) "missing" "fallback")"#), Value::str("fallback"));
+        assert_eq!(run(r#"(map-has-key? (make-map "a" 1) "a")"#), Value::Bool(true));
+        assert_eq!(run(r#"(map-keys (make-map "b" 2 "a" 1))"#), Value::list(vec![Value::str("a"), Value::str("b")]));
+        assert_eq!(run(r#"(map-values (make-map "b" 2 "a" 1))"#), Value::list(vec![Value::Int(1), Value::Int(2)]));
+        assert_eq!(run(r#"(map-ref (map-set (make-map "a" 1) "a" 9) "a")"#), Value::Int(9));
+        assert_eq!(run(r#"(map-has-key? (map-delete (make-map "a" 1) "a") "a")"#), Value::Bool(false));
+        assert_eq!(run(r#"(map-ref (alist->map (map->alist (make-map "a" 1))) "a")"#), Value::Int(1));
+        assert_eq!(run(r#"(map-ref (make-map "a" 1 "a" 2) "a")"#), Value::Int(2));
     }
 
     #[test]

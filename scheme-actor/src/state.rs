@@ -209,6 +209,7 @@ mod tests {
     #[test]
     fn props_and_config_lifecycle() {
         let env = Env::new_root();
+        crate::builtins::install(&env);
         install(&env);
 
         // No props yet: get-prop returns #f, has-prop? is false.
@@ -282,6 +283,20 @@ mod tests {
         assert_eq!(
             crate::eval_all("(get-prop \"fresh\")", &env).unwrap(),
             Value::Int(3)
+        );
+
+        // Maps are ordinary persisted state values.
+        crate::eval_all(
+            r#"(set-prop! "exits" (make-map "north" "did:ma:tester#exit"))"#,
+            &env,
+        )
+        .unwrap();
+        let dumped = dump_to_cbor().unwrap();
+        PROPS.with(|p| p.borrow_mut().clear());
+        load_from_cbor(&dumped).unwrap();
+        assert_eq!(
+            crate::eval_all(r#"(map-ref (get-prop "exits") "north")"#, &env).unwrap(),
+            Value::str("did:ma:tester#exit")
         );
 
         // Reset shared thread_local state so other tests in this binary

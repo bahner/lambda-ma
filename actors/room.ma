@@ -79,6 +79,32 @@
         ((null? (cdr actors)) (speaker-name (car actors)))
         (else (string-append (speaker-name (car actors)) ", " (names-of (cdr actors))))))
 
+(define (exits)
+  (let ((xs (get-prop "exits")))
+    (if (map? xs) xs (make-map))))
+
+(define (put-exit! direction exit)
+  (set-prop! "exits" (map-set (exits) direction exit)))
+
+(define (exit-target direction)
+  (let ((exit (map-ref (exits) direction #f)))
+    (if exit exit (get-prop (exit-key direction)))))
+
+(define (exit-directions)
+  (map-keys (exits)))
+
+(define (exits-text)
+  (let ((directions (exit-directions)))
+    (if (null? directions)
+        "Exits: none."
+        (string-append "Exits: " (names-of directions)))))
+
+(define (who-text)
+  (let ((actors (occupants)))
+    (if (null? actors)
+        "Nobody is here."
+        (string-append "Here: " (names-of actors)))))
+
 (define (from-root? msg)
   (equal? (msg-from msg) (root)))
 
@@ -241,7 +267,17 @@
 (set-method! :exits
   (lambda (args msg)
     (let ((avatar (msg-from msg)))
-      (ma-send! avatar (list :print "Exits are whatever has been dug from here.")))))
+      (ma-send! avatar (list :print (exits-text))))))
+
+(set-method! :exits?
+  (lambda (args msg)
+    (let ((avatar (msg-from msg)))
+      (ma-send! avatar (list :print (exits-text))))))
+
+(set-method! :who?
+  (lambda (args msg)
+    (let ((avatar (msg-from msg)))
+      (ma-send! avatar (list :print (who-text))))))
 
 (set-method! :say
   (lambda (args msg)
@@ -299,7 +335,7 @@
         (lambda ()
           (require-owner user msg
             (lambda ()
-              (let ((existing-exit (get-prop (exit-key direction))))
+              (let ((existing-exit (exit-target direction)))
                 (if existing-exit
                     (reply-to-sender msg (string-append "There is already an exit " direction "."))
                           (let* ((target (dig-target-text dig-args))
@@ -310,6 +346,7 @@
                                  (exit-fragment (ma-create-actor EXIT_KIND #f (exit-init direction target-room)))
                                  (exit (entity-url exit-fragment)))
                             (set-prop! (exit-key direction) exit)
+                                 (put-exit! direction exit)
                             (ma-save-state!)
                             (broadcast (string-append user " digs " direction "."))
                             (reply-to-sender msg (string-append "You dig " direction " and open a new exit."))))))))))))))
@@ -318,7 +355,7 @@
   (lambda (args msg)
     (let ((avatar (msg-from msg))
           (direction (if (null? args) "out" (car args))))
-      (let ((exit (get-prop (exit-key direction))))
+      (let ((exit (exit-target direction)))
         (if exit
             (ma-send! exit (list :traverse avatar (self)))
             (ma-send! avatar (list :print (string-append "No exit " direction "."))))))))

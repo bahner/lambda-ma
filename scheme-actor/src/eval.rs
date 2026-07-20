@@ -27,9 +27,12 @@ pub fn eval(expr: &Value, env: &Rc<Env>) -> EvalResult<Value> {
             // require a variable binding.
             Value::Symbol(s) if s.starts_with(':') => return Ok(expr),
             Value::Symbol(s) => return env.lookup(s),
-            Value::Int(_) | Value::Float(_) | Value::Str(_) | Value::Bool(_) | Value::Nil => {
-                return Ok(expr)
-            }
+            Value::Int(_)
+            | Value::Float(_)
+            | Value::Str(_)
+            | Value::Bool(_)
+            | Value::Nil
+            | Value::Map(_) => return Ok(expr),
             Value::Lambda(_) | Value::Builtin(..) | Value::Msg(_) | Value::IpfsRef(_) => {
                 return Ok(expr)
             }

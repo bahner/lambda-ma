@@ -5,6 +5,7 @@
 
 use ciborium::value::Integer;
 use ciborium::Value as Cbor;
+use std::collections::BTreeMap;
 
 use crate::value::{EvalError, EvalResult, Value};
 
@@ -59,9 +60,18 @@ pub fn decode_cbor_value(cbor: &Cbor) -> EvalResult<Value> {
                 .collect::<EvalResult<Vec<_>>>()?;
             Ok(Value::list(values))
         }
-        Cbor::Map(_) => Err(EvalError::new(
-            "map content unsupported in ma-scheme v1 (§6)",
-        )),
+        Cbor::Map(entries) => {
+            let mut map = BTreeMap::new();
+            for (k, v) in entries {
+                let Cbor::Text(key) = k else {
+                    return Err(EvalError::new(
+                        "CBOR map keys must be text strings for ma-scheme maps (§6)",
+                    ));
+                };
+                map.insert(key.clone(), decode_cbor_value(v)?);
+            }
+            Ok(Value::Map(map))
+        }
         other => Err(EvalError::new(format!(
             "unsupported CBOR value for ma-scheme (§6): {other:?}"
         ))),
@@ -89,6 +99,13 @@ pub fn encode_cbor_value(value: &Value) -> EvalResult<Cbor> {
                 .map(encode_cbor_value)
                 .collect::<EvalResult<Vec<_>>>()?;
             Ok(Cbor::Array(cbor_items))
+        }
+        Value::Map(map) => {
+            let entries = map
+                .iter()
+                .map(|(k, v)| Ok((Cbor::Text(k.clone()), encode_cbor_value(v)?)))
+                .collect::<EvalResult<Vec<_>>>()?;
+            Ok(Cbor::Map(entries))
         }
         Value::Lambda(_) | Value::Builtin(..) => Err(EvalError::new(
             "cannot CBOR-encode a procedure (no lambdas in state/messages, §9)",
@@ -154,9 +171,30 @@ mod tests {
     }
 
     #[test]
-    fn map_content_is_an_error() {
+    fn map_content_roundtrips() {
         let cbor = Cbor::Map(vec![(Cbor::Text("a".to_string()), Cbor::Integer(1.into()))]);
+        let mut expected = BTreeMap::new();
+        expected.insert("a".to_string(), Value::Int(1));
+        assert_eq!(roundtrip_cbor(&cbor), Value::Map(expected));
+    }
+
+    #[test]
+    fn map_rejects_non_text_keys() {
+        let cbor = Cbor::Map(vec![(Cbor::Integer(1.into()), Cbor::Text("x".to_string()))]);
         assert!(decode_cbor_value(&cbor).is_err());
+    }
+
+    #[test]
+    fn nested_map_roundtrips() {
+        let mut inner = BTreeMap::new();
+        inner.insert("north".to_string(), Value::str("did:ma:abc#exit"));
+        let mut outer = BTreeMap::new();
+        outer.insert("exits".to_string(), Value::Map(inner));
+        outer.insert("dark".to_string(), Value::Bool(false));
+        let original = Value::Map(outer);
+        let bytes = encode(&original).unwrap();
+        let decoded = decode(&bytes).unwrap();
+        assert_eq!(original, decoded);
     }
 
     #[test]

@@ -58,11 +58,6 @@ runtime:
       behaviour:
         "/": __EXIT_BEHAVIOUR_CID__
 
-    /ma/rubber-duck/0.0.1:
-      extends: /ma/scheme/actor/0.0.1
-      behaviour:
-        "/": __DUCK_BEHAVIOUR_CID__
-
     /ma/scheduler/0.0.1:
       type: native
       attributes:
@@ -86,8 +81,3 @@ runtime:
       attributes:
         genesis: true
       acl: open
-      init: |
-        (set-prop! "root" (string-append (ma-get-config-key "runtime") "#root"))
-        (set-prop! "name" "The Construct")
-        (set-prop! "description" "This is the Construct. It's our loading program. We can load anything... From clothing to equipment, weapons, training simulations; anything we need.")
-        (ma-save-state!)

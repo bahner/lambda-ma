@@ -107,22 +107,3 @@ Room-to-room movement uses the same tail of that flow:
 4. Target room asks root to register arrival with `:arrived <avatar> <target-room>`.
 5. Root updates the authoritative `room:<avatar>` register.
 6. Root pushes `:leave-avatar` + `:ctx` to the old room and `:join-avatar` + `:ctx` to the new room.
-
-## Stationary rubber duck
-
-Rooms can create a local rubber duck with `:duck`. The duck stores only its
-room and is not added to root's location registry, so it cannot move between
-rooms. The room also stores the duck in its local `ducks` list, so `:look`
-can show it as something present in that room. It can still speak through the
-room:
-
-```scheme
-(:quack) ; sends (:say "kvakk") to the room
-```
-
-Because room labels the duck locally, occupants see `rubber duck says: kvakk`
-rather than the duck actor DID.
-
-You do not send `:go #room` to a duck. To put a duck somewhere, ask that room
-to create it with `:duck`; the created duck belongs to that room until a later
-object/mobility model exists.

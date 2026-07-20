@@ -9,7 +9,6 @@ actors/root.ma          placement registry, avatar creation, zion :ctx receipts
 actors/avatar.ma        user command endpoint
 actors/room.ma          room policy, occupants, claim/owner, dig/go, exit ownership
 actors/exit.ma          traversal between rooms
-actors/duck.ma          stationary rubber duck that can say kvakk
 actors/python/          reserved for Python actors when a concrete feature needs them
 scheme-actor/           generic ma-scheme actor Wasm crate and stdlib
 Makefile                publishes actor sources and generates dist/lambda-ma.yaml
