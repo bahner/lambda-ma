@@ -107,6 +107,13 @@ mod tests {
         }
     }
 
+    fn eval_int(src: &str, env: &Rc<Env>) -> i64 {
+        match eval_all(src, env).unwrap() {
+            Value::Int(value) => value,
+            other => panic!("expected int, got {other}"),
+        }
+    }
+
     #[test]
     fn lambda_ma_actor_files_parse() {
         for (name, source) in [
@@ -159,6 +166,23 @@ mod tests {
             eval_str("(movable-ref \"rms\")", &env),
             "did:ma:runtime#rms"
         );
+    }
+
+    #[test]
+    fn room_move_selects_an_available_exit() {
+        let env = room_env();
+        assert!(eval_bool("(not (random-exit-direction))", &env));
+        eval_all("(put-exit! \"north\" \"did:ma:runtime#north-exit\")", &env).unwrap();
+        assert_eq!(eval_str("(random-exit-direction)", &env), "north");
+    }
+
+    #[test]
+    fn random_builtin_returns_integer_in_range() {
+        let env = new_root_env();
+        let value = eval_int("(random 3)", &env);
+        assert!((0..3).contains(&value));
+        assert!(eval_all("(random 0)", &env).is_err());
+        assert!(eval_all("(random \"3\")", &env).is_err());
     }
 
     #[test]

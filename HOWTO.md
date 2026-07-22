@@ -301,22 +301,14 @@ Why this works well:
 - `enter` records the target as pending, sends room `:enter`, and commits the
   new `parent` only after a valid room `:ctx` ack.
 - `:enter` with `agent-ctx` informs the room how to present the occupant.
-- `:move` and `:go` use ordinary room exits. The source room sees
+- `:move` and `:go` use ordinary room exits. `:go <direction>` names an exit;
+  `:move` asks the current room to choose one of the exits it knows with
+  practical, non-security random choice. The source room sees
   `:leave-occupant` and broadcasts `<nick> leaves.`; the target room receives
   the agent's normal `:enter` and broadcasts `<nick> arrives.`
 - Full init logic stays in the code users provide at creation time, so users can
   adjust it safely when creating entities.
-
-To let an agent move itself from scheduler callbacks, register a caller-owned
-schedule from the agent:
-
-```scheme
-(agent-schedule-move! 300)
-```
-
-The scheduler calls the agent as `did:ma:<runtime>#scheduler`; the agent then
-asks its current parent room to perform `:go`. Agents can use exits, but they do
-not expose `:dig`.
+Agents can use exits, but they do not expose `:dig`.
 
 ## Add custom code to one room
 

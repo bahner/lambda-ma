@@ -214,9 +214,10 @@ runtime local avatar before publishing the new context.
 
 Agent movement is actor-owned and room-visible:
 
-1. Scheduler, the owner, or any caller while the agent is free/unowned sends
-   `:move [direction]` or `:go <direction>` to the agent.
-2. The agent asks its current parent room to `:go <direction>`.
+1. The owner, or any caller while the agent is free/unowned, sends `:move` or
+   `:go <direction>` to the agent.
+2. The agent asks its current parent room to choose an exit for `:move`, or to
+   use the named exit for `:go <direction>`.
 3. The room sends `:traverse-agent <agent-did-url> <source-room-did-url> <nick>`
    to the exit.
 4. The exit tells the full agent DID-URL to enter the full target room DID-URL.

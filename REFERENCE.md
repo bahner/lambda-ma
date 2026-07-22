@@ -245,6 +245,7 @@ Key verbs:
 | `:leave-avatar` | `<avatar-did-url> <to-room-did-url>` | Target-room-origin cache removal during movement. |
 | `:leave-occupant` | none | Sender-origin cache removal for non-avatar occupants such as agents after actor-owned parent changes. |
 | `:look` `:exits?` `:who?` `:occupants?` `:things?` | none | Local presentation; `:look` prints room text plus `Occupants:` and `Things:`. `who?` is people/avatar-oriented; `occupants?` includes avatars plus room-local agents/occupants. |
+| `:go` / `:move` | `<direction>` / none | `:go` traverses a named exit. `:move` chooses one currently available room exit for the caller. |
 | `:thing` | `<name> [did-or-empty]` | Local occupant alias list/get/set/delete; owner-gated for write. |
 | `:take` / `:drop` / `:where` | `[user?] [token]` | Uses movable actor parent-authority contract. |
 | `:claim` / `:owner` / `:prop` | delegated or direct shapes | Room ownership controls write operations. |
@@ -273,11 +274,10 @@ Key helpers and verbs:
 | Verb/helper | Args | Notes |
 | --- | --- | --- |
 | `agent-ctx` | none | Builds `ctx` with `kind=agent`, `name`, `nick`, `description`. |
-| `agent-schedule-move!` | `<max-secs>` | Optional generic helper for concrete agents to register caller-owned random `:move` with `#scheduler`. |
 | `:about` `:where` `:owner` | none | Generic state summary. |
 | `:exits?` | none | Asks the current parent room for exits and stores the printed reply as `last-message`. |
-| `:go` | `<direction>` | Free-agent, owner, or scheduler movement through a room exit; no exit creation. |
-| `:move` | `[direction]` | Scheduler-facing movement command; defaults to `out`. |
+| `:go` | `<direction>` | Free-agent or owner movement through a named room exit; no exit creation. |
+| `:move` | none | Asks the current parent room to choose one available exit at random and traverse it. |
 | `:enter-room` | `<target-room-did-url> <source-room-did-url>` | Exit-facing movement helper; performs ordinary room-visible `:leave-occupant` plus map-shaped agent `:enter`. |
 | `:claim` | `<secret>` | Recovery-path ownership claim. |
 | `:take` | `<user> <carrier-parent> [ctx]` | Caller must be current parent. |

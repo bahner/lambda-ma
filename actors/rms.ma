@@ -71,7 +71,6 @@
     (if (get-prop "description")
         #f
         (set-prop! "description" "A roaming free software sage dispensing random fortunes."))
-    (if (number? (get-prop "fortune-seed")) #f (set-prop! "fortune-seed" 7))
     (ma-save-state!)))
 
 (define (runtime-started-at)
@@ -102,24 +101,11 @@
         ((= idx 0) (car xs))
         (else (list-ref-at (cdr xs) (- idx 1)))))
 
-(define (wrap-index n count)
-  (cond ((< n 0) (wrap-index (+ n count) count))
-        ((< n count) n)
-        (else (wrap-index (- n count) count))))
-
-(define (next-fortune-index count)
-  (let* ((seed (get-prop "fortune-seed"))
-         (base (if (number? seed) seed 7))
-         (next (wrap-index (+ (* base 17) 31) count)))
-    (set-prop! "fortune-seed" next)
-    (ma-save-state!)
-    next))
-
 (define (next-fortune)
   (let ((count (list-length FORTUNES)))
     (if (= count 0)
         "Freedom requires sharing."
-        (let ((fortune (list-ref-at FORTUNES (next-fortune-index count))))
+        (let ((fortune (list-ref-at FORTUNES (random count))))
           (if fortune fortune "Freedom requires sharing.")))))
 
 (set-method! :help

@@ -296,6 +296,25 @@
 (define (exit-directions)
   (map-keys (exits)))
 
+(define (list-length xs)
+  (if (null? xs) 0 (+ 1 (list-length (cdr xs)))))
+
+(define (list-ref-at xs idx)
+  (cond ((null? xs) #f)
+        ((= idx 0) (car xs))
+        (else (list-ref-at (cdr xs) (- idx 1)))))
+
+(define (random-exit-direction)
+  (let ((directions (exit-directions)))
+    (if (null? directions)
+        #f
+        (list-ref-at directions (random (list-length directions))))))
+
+(define (traverse-exit! actor user direction exit)
+  (if (movable-occupant? actor)
+      (ma-send! exit (list :traverse-agent actor (self) (speaker-name actor)))
+      (ma-send! exit (list :traverse actor (self) user (speaker-name actor)))))
+
 (define (exits-text)
   (let ((directions (exit-directions)))
     (if (null? directions)
@@ -337,6 +356,7 @@
     "  say <text>        speak here\n"
     "  emote <text>      act here\n"
     "  go <direction>    move through an exit\n"
+    "  move              move through one available exit\n"
     "  claim             claim this room if it is unowned\n"
     "  owner [did]       show or transfer ownership\n"
     "  dig <dir> [to name] [with code] create an exit\n"
@@ -864,10 +884,17 @@
            (direction (if (null? go-args) "out" (car go-args))))
       (let ((exit (exit-target direction)))
         (if exit
-            (if (movable-occupant? actor)
-                (ma-send! exit (list :traverse-agent actor (self) (speaker-name actor)))
-                (ma-send! exit (list :traverse actor (self) user (speaker-name actor))))
+            (traverse-exit! actor user direction exit)
             (ma-send! actor (list :print (string-append "No exit " direction "."))))))))
+
+(set-method! :move
+  (lambda (args msg)
+    (let* ((actor (canonical-actor (msg-from msg)))
+           (user (go-caller-user args msg))
+           (direction (random-exit-direction)))
+      (if direction
+          (traverse-exit! actor user direction (exit-target direction))
+          (ma-send! actor (list :print "No exits."))))))
 
 (set-method! :nick
   (lambda (args msg)

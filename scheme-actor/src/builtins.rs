@@ -2,6 +2,7 @@
 //! is either user-written ma-scheme or a convention prelude (§15), never
 //! grown here without a version bump.
 
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
@@ -21,6 +22,7 @@ pub fn install(env: &Rc<Env>) {
     def!("-", b_sub);
     def!("*", b_mul);
     def!("/", b_div);
+    def!("random", b_random);
 
     // Comparison
     def!("=", b_num_eq);
@@ -179,6 +181,82 @@ fn b_div(args: &[Value]) -> EvalResult<Value> {
         acc /= d;
     }
     Ok(Value::Float(acc))
+}
+
+thread_local! {
+    static RANDOM_STATE: Cell<u64> = const { Cell::new(0) };
+}
+
+fn mix_seed(mut state: u64, bytes: &[u8]) -> u64 {
+    for byte in bytes {
+        state ^= u64::from(*byte);
+        state = state.wrapping_mul(0x1000_0000_01b3);
+    }
+    state
+}
+
+fn random_seed() -> u64 {
+    let mut seed = 0xcbf2_9ce4_8422_2325;
+    for key in ["self", "runtime", "started_at", "iroh_node_id", "id"] {
+        if let Some(value) = crate::state::config_value(key) {
+            seed = mix_seed(seed, key.as_bytes());
+            seed = mix_seed(seed, value.as_bytes());
+        }
+    }
+    if seed == 0 {
+        1
+    } else {
+        seed
+    }
+}
+
+fn splitmix64(mut value: u64) -> u64 {
+    value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    value ^ (value >> 31)
+}
+
+fn next_random_u64() -> u64 {
+    RANDOM_STATE.with(|state| {
+        let current = match state.get() {
+            0 => random_seed(),
+            value => value,
+        };
+        let next = current.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        state.set(next);
+        splitmix64(next)
+    })
+}
+
+fn random_below(n: u64) -> u64 {
+    if n == 1 {
+        return 0;
+    }
+    let zone = u64::MAX - (u64::MAX % n);
+    loop {
+        let value = next_random_u64();
+        if value < zone {
+            return value % n;
+        }
+    }
+}
+
+fn b_random(args: &[Value]) -> EvalResult<Value> {
+    let upper = one_arg("random", args)?;
+    let Value::Int(n) = upper else {
+        return Err(EvalError::new(format!(
+            "random: expected an integer upper bound, found {}",
+            upper.type_name()
+        )));
+    };
+    if *n <= 0 {
+        return Err(EvalError::new("random: upper bound must be > 0"));
+    }
+    let n = u64::try_from(*n).map_err(|_| EvalError::new("random: upper bound too large"))?;
+    let value = random_below(n);
+    i64::try_from(value)
+        .map(Value::Int)
+        .map_err(|_| EvalError::new("random: result overflow"))
 }
 
 fn numeric_chain(args: &[Value], op: fn(f64, f64) -> bool) -> EvalResult<Value> {

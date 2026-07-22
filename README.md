@@ -29,6 +29,14 @@ Makefile                publishes actor sources and generates dist/lambda-ma.yam
 
 The generated bootstrap currently contains only what this MVP needs: the generic ma-scheme actor kind built from `scheme-actor/`, a genesis variant, the λ-間 actor kinds, the scheduler, `#root`, and the initial `#construct` room.
 
+The bundled ma-scheme actor implements the core `random` builtin from
+`ma-scheme-v1`: `(random n)` returns a non-cryptographic integer in `[0,n)`.
+It is practical randomness for ordinary actor choices such as exits, fortunes,
+and dice rolls. It is not security randomness: do not use it for keys, nonces,
+capabilities, tokens, proofs, authentication challenges, or anything where
+prediction changes authority or privacy. The reference implementation uses a
+runtime/entity-seeded 64-bit PRNG.
+
 Python actors are intentionally not bulk-copied yet. The existing Python actor libraries still live in the workspace-level `python-ma-actors` repo; they should move into `actors/python/` when a concrete λ-間 feature uses them, along with a Makefile path that builds their Wasm and wires their kind CIDs into the generated bootstrap.
 
 For a full first-run guide, including Kubo/IPFS setup, installing `ma`,
