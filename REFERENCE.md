@@ -259,6 +259,7 @@ Purpose: traversal handoff.
 | Verb | Args | Notes |
 | --- | --- | --- |
 | `:traverse` | `<avatar-did-url> [source-room-did-url] [user] [nick]` | Emits movement text and forwards enter event to target room. |
+| `:traverse-agent` | `<agent-did-url> <source-room-did-url> [nick]` | Tells the agent to leave its source room and enter the full target room DID-URL with `agent-ctx`. |
 
 ### 5.5 Scheme agent parent kind
 
@@ -272,7 +273,12 @@ Key helpers and verbs:
 | Verb/helper | Args | Notes |
 | --- | --- | --- |
 | `agent-ctx` | none | Builds `ctx` with `kind=agent`, `name`, `nick`, `description`. |
+| `agent-schedule-move!` | `<max-secs>` | Optional generic helper for concrete agents to register caller-owned random `:move` with `#scheduler`. |
 | `:about` `:where` `:owner` | none | Generic state summary. |
+| `:exits?` | none | Asks the current parent room for exits and stores the printed reply as `last-message`. |
+| `:go` | `<direction>` | Free-agent, owner, or scheduler movement through a room exit; no exit creation. |
+| `:move` | `[direction]` | Scheduler-facing movement command; defaults to `out`. |
+| `:enter-room` | `<target-room-did-url> <source-room-did-url>` | Exit-facing movement helper; performs ordinary room-visible `:leave-occupant` plus map-shaped agent `:enter`. |
 | `:claim` | `<secret>` | Recovery-path ownership claim. |
 | `:take` | `<user> <carrier-parent> [ctx]` | Caller must be current parent. |
 | `:drop` | `<user> <target-parent> [ctx]` | Caller must be current parent. |

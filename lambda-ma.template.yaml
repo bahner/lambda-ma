@@ -105,14 +105,3 @@ runtime:
           (duck-defaults!)
           (enter (string-append (ma-get-config-key "runtime") "#construct"))
           (duck-schedule-quack!))
-
-    rms:
-      kind: /ma/scheme/agent/0.0.1
-      behaviour:
-        "/": __RMS_BEHAVIOUR_CID__
-      acl: open
-      init: |
-        (begin
-          (rms-defaults!)
-          (enter (string-append (ma-get-config-key "runtime") "#construct"))
-          (rms-schedule-fortune!))

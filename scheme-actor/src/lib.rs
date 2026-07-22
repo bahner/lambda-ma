@@ -100,6 +100,13 @@ mod tests {
         }
     }
 
+    fn eval_bool(src: &str, env: &Rc<Env>) -> bool {
+        match eval_all(src, env).unwrap() {
+            Value::Bool(value) => value,
+            other => panic!("expected bool, got {other}"),
+        }
+    }
+
     #[test]
     fn lambda_ma_actor_files_parse() {
         for (name, source) in [
@@ -146,6 +153,8 @@ mod tests {
 
         assert_eq!(eval_str("(who-text)", &env), "Who: Alice");
         assert_eq!(eval_str("(occupants-text)", &env), "Occupants: rms, Alice");
+        assert!(eval_bool("(movable-occupant? rms)", &env));
+        assert!(!eval_bool("(movable-occupant? avatar)", &env));
         assert_eq!(
             eval_str("(movable-ref \"rms\")", &env),
             "did:ma:runtime#rms"

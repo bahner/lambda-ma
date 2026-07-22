@@ -858,14 +858,16 @@
 
 (set-method! :go
   (lambda (args msg)
-    (let* ((avatar (canonical-actor (msg-from msg)))
+    (let* ((actor (canonical-actor (msg-from msg)))
            (user (go-caller-user args msg))
            (go-args (go-command-args args))
            (direction (if (null? go-args) "out" (car go-args))))
       (let ((exit (exit-target direction)))
         (if exit
-            (ma-send! exit (list :traverse avatar (self) user (speaker-name avatar)))
-            (ma-send! avatar (list :print (string-append "No exit " direction "."))))))))
+            (if (movable-occupant? actor)
+                (ma-send! exit (list :traverse-agent actor (self) (speaker-name actor)))
+                (ma-send! exit (list :traverse actor (self) user (speaker-name actor))))
+            (ma-send! actor (list :print (string-append "No exit " direction "."))))))))
 
 (set-method! :nick
   (lambda (args msg)

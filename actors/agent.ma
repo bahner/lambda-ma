@@ -49,10 +49,34 @@
   (set-prop! "pending-room" room)
   (ma-save-state!))
 
+(define (agent-runtime-started-at)
+  (let ((value (ma-get-config-key "started_at")))
+    (if value value "")))
+
+(define (agent-scheduled-this-runtime? key)
+  (equal? (get-prop key) (agent-runtime-started-at)))
+
+(define (agent-mark-scheduled! key)
+  (begin
+    (set-prop! key (agent-runtime-started-at))
+    (ma-save-state!)))
+
+(define (agent-schedule-move! max-secs)
+  (let ((key "schedule:move:started-at"))
+    (if (agent-scheduled-this-runtime? key)
+        #f
+        (begin
+          (agent-mark-scheduled! key)
+          (ma-send! (entity-url "scheduler") (list "move" :random max-secs :move))))))
+
+(define (set-last-message! text)
+  (set-prop! "last-message" text)
+  (ma-save-state!))
+
 (define (enter room)
   (begin
-    (set-pending-room! room)
-    (ma-send! room (list :enter (agent-ctx)))))
+    (set-pending-room! (canonical-actor room))
+    (ma-send! (canonical-actor room) (list :enter (agent-ctx)))))
 
 (define (leave-current-parent!)
   (let ((p (parent)))
@@ -79,6 +103,14 @@
 (define (owner-caller? msg)
   (let ((o (owner)))
     (and o (equal? (msg-from msg) o))))
+
+(define (scheduler-caller? msg)
+  (same-actor? (msg-from msg) (entity-url "scheduler")))
+
+(define (movement-caller? msg)
+  (or (scheduler-caller? msg)
+  (not (owner))
+  (owner-caller? msg)))
 
 (define (reply-ok msg text)
   (ma-reply! msg (list :ok text)))
@@ -169,6 +201,26 @@
       "nick" (nick))
     "description" (description)))
 
+(define (send-parent-room! msg term)
+  (let ((p (parent)))
+    (if (equal? p "")
+        (reply-error msg (string-append (nick) " is nowhere"))
+        (begin
+          (ma-send! p term)
+          (reply-ok msg "queued")))))
+
+(define (move-to-room! target-room source-room)
+  (if (same-actor? source-room (parent))
+      (begin
+        (leave-current-parent!)
+        (enter (canonical-actor target-room)))
+      #f))
+
+(define (agent-go! args msg)
+  (if (movement-caller? msg)
+      (send-parent-room! msg (cons :go args))
+      (reply-error msg "only a free agent, owner, or scheduler may move this agent")))
+
 (set-method! :about
   (lambda (args msg)
     (reply-ok msg
@@ -185,6 +237,28 @@
 (set-method! :owner
   (lambda (args msg)
     (reply-ok msg (if (owner) (owner) "(none)"))))
+
+(set-method! :print
+  (lambda (args msg)
+    (set-last-message! (join-words args))))
+
+(set-method! :exits?
+  (lambda (args msg)
+    (send-parent-room! msg (list :exits?))))
+
+(set-method! :go
+  (lambda (args msg)
+    (agent-go! args msg)))
+
+(set-method! :move
+  (lambda (args msg)
+    (agent-go! (if (null? args) (list "out") args) msg)))
+
+(set-method! :enter-room
+  (lambda (args msg)
+    (if (or (null? args) (null? (cdr args)))
+        #f
+        (move-to-room! (car args) (car (cdr args))))))
 
 (set-method! :ctx
   (lambda (args msg)

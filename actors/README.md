@@ -211,3 +211,17 @@ runtime local avatar before publishing the new context.
    rooms create or reuse the deterministic target-runtime avatar for `user`.
 5. Target room asks the old room to remove the source avatar with
    `:leave-avatar` when needed.
+
+Agent movement is actor-owned and room-visible:
+
+1. Scheduler, the owner, or any caller while the agent is free/unowned sends
+   `:move [direction]` or `:go <direction>` to the agent.
+2. The agent asks its current parent room to `:go <direction>`.
+3. The room sends `:traverse-agent <agent-did-url> <source-room-did-url> <nick>`
+   to the exit.
+4. The exit tells the full agent DID-URL to enter the full target room DID-URL.
+5. The agent sends `:leave-occupant` to the old room, then sends map-shaped
+   `:enter` with `agent-ctx` to the target room.
+6. The old room broadcasts `<nick> leaves.` and the target room broadcasts
+   `<nick> arrives.`; the agent commits its new `parent` only after target-room
+   `:ctx`.
