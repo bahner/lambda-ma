@@ -25,11 +25,35 @@
           (list :room (room))
           (list :text text))))
 
+(define (ctx-term-room r text)
+  (list :ctx
+    (list (list :root (root))
+          (list :avatar (self))
+          (list :nick (nick))
+          (list :room r)
+          (list :text text))))
+
+(define (start-room) (ma-get-config-key "start"))
+
 (define (send-ctx text)
   (ma-send! (user) (ctx-term text)))
 
 (define (user? msg) (equal? (msg-from msg) (user)))
 (define (root? msg) (same-actor? (msg-from msg) (root)))
+(define (room? msg)
+  (let ((current (room)))
+    (and current (same-actor? (msg-from msg) current))))
+(define (room-or-root? msg)
+  (or (room? msg) (root? msg)))
+
+(define (initial-room-bind? new-room msg)
+  (let ((current (room)))
+    (and (not current)
+         new-room
+         (same-actor? (msg-from msg) new-room))))
+
+(define (room-caller? msg)
+  (room? msg))
 
 (define (join-words words)
   (cond ((null? words) "")
@@ -45,7 +69,10 @@
   (let ((target (room)))
     (if target
         (ma-send! target (cons verb args))
-        (ma-send! (user) (list :print "You are nowhere.")))))
+        (let ((start (start-room)))
+          (if start
+              (ma-send! (user) (ctx-term-room start #f))
+              (ma-send! (user) (list :print "You are nowhere.")))))))
 
 (define (send-room-as-user verb args)
   (send-room verb (cons (user) args)))
@@ -64,6 +91,10 @@
     "  look              look around\n"
     "  exits             list exits\n"
     "  who?              show who is here\n"
+    "  things?           list local non-avatar occupants\n"
+    "  take <thing>      ask a local occupant to bind to you\n"
+    "  drop <thing>      ask a carried occupant to enter this room\n"
+    "  where <thing>     ask where a local occupant says it is\n"
     "  say <text>        speak here\n"
     "  emote <text>      act here\n"
     "  go <direction>    move through an exit\n"
@@ -79,17 +110,18 @@
 
 (set-method! :set-location
   (lambda (args msg)
-    (if (root? msg)
-        (let ((new-room (car args))
-              (text (if (or (null? (cdr args)) (equal? (car (cdr args)) "")) #f (car (cdr args)))))
-          (set-prop! "room" new-room)
-          (ma-save-state!)
-          (send-ctx text))
-        #f)))
+    (let ((new-room (car args))
+          (text (if (or (null? (cdr args)) (equal? (car (cdr args)) "")) #f (car (cdr args)))))
+      (if (or (room-or-root? msg) (initial-room-bind? new-room msg))
+          (begin
+            (set-prop! "room" new-room)
+            (ma-save-state!)
+            (send-ctx text))
+          #f))))
 
 (set-method! :set-nick
   (lambda (args msg)
-    (if (root? msg)
+    (if (room-or-root? msg)
         (begin
           (set-prop! "nick" (car args))
           (ma-save-state!)
@@ -135,11 +167,9 @@
       (lambda ()
         (if (null? args)
             (ma-reply! msg (list :ok (nick)))
-            (let ((new-nick (join-words args)))
-              (set-prop! "nick" new-nick)
-              (ma-save-state!)
-              (ma-send! (root) (list :nick new-nick))
-              (ma-reply! msg (list :ok new-nick))))))))
+            (begin
+              (send-room :nick args)
+              (reply-ok-silent msg)))))))
 
 (set-method! :look
   (lambda (args msg)
@@ -217,6 +247,20 @@
       (lambda ()
         (send-room-as-user :go args)
         (reply-ok-silent msg)))))
+
+(set-method! :drop-thing
+  (lambda (args msg)
+    (if (room-caller? msg)
+        (if (or (null? args) (null? (cdr args)) (null? (cdr (cdr args))))
+            #f
+            (let ((user (car args))
+                  (thing (car (cdr args)))
+          (target-parent (car (cdr (cdr args))))
+          (ctx (if (or (null? (cdr (cdr (cdr args)))) (not (map? (car (cdr (cdr (cdr args))))))) #f (car (cdr (cdr (cdr args)))))))
+        (if ctx
+          (ma-send! thing (list :drop user target-parent ctx))
+          (ma-send! thing (list :drop user target-parent)))))
+        #f)))
 
 (set-default-method!
   (lambda (verb args msg)

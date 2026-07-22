@@ -113,11 +113,15 @@ fn b_ma_entity_exists(args: &[Value]) -> EvalResult<Value> {
 /// (ma-runtime-v1.md's `ma_create_entity` semantics) — a successful return
 /// here means the request was queued, not that the entity is live yet.
 fn b_ma_create_actor(args: &[Value]) -> EvalResult<Value> {
-    let [kind, behaviour, init] = args else {
-        return Err(EvalError::new(format!(
-            "ma-create-actor: expected exactly 3 arguments (kind behaviour init), got {}",
-            args.len()
-        )));
+    let (kind, behaviour, init, fragment_hint) = match args {
+        [kind, behaviour, init] => (kind, behaviour, init, None),
+        [kind, behaviour, init, hint] => (kind, behaviour, init, Some(hint)),
+        _ => {
+            return Err(EvalError::new(format!(
+                "ma-create-actor: expected 3 or 4 arguments (kind behaviour init [fragment-hint]), got {}",
+                args.len()
+            )));
+        }
     };
 
     let Value::Str(kind) = kind else {
@@ -128,8 +132,12 @@ fn b_ma_create_actor(args: &[Value]) -> EvalResult<Value> {
     };
     let behaviour = as_optional_string("ma-create-actor", "behaviour", behaviour)?;
     let init = as_optional_string("ma-create-actor", "init", init)?;
+    let fragment_hint = match fragment_hint {
+        Some(h) => as_optional_string("ma-create-actor", "fragment-hint", h)?,
+        None => None,
+    };
 
-    let cbor = ciborium::Value::Map(vec![
+    let mut cbor_entries = vec![
         (
             ciborium::Value::Text("kind".to_string()),
             ciborium::Value::Text(kind.to_string()),
@@ -148,7 +156,14 @@ fn b_ma_create_actor(args: &[Value]) -> EvalResult<Value> {
                 None => ciborium::Value::Null,
             },
         ),
-    ]);
+    ];
+    if let Some(hint) = &fragment_hint {
+        cbor_entries.push((
+            ciborium::Value::Text("fragment_hint".to_string()),
+            ciborium::Value::Text(hint.clone()),
+        ));
+    }
+    let cbor = ciborium::Value::Map(cbor_entries);
     let mut buf = Vec::new();
     ciborium::ser::into_writer(&cbor, &mut buf)
         .map_err(|e| EvalError::new(format!("ma-create-actor: CBOR encode failed: {e}")))?;

@@ -35,6 +35,10 @@ For a full first-run guide, including Kubo/IPFS setup, installing `ma`,
 generating `dist/lambda-ma.yaml`, bootstrapping a runtime, generating a reusable
 root CID, and changing your first rooms, see [HOWTO.md](HOWTO.md).
 
+For the canonical lambda-ma world protocol contract (routing, enter ctx,
+authority model, actor verbs, and state-key conventions), see
+[REFERENCE.md](REFERENCE.md).
+
 ## Build
 
 Kubo/IPFS must be running locally.

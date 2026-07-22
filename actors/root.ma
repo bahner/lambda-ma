@@ -31,6 +31,21 @@
   (let ((room (get-prop (avatar-room-key avatar))))
     (if room room fallback)))
 
+(define (ctx-term avatar room text)
+  (list :ctx
+    (list (list :root (self))
+          (list :avatar avatar)
+          (list :nick (avatar-nick avatar))
+          (list :room room)
+          (list :text text))))
+
+(define (send-ctx avatar room text)
+  (let ((user (get-prop (avatar-user-key avatar)))
+        (effective-room (if (entity-live? room) room (configured-start-room))))
+    (if user
+        (ma-send! user (ctx-term avatar effective-room text))
+        #f)))
+
 (define (entity-live? actor)
   (and actor (ma-entity-exists? actor)))
 
@@ -86,7 +101,23 @@
     "(set-prop! \"user\" \"" user "\")\n"
     "(set-prop! \"root\" \"" (self) "\")\n"
     "(set-prop! \"nick\" \"" (nick-or-default nick) "\")"))
-
+; Like avatar-init but also sets room and sends :ctx to the user from init.
+; Used when creating a NEW avatar so ctx arrives only after the entity is live,
+; eliminating the race between root sending ctx and the entity loading.
+(define (avatar-init-room user nick room)
+  (let ((n (nick-or-default nick))
+        (r (self)))
+    (string-append
+      "(set-prop! \"user\" \"" user "\")\n"
+      "(set-prop! \"root\" \"" r "\")\n"
+      "(set-prop! \"nick\" \"" n "\")\n"
+      "(set-prop! \"room\" \"" room "\")\n"
+      "(ma-send! \"" user "\" (list :ctx (list"
+      " (list :root \"" r "\")"
+      " (list :avatar (ma-get-config-key \"self\"))"
+      " (list :nick \"" n "\")"
+      " (list :room \"" room "\")"
+      " (list :text \"You arrive.\"))))\n")))
 (define (configured-start-room)
   (let ((configured (ma-get-config-key "start")))
     (if configured configured (get-prop "start"))))
@@ -115,19 +146,24 @@
           (set-prop! key exit)
           exit))))
 
-(define (ensure-avatar user nick)
+; room: if non-#f and avatar must be created, avatar-init-room is used so the
+; new entity sends :ctx itself.  When returning an existing live avatar the
+; room arg is ignored; the caller is responsible for sending ctx.
+(define (ensure-avatar user nick room)
   (let ((existing (get-prop (avatar-key user))))
     (if (entity-live? existing)
         existing
      (let* ((_ (remove-avatar! existing))
-       (fragment (ma-create-actor AVATAR_KIND #f (avatar-init user nick)))
-       (avatar (entity-url fragment)))
-          (set-prop! (avatar-key user) avatar)
-          (set-prop! (avatar-user-key avatar) user)
-          (set-prop! (avatar-nick-key avatar) (nick-or-default nick))
-          (add-avatar! avatar)
-          (ma-save-state!)
-          avatar))))
+            (init-code (if room (avatar-init-room user nick room) (avatar-init user nick)))
+            (fragment (ma-create-actor AVATAR_KIND #f init-code user))
+            (avatar (entity-url fragment)))
+       (set-prop! (avatar-key user) avatar)
+       (set-prop! (avatar-user-key avatar) user)
+       (set-prop! (avatar-nick-key avatar) (nick-or-default nick))
+       (if room (set-prop! (avatar-room-key avatar) room) #f)
+       (add-avatar! avatar)
+       (ma-save-state!)
+       avatar))))
 
 (define (requested-room args)
   (if (or (null? args) (equal? (car args) "")) #f (car args)))
@@ -155,7 +191,9 @@
   (if nick
       (begin
         (set-prop! (avatar-nick-key avatar) nick)
-        (ma-send! avatar (list :set-nick nick))
+        (if (entity-live? avatar)
+            (ma-send! avatar (list :set-nick nick))
+            #f)
         (ma-save-state!))
       #f))
 
@@ -166,19 +204,31 @@
            (previous-room (if existing-avatar (get-prop (avatar-room-key existing-avatar)) #f))
            (room (entry-room (requested-room args) previous-room))
            (nick (effective-nick (requested-nick args) existing-avatar))
-           (avatar (ensure-avatar user nick)))
+           ; Check liveness BEFORE ensure-avatar so we know if it's a new creation.
+           (was-live (entity-live? existing-avatar))
+           (avatar (ensure-avatar user nick room)))
       (set-avatar-nick! avatar nick)
-            (ma-reply! msg (list :ok avatar))
-          (ma-send! avatar (list :print "You go in."))
-          (ma-send! room (list :enter-avatar avatar (self))))))
+      (ma-reply! msg (list :ok avatar))
+      (if was-live
+          ; Pre-existing: room will :arrived root which sends ctx
+          (ma-send! room (list :enter avatar (self)))
+          ; Newly created: avatar init sends ctx; join room directly
+          (begin
+            (set-prop! (avatar-room-key avatar) room)
+            (ma-save-state!)
+            (send-room-ctx room)
+            (ma-send! room (list :join-avatar avatar #f)))))))
 
 (set-method! :avatar?
   (lambda (args msg)
     (let* ((user (msg-from msg))
-       (avatar (ensure-avatar user #f)))
+       (avatar (ensure-avatar user #f #f)))
      (ma-reply! msg (list :ok avatar)))))
 
 (set-method! :arrived
+  ; Fire-and-forget only (sent via ma-send! from room/exit actors); no caller
+  ; ever awaits a reply here, so do not ma-reply! (a reply to a non-RPC local
+  ; send cannot be routed and only produces "unknown local recipient" noise).
   (lambda (args msg)
     (let ((avatar (car args))
           (room (car (cdr args))))
@@ -187,7 +237,7 @@
                 (old-room (get-prop (avatar-room-key avatar))))
             (set-prop! (avatar-room-key avatar) room)
             (ma-save-state!)
-            (ma-send! avatar (list :set-location room "You arrive."))
+            (send-ctx avatar room "You arrive.")
             (if (and old-room (not (equal? old-room room)))
                 (begin
                   (ma-send! old-room (list :leave-avatar avatar room))
@@ -195,25 +245,34 @@
                 #f)
             (send-room-ctx room)
             (ma-send! room (list :join-avatar avatar old-room))
-            (ma-reply! msg (list :ok "arrived")))
-          (ma-reply! msg (list :error "arrival sender must be target room"))))))
+            #f)
+          #f))))
 
 (set-method! :arrive-user
+  ; Fire-and-forget only (sent via ma-send! from room.ma's ctx-map avatar
+  ; branch); no caller ever awaits a reply here, so do not ma-reply! (a reply
+  ; to a non-RPC local send cannot be routed and only produces "unknown local
+  ; recipient" noise, and can stall the sending entity's queue while the
+  ; runtime retries resolving a bogus target).
   (lambda (args msg)
     (let* ((user (car args))
            (room (car (cdr args)))
            (nick (if (or (null? (cdr args)) (null? (cdr (cdr args)))) #f (car (cdr (cdr args)))))
-           (avatar (ensure-avatar user nick)))
-         (if (same-actor? (msg-from msg) room)
-          (begin
-            (set-prop! (avatar-room-key avatar) room)
-            (if nick (set-prop! (avatar-nick-key avatar) nick) #f)
-            (ma-save-state!)
-            (ma-send! avatar (list :set-location room "You arrive."))
-            (send-room-ctx room)
-            (ma-send! room (list :join-avatar avatar #f))
-            (ma-reply! msg (list :ok "arrived")))
-          (ma-reply! msg (list :error "arrival sender must be target room"))))))
+           ; Capture liveness BEFORE ensure-avatar: determines who sends ctx.
+           (was-live (entity-live? (get-prop (avatar-key user))))
+           (avatar (ensure-avatar user nick room)))
+      (if (same-actor? (msg-from msg) room)
+        (begin
+          (set-prop! (avatar-room-key avatar) room)
+          (if nick (set-prop! (avatar-nick-key avatar) nick) #f)
+          (ma-save-state!)
+          ; If avatar was already live, send ctx directly — it's ready.
+          ; If newly created, avatar-init-room sends ctx once the entity loads.
+          (if was-live (send-ctx avatar room "You arrive.") #f)
+          (send-room-ctx room)
+          (ma-send! room (list :join-avatar avatar #f))
+          #f)
+        #f))))
 
 (set-method! :nick
   (lambda (args msg)

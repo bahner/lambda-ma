@@ -14,6 +14,6 @@
           (begin
             (ma-send! avatar (list :print (string-append "You go " (direction) ".")))
             (if user
-                (ma-send! target (list :enter-user user avatar (ma-get-config-key "self") nick))
-                (ma-send! target (list :enter-avatar avatar (ma-get-config-key "self")))))
+                (ma-send! target (list :enter user avatar (ma-get-config-key "self") nick))
+                (ma-send! target (list :enter avatar (ma-get-config-key "self")))))
           (ma-send! avatar (list :print "This exit leads nowhere."))))))

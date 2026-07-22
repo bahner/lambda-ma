@@ -10,7 +10,8 @@ runtime:
     open:
       "*": ["*"]
     scheduler:
-      "#": [handle_cast]
+      "*": [":help"]
+      "#": [":cron", ":interval", ":at", ":random"]
 
   acl:
     "*":
@@ -59,6 +60,16 @@ runtime:
       behaviour:
         "/": __EXIT_BEHAVIOUR_CID__
 
+    /ma/scheme/agent/0.0.1:
+      extends: /ma/scheme/actor/0.0.1
+      behaviour:
+        "/": __AGENT_BEHAVIOUR_CID__
+
+    /ma/thing/0.0.1:
+      extends: /ma/scheme/actor/0.0.1
+      behaviour:
+        "/": __THING_BEHAVIOUR_CID__
+
     /ma/scheduler/0.0.1:
       type: native
       attributes:
@@ -82,3 +93,15 @@ runtime:
       attributes:
         genesis: true
       acl: open
+
+    rms:
+      kind: /ma/scheme/agent/0.0.1
+      behaviour:
+        "/": __RMS_BEHAVIOUR_CID__
+      acl: open
+      init: |
+        (begin
+          (rms-defaults!)
+          (set-parent! (string-append (ma-get-config-key "runtime") "#construct"))
+          (ma-send! (parent) (list :enter (agent-ctx)))
+          (rms-schedule-fortune!))

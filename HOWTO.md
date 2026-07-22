@@ -8,6 +8,10 @@ you can enter from zion, edit, fork, and reset.
 avatars, and a root actor. You are expected to change it. The shipped world is
 not sacred; it is a starting point for your own runtime.
 
+For normative world protocol behavior (routing split, room/enter contract,
+actor verbs, ownership and parent-authority rules), use
+[REFERENCE.md](REFERENCE.md).
+
 ## What you need
 
 You need three things:
@@ -217,6 +221,20 @@ Move back:
 go south
 ```
 
+Quick regression check for room presence rendering:
+
+```text
+look
+```
+
+Expected shape in output:
+
+- A `Here:` line that includes live avatar presence from the room occupant cache.
+- A separate `Things:` line for room-local non-avatar aliases.
+
+If `look` only shows `Things: none.` while avatars are clearly in the room, the
+room behavior is stale. Rebuild and re-bootstrap (see troubleshooting below).
+
 Useful room-building commands:
 
 ```text
@@ -254,6 +272,32 @@ The important rule is simple:
   shorthand and targets the focused room directly.
 - Commands with a leading colon, such as `:prop name ...` and `:help`, are sent
   directly to the focused room.
+
+## Good practice for movable agent init
+
+When you create your own `/ma/scheme/agent/0.0.1` entity, keep init explicit in
+the creation-time init code you send when creating the entity (`init:` in
+bootstrap YAML, or inline `with (...)` code for creation flows). Do not rely on
+hidden helper init functions.
+
+Recommended pattern:
+
+```scheme
+(begin
+  (set-prop! "name" "My Agent")
+  (set-prop! "nick" "myagent")
+  (set-prop! "description" "A custom movable agent.")
+  (set-parent! (string-append (ma-get-config-key "runtime") "#construct"))
+  (ma-send! (parent) (list :enter (agent-ctx)))
+  (ma-save-state!))
+```
+
+Why this works well:
+
+- `set-parent!` makes location authority explicit.
+- `:enter` with `agent-ctx` informs the room how to present the occupant.
+- Full init logic stays in the code users provide at creation time, so users can
+  adjust it safely when creating entities.
 
 ## Add custom code to one room
 

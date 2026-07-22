@@ -84,6 +84,9 @@ mod tests {
             ("room.ma", include_str!("../../actors/room.ma")),
             ("root.ma", include_str!("../../actors/root.ma")),
             ("exit.ma", include_str!("../../actors/exit.ma")),
+            ("agent.ma", include_str!("../../actors/agent.ma")),
+            ("rms.ma", include_str!("../../actors/rms.ma")),
+            ("thing.ma", include_str!("../../actors/thing.ma")),
         ] {
             Parser::parse_all(source).unwrap_or_else(|err| panic!("{name}: {err}"));
         }
