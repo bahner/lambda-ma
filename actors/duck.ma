@@ -10,6 +10,26 @@
         (set-prop! "description" "A curious rubber duck that waddles around and quacks because one is never alone with a rubber duck"))
     (ma-save-state!)))
 
+(define (runtime-started-at)
+  (let ((value (ma-get-config-key "started_at")))
+    (if value value "")))
+
+(define (scheduled-this-runtime? key)
+  (equal? (get-prop key) (runtime-started-at)))
+
+(define (mark-scheduled! key)
+  (begin
+    (set-prop! key (runtime-started-at))
+    (ma-save-state!)))
+
+(define (duck-schedule-quack!)
+  (let ((key "schedule:quack:started-at"))
+    (if (scheduled-this-runtime? key)
+        #f
+        (begin
+          (mark-scheduled! key)
+          (ma-send! (entity-url "scheduler") (list "quack" :random 600 :quack))))))
+
 (define (duck-say msg text)
   (let ((p (parent)))
     (if (equal? p "")

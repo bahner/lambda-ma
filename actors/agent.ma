@@ -3,6 +3,7 @@
 
 (define (self) (ma-get-config-key "self"))
 (define (runtime) (ma-get-config-key "runtime"))
+(define LAMBDA_CTX_PROTOCOL "/ma/lambda/ctx/0.0.1")
 (define (entity-url fragment) (string-append (runtime) "#" fragment))
 (define (canonical-actor actor)
   (if (and actor (string-prefix? "#" actor)) (string-append (runtime) actor) actor))
@@ -37,7 +38,27 @@
 
 (define (set-parent! did)
   (set-prop! "parent" did)
+  (del-prop! "pending-room")
   (ma-save-state!))
+
+(define (pending-room)
+  (let ((p (get-prop "pending-room")))
+    (if p p "")))
+
+(define (set-pending-room! room)
+  (set-prop! "pending-room" room)
+  (ma-save-state!))
+
+(define (enter room)
+  (begin
+    (set-pending-room! room)
+    (ma-send! room (list :enter (agent-ctx)))))
+
+(define (leave-current-parent!)
+  (let ((p (parent)))
+    (if (equal? p "")
+        #f
+        (ma-send! p (list :leave-occupant)))))
 
 (define (claim-key actor)
   (string-append "claim:" (canonical-actor actor)))
@@ -91,6 +112,24 @@
 (define (ctx-text ctx key)
   (let ((v (map-ref ctx key #f)))
     (if (string? v) v #f)))
+
+(define (ctx-alist-ref ctx key)
+  (cond ((null? ctx) #f)
+        ((and (pair? (car ctx))
+              (equal? (car (car ctx)) key)
+              (pair? (cdr (car ctx))))
+         (car (cdr (car ctx))))
+        (else (ctx-alist-ref (cdr ctx) key))))
+
+(define (valid-room-ctx? ctx)
+  (and (pair? ctx)
+       (equal? (ctx-alist-ref ctx :protocol) LAMBDA_CTX_PROTOCOL)
+       (equal? (ctx-alist-ref ctx :kind) "agent")
+       (non-empty-string? (ctx-alist-ref ctx :room))))
+
+(define (authorized-room-ctx? room)
+  (or (same-actor? room (pending-room))
+      (same-actor? room (parent))))
 
 (define (valid-user-did? did)
   (and (string? did)
@@ -147,6 +186,18 @@
   (lambda (args msg)
     (reply-ok msg (if (owner) (owner) "(none)"))))
 
+(set-method! :ctx
+  (lambda (args msg)
+    (if (null? args)
+        #f
+        (let* ((ctx (car args))
+               (room (ctx-alist-ref ctx :room)))
+          (if (and (valid-room-ctx? ctx)
+                   (same-actor? (msg-from msg) room)
+                   (authorized-room-ctx? room))
+              (set-parent! room)
+              #f)))))
+
 (set-method! :set-recovery-secret
   (lambda (args msg)
     (if (owner-caller? msg)
@@ -188,9 +239,10 @@
             ((and (not (null? (cdr rest))) (not (valid-transfer-ctx? (car (cdr rest)))))
              (reply-error msg "ctx-map must include non-empty kind, name, nick, description"))
             (else
-             (begin
+             (let ((target-parent (car rest)))
                (if (not (owner)) (set-owner! user) #f)
-               (set-parent! (car rest))
+               (leave-current-parent!)
+               (set-parent! target-parent)
                (if (and (not (null? (cdr rest))) (valid-transfer-ctx? (car (cdr rest))))
                    (set-claim! user (car (cdr rest)))
                    #f)
@@ -215,9 +267,9 @@
             ((and (not (null? (cdr rest))) (not (valid-transfer-ctx? (car (cdr rest)))))
              (reply-error msg "ctx-map must include non-empty kind, name, nick, description"))
             (else
-             (begin
+             (let ((target-parent (car rest)))
                (if (not (owner)) (set-owner! user) #f)
-               (set-parent! (car rest))
+               (enter target-parent)
                (if (and (not (null? (cdr rest))) (valid-transfer-ctx? (car (cdr rest))))
                    (set-claim! user (car (cdr rest)))
                    #f)

@@ -49,21 +49,35 @@ When documenting or changing behavior, keep these contracts aligned:
 - Enter flow: room-first when a room target is known.
 - Enter verbs: use one room verb `:enter` only (do not reintroduce
   `:enter-avatar`/`:enter-user`).
-- Enter payload naming: one extensible map named `ctx` (not `attrs`) with
-  required fields `kind`, `name`, `nick`, `description`.
+- Enter payload naming: one extensible map named `ctx` (not `attrs`). Direct
+  non-avatar entry requires fields `kind`, `name`, `nick`, `description`.
+- Committed ctx actor references must be fully qualified DID-URLs. Do not put
+  runtime-local `#fragment` shorthand in ctx fields such as `root`, `avatar`,
+  `room`, or future actor/path references.
+- Runtime-local `#fragment` addressing is only an internal runtime traffic
+  optimization for local delivery/ACL qualification. It is not an actor/world
+  identity contract; actors may accept it as shorthand at a runtime boundary,
+  but must qualify it before storing, committing ctx, or exposing references to
+  clients/other actors.
+- Cross-runtime movement must not admit the source-runtime avatar into the
+  target room. The target room creates or reuses the target-runtime deterministic
+  avatar for the user, and uses the source avatar only for old-room cleanup.
 - Enter kind routing: room `:enter` dispatch is kind-driven for ctx payloads.
-  Missing kind or `ctx.kind = "avatar"` follows client/avatar entry; `ctx.kind`
-  of `"thing"` or `"agent"` is categorized by room-local policy.
+  Missing kind is room-local default avatar entry: the room creates or finds
+  the deterministic avatar, asks an existing avatar to `:enter-room`, and must
+  not reply `:ok` itself; `ctx.kind = "avatar"` follows the same room-local
+  avatar entry flow; `ctx.kind` of `"thing"` or `"agent"` is categorized by
+  room-local policy.
 - Root actor boundary: root may create/find an avatar and ask that avatar to
   send its current ctx to the user, but root must not send messages to rooms.
 - Avatar placement boundary: do not reintroduce generic avatar setter verbs such
-  as `:set-location` or `:set-nick`. Room entry may notify an avatar with the
-  narrow room-origin `:entered-room` event; nick changes are initiated by the
-  avatar and accepted by the room.
+  as `:set-location` or `:set-nick`. Root or the target room may ask an existing
+  avatar to enter that room with narrow `:enter-room`; the avatar persists room
+  state only after the room sends committed ctx back.
 - Authority model: room ownership is by user DID; avatars are delegates;
   parent authority governs `take`/`drop` flows.
 - Transfer strictness (default): thing/agent transfer calls must keep strict
   input validation until explicitly relaxed:
-  user must be `did:ma:...`, parent must be `did:ma:...` or `#fragment`, and
-  optional transfer `ctx` must contain non-empty `kind`, `name`, `nick`,
-  `description`.
+  user must be `did:ma:...`; non-ctx parent arguments may be `did:ma:...` or
+  `#fragment`. Optional transfer `ctx` must contain non-empty `kind`, `name`,
+  `nick`, `description`. Any actor references inside ctx must be full DID-URLs.

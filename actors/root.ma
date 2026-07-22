@@ -32,16 +32,28 @@
         (error "entry start room is not configured"))))
 
 (define (requested-room args)
-  (if (or (null? args) (equal? (car args) "")) #f (car args)))
+  (cond ((null? args) #f)
+        ((delegated-enter? args)
+         (if (or (null? (cdr args)) (equal? (car (cdr args)) "")) #f (car (cdr args))))
+        ((equal? (car args) "") #f)
+        (else (car args))))
 
 (define (entry-room requested)
   (if (entity-live? requested) requested (ensure-start-room)))
 
 (define (requested-nick args)
   (cond ((null? args) #f)
+        ((delegated-enter? args)
+         (if (or (null? (cdr args)) (null? (cdr (cdr args)))) #f (car (cdr (cdr args)))))
         ((equal? (car args) "") (if (null? (cdr args)) #f (car (cdr args))))
         ((null? (cdr args)) #f)
         (else (car (cdr args)))))
+
+(define (delegated-enter? args)
+  (and (not (null? args)) (string-prefix? "did:ma:" (car args))))
+
+(define (entry-user args msg)
+  (if (delegated-enter? args) (car args) (msg-from msg)))
 
 (define (avatar-fragment user)
   (ma-derived-id ENTITY_FRAGMENT_CONTEXT user 8))
@@ -56,27 +68,19 @@
       "(set-prop! \"user\" \"" user "\")\n"
       "(set-prop! \"root\" \"" r "\")\n"
       "(set-prop! \"nick\" \"" n "\")\n"
-      "(set-prop! \"room\" \"" room "\")\n"
-      "(ma-send! \"" user "\" (list :ctx (list"
-      " (list :protocol \"" LAMBDA_CTX_PROTOCOL "\")"
-      " (list :kind \"avatar\")"
-      " (list :root \"" r "\")"
-      " (list :avatar (ma-get-config-key \"self\"))"
-      " (list :nick \"" n "\")"
-      " (list :room \"" room "\")"
-      " (list :text \"You arrive.\"))))\n")))
+      "(ma-send! \"" room "\" (list :enter (ma-get-config-key \"self\") #f \"" n "\"))\n")))
 
 (define (ensure-avatar user nick room)
   (let ((avatar (avatar-for-user user)))
     (if (entity-live? avatar)
         (begin
-          (ma-send! avatar (list :sync-ctx))
+          (ma-send! avatar (list :enter-room room))
           avatar)
         (entity-url (ma-create-actor AVATAR_KIND #f (avatar-init user nick room) user)))))
 
 (set-method! :enter
   (lambda (args msg)
-    (let* ((user (msg-from msg))
+    (let* ((user (entry-user args msg))
            (room (entry-room (requested-room args)))
            (nick (nick-or-default (requested-nick args)))
            (avatar (ensure-avatar user nick room)))

@@ -74,8 +74,25 @@
     (if (number? (get-prop "fortune-seed")) #f (set-prop! "fortune-seed" 7))
     (ma-save-state!)))
 
+(define (runtime-started-at)
+  (let ((value (ma-get-config-key "started_at")))
+    (if value value "")))
+
+(define (scheduled-this-runtime? key)
+  (equal? (get-prop key) (runtime-started-at)))
+
+(define (mark-scheduled! key)
+  (begin
+    (set-prop! key (runtime-started-at))
+    (ma-save-state!)))
+
 (define (rms-schedule-fortune!)
-  (ma-send! (entity-url "scheduler") (list "fortune" :random 60 :fortune)))
+  (let ((key "schedule:fortune:started-at"))
+    (if (scheduled-this-runtime? key)
+        #f
+        (begin
+          (mark-scheduled! key)
+          (ma-send! (entity-url "scheduler") (list "fortune" :random 60 :fortune))))))
 
 (define (list-length xs)
   (if (null? xs) 0 (+ 1 (list-length (cdr xs)))))

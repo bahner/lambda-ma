@@ -7,7 +7,9 @@ user's avatar DID-URL from the user DID via the runtime-scoped entity-fragment
 derivation, creates the avatar only if absent, and otherwise only returns the
 avatar DID-URL.
 
-Rooms keep a local `occupants` cache for broadcast and room-local presentation. That cache is derived state, not authority.
+Rooms keep a local `occupants` cache for broadcast and room-local presentation.
+That cache is derived state, not authority. `parent` alone is not room
+presence; a movable actor is present only after it sends the room `:enter`.
 
 Actors do not have to be root-tracked occupants to speak. Any actor that knows
 the room DID-URL can send `:say` or `:emote`; the room broadcasts the text to
@@ -26,10 +28,11 @@ Actors use three starting categories:
 
 Rooms accept the category in `:enter ctx`, but clients may omit `kind` when they
 do not know their effective world kind yet. Missing `kind` means session/avatar
-entry: the room ensures the deterministic avatar and the client waits for the
-avatar to send committed `/ma/lambda/ctx/0.0.1` context back. Direct `agent` and
-`thing` entry must provide `kind`; without it, the room assigns the default
-session kind and reports that in ctx.
+entry: the room creates or finds the deterministic avatar and sends no `:ok`
+itself. The avatar enters the room, receives committed `/ma/lambda/ctx/0.0.1`
+context from the room, persists that state, and forwards the ctx to the user.
+Direct `agent` and `thing` entry must provide `kind`; without it, the world
+assigns the default session kind and reports that in ctx.
 
 ## Free objects and agents
 
@@ -63,6 +66,12 @@ Transfer requests may include an optional `ctx` map as a trailing argument
 (`:take <user> <carrier-parent> [ctx]`, `:drop <user> <target-parent> [ctx]`).
 When provided, that `ctx` is forwarded with the transfer and can be persisted
 as claim context by the movable actor.
+
+Agents remain responsible for their own room presence during transfer. After a
+successful `:take`, an agent notifies its old room that it left; after a
+successful `:drop`, it sends that room `:enter` with its current agent ctx. The
+agent commits its new `parent` only after receiving a valid room-origin `:ctx`
+for that entry.
 
 Protected operations check caller DID against `owner`:
 
@@ -100,8 +109,8 @@ Protected room commands accept both shapes:
 (:dig <user-did> <direction> [to <new-room-name-or-room-target>])
 ```
 
-The second shape is accepted only from known room occupants, which are avatar
-actors maintained by root context.
+The second shape is accepted only from known room occupants, normally avatar
+actors that entered the room and carry the user's authority.
 
 `:claim` only succeeds when the room has no owner. `:owner` with no target
 prints the owner; with a target DID it transfers ownership and requires the
@@ -162,15 +171,17 @@ context it reports to Zion: current root, avatar, room, nick, and optional text.
 Zion may cache the room for direct `:` commands, but plain commands are
 addressed to the avatar.
 
-New avatar init is push-based: the live avatar sends user `:ctx`. Existing
-avatars receive a room-origin `:entered-room` event and then send user `:ctx`
-themselves. Root may ask an existing avatar to resend its current ctx, but root
-must not send messages to rooms.
+New avatar init is push-based: the live avatar sends room `:enter`. For an
+existing avatar, the target room sends `:enter-room` to the avatar; the avatar
+then sends room `:enter`. The room registers the entry, sends committed `:ctx`
+to the avatar, and the avatar persists that room state before forwarding `:ctx`
+to the user. Root remains the compatibility path when no room target is known;
+root must not send messages to rooms.
 
 Leave event:
 
 ```scheme
-(:leave-avatar <avatar> <to-room>)
+(:leave-avatar <avatar-did-url> <to-room-did-url>)
 ```
 
 Rooms accept ordinary avatar `:enter` and target-room-origin `:leave-avatar` for
@@ -182,18 +193,21 @@ External entry is room-first:
 
 1. User asks the target room to enter with `:enter ctx`.
 2. Room derives the caller's deterministic avatar URL.
-3. Existing avatar: room asks avatar to set location here; avatar sends user
-   `:ctx` and room `:enter`.
+3. Existing avatar: room asks avatar to enter here; avatar sends room `:enter`.
 4. New avatar: room creates it with user DID as fragment hint; avatar init sends
-   user `:ctx` and room `:enter` after the avatar is live.
+   room `:enter` after the avatar is live.
+5. Room registers entry and sends committed `:ctx` to avatar; avatar persists
+   room state and forwards the ctx to user.
 
 Room-to-room movement uses the same tail of that flow inside one runtime. When
 the exit crosses to another runtime, the source avatar carries the user DID and
-nick through the exit; the target runtime root creates or reuses that user's
-local avatar before publishing the new context.
+nick through the exit; the target room creates or reuses that user's target-
+runtime local avatar before publishing the new context.
 
 1. Avatar sends `:go <direction>` to its current room.
-2. Room sends `:traverse <avatar> <source-room> <user> <nick>` to the exit.
-3. Exit sends `:enter <user> <avatar> <exit> <nick>` to the target room.
-4. Target room updates its room-local cache and asks the old room to remove the
-   avatar with `:leave-avatar` when needed.
+2. Room sends `:traverse <avatar-did-url> <source-room-did-url> <user> <nick>` to the exit.
+3. Exit sends `:enter <user> <avatar-did-url> <source-room-did-url> <nick>` to the target room.
+4. Same-runtime target rooms admit that avatar directly. Cross-runtime target
+   rooms create or reuse the deterministic target-runtime avatar for `user`.
+5. Target room asks the old room to remove the source avatar with
+   `:leave-avatar` when needed.

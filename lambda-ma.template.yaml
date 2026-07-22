@@ -95,6 +95,17 @@ runtime:
         genesis: true
       acl: open
 
+    duckie:
+      kind: /ma/scheme/agent/0.0.1
+      behaviour:
+        "/": __DUCK_BEHAVIOUR_CID__
+      acl: open
+      init: |
+        (begin
+          (duck-defaults!)
+          (enter (string-append (ma-get-config-key "runtime") "#construct"))
+          (duck-schedule-quack!))
+
     rms:
       kind: /ma/scheme/agent/0.0.1
       behaviour:
@@ -103,6 +114,5 @@ runtime:
       init: |
         (begin
           (rms-defaults!)
-          (set-parent! (string-append (ma-get-config-key "runtime") "#construct"))
-          (ma-send! (parent) (list :enter (agent-ctx)))
+          (enter (string-append (ma-get-config-key "runtime") "#construct"))
           (rms-schedule-fortune!))

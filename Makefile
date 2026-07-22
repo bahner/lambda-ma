@@ -9,7 +9,7 @@ SCHEME_STDLIB := $(SCHEME_ACTOR_DIR)/stdlib.ma
 SCHEME_ACTOR_CID_FILE := $(CID_DIR)/scheme-actor.cid
 SCHEME_STDLIB_CID_FILE := $(CID_DIR)/scheme-stdlib.cid
 
-ACTORS := root avatar room exit agent rms thing
+ACTORS := root avatar room exit agent rms duck thing
 CID_FILES := $(ACTORS:%=$(CID_DIR)/%.cid)
 
 .PHONY: all publish root-cid bootstrap check clean show-cids FORCE
@@ -43,6 +43,7 @@ $(OUT): lambda-ma.template.yaml Makefile $(SCHEME_ACTOR_CID_FILE) $(SCHEME_STDLI
 	exit_cid=$$(cat "$(CID_DIR)/exit.cid"); \
 	agent_cid=$$(cat "$(CID_DIR)/agent.cid"); \
 	rms_cid=$$(cat "$(CID_DIR)/rms.cid"); \
+	duck_cid=$$(cat "$(CID_DIR)/duck.cid"); \
 	thing_cid=$$(cat "$(CID_DIR)/thing.cid"); \
 	sed \
 	  -e '1s|.*|# Generated λ-間 bootstrap.|' \
@@ -56,6 +57,7 @@ $(OUT): lambda-ma.template.yaml Makefile $(SCHEME_ACTOR_CID_FILE) $(SCHEME_STDLI
 	  -e "s|__EXIT_BEHAVIOUR_CID__|$$exit_cid|g" \
 	  -e "s|__AGENT_BEHAVIOUR_CID__|$$agent_cid|g" \
 	  -e "s|__RMS_BEHAVIOUR_CID__|$$rms_cid|g" \
+	  -e "s|__DUCK_BEHAVIOUR_CID__|$$duck_cid|g" \
 	  -e "s|__THING_BEHAVIOUR_CID__|$$thing_cid|g" \
 	  "$<" > "$@"
 

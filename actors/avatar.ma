@@ -11,6 +11,13 @@
     (if configured configured (entity-url "root"))))
 (define (canonical-actor actor)
   (if (and actor (string-prefix? "#" actor)) (string-append (runtime) actor) actor))
+(define (local-fragment? actor)
+  (and actor (string-prefix? "#" actor)))
+(define (qualified-actor actor)
+  (if actor (canonical-actor actor) ""))
+(define (qualified-ctx-actor? actor)
+  (and (non-empty-string? actor)
+       (not (local-fragment? actor))))
 (define (same-actor? a b)
   (equal? (canonical-actor a) (canonical-actor b)))
 (define (room) (get-prop "room"))
@@ -22,20 +29,20 @@
   (list :ctx
     (list (list :protocol LAMBDA_CTX_PROTOCOL)
           (list :kind "avatar")
-          (list :root (root))
-          (list :avatar (self))
+          (list :root (qualified-actor (root)))
+          (list :avatar (qualified-actor (self)))
           (list :nick (nick))
-          (list :room (room))
+          (list :room (qualified-actor (room)))
           (list :text text))))
 
 (define (ctx-term-room r text)
   (list :ctx
     (list (list :protocol LAMBDA_CTX_PROTOCOL)
           (list :kind "avatar")
-          (list :root (root))
-          (list :avatar (self))
+          (list :root (qualified-actor (root)))
+          (list :avatar (qualified-actor (self)))
           (list :nick (nick))
-          (list :room r)
+          (list :room (qualified-actor r))
           (list :text text))))
 
 (define (start-room) (ma-get-config-key "start"))
@@ -48,8 +55,33 @@
 (define (room? msg)
   (let ((current (room)))
     (and current (same-actor? (msg-from msg) current))))
-(define (entered-room-caller? new-room msg)
-  (and new-room (same-actor? (msg-from msg) new-room)))
+
+(define (ctx-value pairs key)
+  (cond ((null? pairs) #f)
+        ((and (pair? (car pairs))
+              (equal? (car (car pairs)) key)
+              (not (null? (cdr (car pairs)))))
+         (car (cdr (car pairs))))
+        (else (ctx-value (cdr pairs) key))))
+
+(define (avatar-ctx-valid? payload msg)
+  (let ((protocol (ctx-value payload :protocol))
+        (kind (ctx-value payload :kind))
+        (root (ctx-value payload :root))
+        (avatar (ctx-value payload :avatar))
+        (target-room (ctx-value payload :room)))
+    (and (equal? protocol LAMBDA_CTX_PROTOCOL)
+         (equal? kind "avatar")
+         (qualified-ctx-actor? root)
+         (qualified-ctx-actor? avatar)
+         (qualified-ctx-actor? target-room)
+         (same-actor? avatar (self))
+         (same-actor? (msg-from msg) target-room))))
+
+(define (enter-room-authorized? args msg)
+  (or (root? msg)
+      (and (not (null? args))
+           (same-actor? (msg-from msg) (car args)))))
 
 (define (join-words words)
   (cond ((null? words) "")
@@ -104,26 +136,32 @@
 (define (unknown-help-text topic)
   (string-append "No help topic: " topic "\nTry help or help here."))
 
-(set-method! :entered-room
-  (lambda (args msg)
-    (let ((new-room (car args))
-          (text (if (or (null? (cdr args)) (equal? (car (cdr args)) "")) #f (car (cdr args))))
-          (old-room (room)))
-            (if (entered-room-caller? new-room msg)
-          (begin
-            (set-prop! "room" new-room)
-            (ma-save-state!)
-            (send-ctx text)
-            (if (same-actor? new-room old-room)
-                #f
-                (if old-room (ma-send! old-room (list :leave-avatar (self) new-room)) #f)))
-          #f))))
-
 (set-method! :sync-ctx
   (lambda (args msg)
     (if (root? msg)
         (send-ctx #f)
         #f)))
+
+(set-method! :enter-room
+  (lambda (args msg)
+    (if (and (enter-room-authorized? args msg) (not (null? args)))
+        (let ((target-room (car args))
+              (old-room (room)))
+          (ma-send! target-room (list :enter (self) old-room (nick))))
+        #f)))
+
+(set-method! :ctx
+  (lambda (args msg)
+    (if (null? args)
+        #f
+        (let ((payload (car args)))
+          (if (avatar-ctx-valid? payload msg)
+              (begin
+                (set-prop! "room" (ctx-value payload :room))
+                (set-prop! "nick" (ctx-value payload :nick))
+                (ma-save-state!)
+                (ma-send! (user) (cons :ctx args)))
+              #f)))))
 
 (set-method! :ctx?
   (lambda (args msg)

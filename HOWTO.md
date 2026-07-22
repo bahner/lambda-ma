@@ -230,7 +230,7 @@ look
 Expected shape in output:
 
 - An `Occupants:` line that includes live room occupants, including avatar
-  presence and local agents such as `rms`.
+  presence and agents such as `rms` after those agents have entered the room.
 - A separate `Things:` line for room-local non-avatar aliases.
 
 Use `who?` when you specifically mean people/avatar presence. Use `occupants?`
@@ -292,14 +292,14 @@ Recommended pattern:
   (set-prop! "name" "My Agent")
   (set-prop! "nick" "myagent")
   (set-prop! "description" "A custom movable agent.")
-  (set-parent! (string-append (ma-get-config-key "runtime") "#construct"))
-  (ma-send! (parent) (list :enter (agent-ctx)))
+  (enter (string-append (ma-get-config-key "runtime") "#construct"))
   (ma-save-state!))
 ```
 
 Why this works well:
 
-- `set-parent!` makes location authority explicit.
+- `enter` records the target as pending, sends room `:enter`, and commits the
+  new `parent` only after a valid room `:ctx` ack.
 - `:enter` with `agent-ctx` informs the room how to present the occupant.
 - Full init logic stays in the code users provide at creation time, so users can
   adjust it safely when creating entities.

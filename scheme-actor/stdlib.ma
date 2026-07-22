@@ -28,6 +28,50 @@
 (define (verb-of term) (if (pair? term) (car term) term))
 (define (args-of term) (if (pair? term) (cdr term) '()))
 
+; ── Small general helpers ───────────────────────────────────────────────────
+
+(define (join-words words)
+  (cond ((null? words) "")
+        ((null? (cdr words)) (car words))
+        (else (string-append (car words) " " (join-words (cdr words))))))
+
+(define (non-empty-string? value)
+  (and (string? value) (not (equal? value ""))))
+
+(define (ctx-text ctx key)
+  (let ((value (map-ref ctx key #f)))
+    (if (string? value) value #f)))
+
+(define (canonical-entry entry) entry)
+
+(define (same-entry? a b)
+  (equal? (canonical-entry a) (canonical-entry b)))
+
+(define (member-entry? entry xs)
+  (cond ((null? xs) #f)
+        ((same-entry? entry (car xs)) #t)
+        (else (member-entry? entry (cdr xs)))))
+
+(define (unique-entries xs)
+  (let loop ((rest xs) (acc '()))
+    (cond ((null? rest) acc)
+          ((member-entry? (car rest) acc) (loop (cdr rest) acc))
+          (else (loop (cdr rest) (cons (canonical-entry (car rest)) acc))))))
+
+(define (prop-map key)
+  (let ((value (get-prop key)))
+    (if (map? value) value (make-map))))
+
+(define (set-prop-map! key value)
+  (set-prop! key value)
+  (ma-save-state!))
+
+(define (reply-ok msg text)
+  (ma-reply! msg (list :ok text)))
+
+(define (reply-error msg text)
+  (ma-reply! msg (list :error text)))
+
 ; ── Default signal handler: persist state on :shutdown, nothing more ───────
 
 (define (on-signal term)

@@ -71,10 +71,33 @@ pub fn on_message(input: Vec<u8>) -> FnResult<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ciborium::Value as Cbor;
 
     fn run(src: &str) -> Value {
         let env = new_root_env();
         eval_all(src, &env).unwrap()
+    }
+
+    fn empty_state_cbor() -> Vec<u8> {
+        let mut bytes = Vec::new();
+        ciborium::ser::into_writer(&Cbor::Map(Vec::new()), &mut bytes).unwrap();
+        bytes
+    }
+
+    fn room_env() -> Rc<Env> {
+        crate::state::load_from_cbor(&empty_state_cbor()).unwrap();
+        let env = new_root_env();
+        crate::state::install(&env);
+        eval_all(include_str!("../stdlib.ma"), &env).unwrap();
+        eval_all(include_str!("../../actors/room.ma"), &env).unwrap();
+        env
+    }
+
+    fn eval_str(src: &str, env: &Rc<Env>) -> String {
+        match eval_all(src, env).unwrap() {
+            Value::Str(s) => s.to_string(),
+            other => panic!("expected string, got {other}"),
+        }
     }
 
     #[test]
@@ -86,10 +109,58 @@ mod tests {
             ("exit.ma", include_str!("../../actors/exit.ma")),
             ("agent.ma", include_str!("../../actors/agent.ma")),
             ("rms.ma", include_str!("../../actors/rms.ma")),
+            ("duck.ma", include_str!("../../actors/duck.ma")),
             ("thing.ma", include_str!("../../actors/thing.ma")),
         ] {
             Parser::parse_all(source).unwrap_or_else(|err| panic!("{name}: {err}"));
         }
+    }
+
+    #[test]
+    fn room_presence_uses_labels_and_keeps_who_avatar_only() {
+        let env = room_env();
+        assert_eq!(eval_str("(occupants-text)", &env), "Occupants: none.");
+        assert_eq!(eval_str("(who-text)", &env), "Who: none.");
+
+        eval_all(
+            r#"
+                        (define avatar "did:ma:runtime#avatar1")
+                        (set-label! avatar "Alice")
+                        (add-occupant! avatar)
+                        (add-avatar-occupant! avatar)
+                        (define rms "did:ma:runtime#rms")
+                        (set-label! rms "rms")
+                        (set-prop! (claim-key rms)
+                            (map-set
+                                (map-set
+                                    (map-set
+                                        (map-set (make-map) "kind" "agent")
+                                        "name" "Richard Stallman")
+                                    "nick" "rms")
+                                "description" "A roaming free software sage."))
+                        (add-occupant! rms)
+                        "#,
+            &env,
+        )
+        .unwrap();
+
+        assert_eq!(eval_str("(who-text)", &env), "Who: Alice");
+        assert_eq!(eval_str("(occupants-text)", &env), "Occupants: rms, Alice");
+        assert_eq!(
+            eval_str("(movable-ref \"rms\")", &env),
+            "did:ma:runtime#rms"
+        );
+    }
+
+    #[test]
+    fn room_reconcile_does_not_add_unlabelled_callers() {
+        let env = room_env();
+        eval_all(
+            "(reconcile-caller-occupant! \"did:ma:runtime#raw-avatar\")",
+            &env,
+        )
+        .unwrap();
+        assert_eq!(eval_str("(occupants-text)", &env), "Occupants: none.");
     }
 
     #[test]
