@@ -136,7 +136,7 @@
        (equal? (ctx-alist-ref ctx :kind) "agent")
        (non-empty-string? (ctx-alist-ref ctx :room))))
 
-(define (authorized-room-ctx? room)
+(define (authorised-room-ctx? room)
   (or (same-actor? room (pending-room))
       (same-actor? room (parent))))
 
@@ -247,7 +247,7 @@
                (room (ctx-alist-ref ctx :room)))
           (if (and (valid-room-ctx? ctx)
                    (same-actor? (msg-from msg) room)
-                   (authorized-room-ctx? room))
+                   (authorised-room-ctx? room))
               (set-parent! room)
               #f)))))
 

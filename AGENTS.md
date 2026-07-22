@@ -9,6 +9,12 @@ bootstrap YAML for `ma-runtime`.
 - Never modify files outside the current workspace without explicit user approval.
 - Commit source files and templates, not generated `dist/`, `scheme-actor/target/`,
   or `scheme-actor/actor.wasm`.
+- Use British English for project-owned naming and prose in code, actor verbs,
+  docs, templates, and protocol fields. Prefer `behaviour`, `authorise`,
+  `authorised`, `authorisation`, `initialise`, `initialised`, `serialise`,
+  `colour`, and `licence`. Keep externally mandated API names unchanged, such
+  as Rust/serde `Serialize`/`Deserialize`, CSS `color`, canvas `center`, and
+  upstream crate or protocol names.
 
 ## Focus routing contract with zion
 
@@ -38,11 +44,11 @@ itself. Keep world semantics documented here, not in `ma-spec`, unless we later
 decide to standardize them across multiple worlds.
 
 - `REFERENCE.md` is the canonical protocol reference for lambda-ma world
-  behavior.
+  behaviour.
 - `README.md` and `HOWTO.md` are onboarding/operations docs and should link to
-  `REFERENCE.md` for normative behavior.
+  `REFERENCE.md` for normative behaviour.
 
-When documenting or changing behavior, keep these contracts aligned:
+When documenting or changing behaviour, keep these contracts aligned:
 
 - Focus routing boundary: plain commands are avatar-mediated; `:`-prefixed
   commands are direct room/target methods.

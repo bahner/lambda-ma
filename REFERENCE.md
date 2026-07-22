@@ -3,13 +3,13 @@
 **Version:** 0.1.0
 **Status:** Draft
 
-Canonical reference for lambda-ma world protocol behavior.
+Canonical reference for lambda-ma world protocol behaviour.
 
 ---
 
 ## Scope boundary
 
-This document defines lambda-ma world/profile behavior on top of ma-runtime.
+This document defines lambda-ma world/profile behaviour on top of ma-runtime.
 It is not the generic runtime specification and is not a global requirement for
 all ma worlds.
 
@@ -127,7 +127,7 @@ Required context fields:
 Avatar contexts include `avatar`, the actor to receive avatar-mediated user
 commands. Direct agent contexts may set `avatar` to the empty string.
 
-### 2.4 Commit behavior
+### 2.4 Commit behaviour
 
 Client-side focus/context commit is acknowledgment-driven.
 
@@ -192,9 +192,9 @@ For existing-room link targets:
 
 1. Source room stores pending link request.
 2. Source room sends `:ping` to target room.
-3. After `:pong`, source requests `:authorize-link`.
+3. After `:pong`, source requests `:authorise-link`.
 4. Target room confirms same-owner policy.
-5. Source room creates/replaces exit only after explicit authorization.
+5. Source room creates/replaces exit only after explicit authorisation.
 
 ---
 
@@ -250,8 +250,8 @@ Key verbs:
 | `:take` / `:drop` / `:where` | `[user?] [token]` | Uses movable actor parent-authority contract. |
 | `:claim` / `:owner` / `:prop` | delegated or direct shapes | Room ownership controls write operations. |
 | `:dig` | delegated or direct shape | Owner-gated exit creation/linking. |
-| `:behaviour` | `[ /ipfs/<cid> ]` | Owner-gated behavior update. |
-| `:ping` / `:pong` / `:authorize-link` / `:link-authorized` / `:link-denied` | link handshake args | Existing-room link handshake. |
+| `:behaviour` | `[ /ipfs/<cid> ]` | Owner-gated behaviour update. |
+| `:ping` / `:pong` / `:authorise-link` / `:link-authorised` / `:link-denied` | link handshake args | Existing-room link handshake. |
 
 ### 5.4 exit actor
 
@@ -266,7 +266,7 @@ Purpose: traversal handoff.
 
 Kind: `/ma/scheme/agent/0.0.1`, extending `/ma/scheme/actor/0.0.1`.
 
-Purpose: reusable autonomous Scheme-agent base behavior. Concrete agents extend
+Purpose: reusable autonomous Scheme-agent base behaviour. Concrete agents extend
 this kind and inherit owner, parent, recovery, and transfer helpers.
 
 Key helpers and verbs:
@@ -357,7 +357,7 @@ context used by `ma_create_entity` fragment hints.
 
 ## 7. Wire/value conventions
 
-1. Actor message payloads are ma-scheme terms serialized through runtime RPC.
+1. Actor message payloads are ma-scheme terms serialised through runtime RPC.
 2. Verb dispatch follows `:verb` or tuple/list forms with `:verb` head.
 3. Enter `ctx` is an optional map value. Missing `ctx.kind` means client/session
    entry: the client waits for committed context. Direct `agent`/`thing` entry

@@ -591,9 +591,9 @@
         ((and target (ma-entity-exists? target)) target)
         (else #f)))
 
-(define (request-link-authorization! requester user direction target-room)
+(define (request-link-authorisation! requester user direction target-room)
   (begin
-    (ma-send! target-room (list :authorize-link user direction requester))
+    (ma-send! target-room (list :authorise-link user direction requester))
     (ma-send! requester (list :print (string-append "Checking ownership of " target-room ".")))))
 
 (define (request-existing-link! msg user direction target-room)
@@ -796,10 +796,10 @@
               (requester (car (cdr (cdr args))))
               (target-room (msg-from msg)))
           (if (pending-link-matches? direction user target-room requester)
-              (request-link-authorization! requester user direction target-room)
+              (request-link-authorisation! requester user direction target-room)
               #f)))))
 
-(set-method! :authorize-link
+(set-method! :authorise-link
   (lambda (args msg)
     (if (or (null? args) (null? (cdr args)) (null? (cdr (cdr args))))
         #f
@@ -808,7 +808,7 @@
               (requester (car (cdr (cdr args))))
               (source-room (msg-from msg)))
           (if (owner? user)
-              (ma-send! source-room (list :link-authorized user direction requester))
+              (ma-send! source-room (list :link-authorised user direction requester))
               (ma-send! source-room (list :link-denied user direction requester "You must own both rooms to link them.")))))))
 
 (set-method! :link-denied
@@ -827,7 +827,7 @@
                 (ma-send! requester (list :print reason)))
               #f)))))
 
-(set-method! :link-authorized
+(set-method! :link-authorised
   (lambda (args msg)
     (if (or (null? args) (null? (cdr args)) (null? (cdr (cdr args))))
         #f

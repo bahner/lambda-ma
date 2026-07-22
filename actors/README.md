@@ -151,7 +151,7 @@ also sends the text via `:print` for user-facing display.
 
 Exits to already-existing rooms use a room-to-room reachability and ownership
 check. The source room stores a pending link request, sends `:ping` to the
-target room, then asks the target room to authorize the same user DID only after
+target room, then asks the target room to authorise the same user DID only after
 receiving `:pong`. The source only creates the exit if the target room confirms
 that user owns it too. That keeps the invariant simple: no actor creates an exit
 to an existing room unless the target room is reachable and ownership of both

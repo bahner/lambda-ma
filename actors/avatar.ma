@@ -78,7 +78,7 @@
          (same-actor? avatar (self))
          (same-actor? (msg-from msg) target-room))))
 
-(define (enter-room-authorized? args msg)
+(define (enter-room-authorised? args msg)
   (or (root? msg)
       (and (not (null? args))
            (same-actor? (msg-from msg) (car args)))))
@@ -144,7 +144,7 @@
 
 (set-method! :enter-room
   (lambda (args msg)
-    (if (and (enter-room-authorized? args msg) (not (null? args)))
+    (if (and (enter-room-authorised? args msg) (not (null? args)))
         (let ((target-room (car args))
               (old-room (room)))
           (ma-send! target-room (list :enter (self) old-room (nick))))

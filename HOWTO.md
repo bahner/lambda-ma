@@ -8,7 +8,7 @@ you can enter from zion, edit, fork, and reset.
 avatars, and a root actor. You are expected to change it. The shipped world is
 not sacred; it is a starting point for your own runtime.
 
-For normative world protocol behavior (routing split, room/enter contract,
+For normative world protocol behaviour (routing split, room/enter contract,
 actor verbs, ownership and parent-authority rules), use
 [REFERENCE.md](REFERENCE.md).
 
@@ -237,7 +237,7 @@ Use `who?` when you specifically mean people/avatar presence. Use `occupants?`
 when you want the broader room occupant list.
 
 If `look` only shows `Things: none.` or misses expected occupants while actors
-are clearly active in the room, the room behavior is stale. Rebuild and
+are clearly active in the room, the room behaviour is stale. Rebuild and
 re-bootstrap (see troubleshooting below).
 
 Useful room-building commands:
@@ -268,7 +268,7 @@ The local `#fragment` form is a local runtime target and stays local through the
 handshake. A full `did:ma:...#room` target may point at another runtime. The
 target room must run compatible room code and confirm that you own it before the
 source room creates the exit. The source room first sends `:ping` to the target
-room; after `:pong`, it asks for ownership authorization.
+room; after `:pong`, it asks for ownership authorisation.
 
 The important rule is simple:
 
