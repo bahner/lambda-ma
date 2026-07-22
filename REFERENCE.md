@@ -60,30 +60,66 @@ Rules:
 When a concrete room target is available, enter is room-first.
 
 - Request goes to room actor `:enter`.
-- Room validates request context and asks root to register arrival.
+- Room validates request context and ensures the deterministic local avatar.
+- If the avatar does not exist yet, room creates it with the user DID as
+   `fragment_hint`; avatar init sends user `:ctx` and sends room `:enter` after
+   the avatar is live.
+- If the avatar exists, room registers it locally and sends the avatar a narrow
+   `:entered-room` event; the avatar sends user `:ctx`.
 
 Compatibility path:
 
 - Root `:enter` still exists and may be used when only runtime target is known.
+- For an existing avatar, root asks the avatar to send its current ctx to the
+   user. Root must not send messages to rooms.
 
 ### 2.2 Enter payload
 
-Enter payload is one extensible map named `ctx`.
+Room-first enter accepts either no payload or one extensible map named `ctx`.
+The payload concept is `ctx` only. Do not introduce a parallel `attrs` map.
 
-Required keys (all non-empty strings):
+For client entry, `ctx.kind` MAY be absent. Absence means the client is not
+claiming to be a concrete world object kind yet; the room MUST treat this as a
+request to enter as the world's default session kind and MUST arrange for a
+committed `/ma/lambda/ctx/0.0.1` context to be sent back asynchronously. In
+lambda-ma the default session kind is an avatar.
 
-- `kind`
+Direct non-avatar occupants MUST identify themselves with a strict `ctx` map:
+
+- `kind` (`agent` or `thing`)
 - `name`
 - `nick`
 - `description`
 
 Rules:
 
-1. Missing or empty required keys MUST be rejected.
-2. Additional keys MAY be present and are forward-compatible extension data.
-3. The payload concept is `ctx` only. Do not introduce a parallel `attrs` map.
+1. Missing `ctx.kind` means client/session entry. The client should wait for the
+   world to send the committed context; it must not assume the effective kind or
+   avatar actor from the enter request alone.
+2. `ctx.kind = "agent"` or `"thing"` requires all strict direct occupant keys.
+3. Empty direct occupant required values MUST be rejected.
+4. Additional keys MAY be present and are forward-compatible extension data.
+5. A client that wants a direct thing/agent entry MUST send `ctx.kind`; without
+   it, the room assigns the default session kind and reports it in the returned
+   context.
 
-### 2.3 Commit behavior
+### 2.3 Context protocol
+
+Committed lambda-ma context is delivered as `:ctx` with protocol
+`/ma/lambda/ctx/0.0.1`.
+
+Required context fields:
+
+- `protocol` = `/ma/lambda/ctx/0.0.1`
+- `kind` (effective session kind chosen by the world, e.g. `avatar` or `agent`)
+- `root`
+- `room`
+- `nick`
+
+Avatar contexts include `avatar`, the actor to receive avatar-mediated user
+commands. Direct agent contexts may set `avatar` to the empty string.
+
+### 2.4 Commit behavior
 
 Client-side focus/context commit is acknowledgment-driven.
 
@@ -119,12 +155,14 @@ Rules:
 
 ## 4. Movement and arrival flows
 
-### 4.1 User enter via root compatibility path
+### 4.1 User enter via room ctx
 
-1. Caller sends `:enter` to root.
-2. Root creates/reuses avatar and replies with avatar DID-URL.
-3. Root sends avatar to entry room (`:enter <avatar> <old-room?>`).
-4. Room admits avatar, updates room-local cache, and avatar receives location.
+1. Caller sends `:enter <ctx>` to the target room.
+2. Room derives the deterministic avatar fragment from the caller DID.
+3. If the avatar already exists, room asks it to set location to this room.
+4. If the avatar does not exist, room creates it with the caller DID as
+   `fragment_hint`; avatar init sends user `:ctx` and sends room `:enter` from
+   the live avatar.
 
 ### 4.2 Room-to-room movement via exit
 
@@ -132,8 +170,8 @@ Rules:
 2. Room sends `:traverse` to exit.
 3. Exit sends `:enter` to target room with either
    `<user> <avatar> <old-room> [nick]` or `<avatar> <old-room?>` shape.
-4. Target room calls root arrival registration (`:arrive-user` / `:arrived`).
-5. Root updates authoritative placement and refreshes room occupant context.
+4. Target room admits the avatar into its local cache and asks the old room to
+   remove it with `:leave-avatar` when needed.
 
 ### 4.3 Dig/link to existing room
 
@@ -153,17 +191,14 @@ All terms are CBOR-style actor terms, typically `:verb` or `[":verb", ...]`.
 
 ### 5.1 root actor
 
-Purpose: authoritative avatar/placement registry.
+Purpose: deterministic avatar factory.
 
 Key verbs:
 
 | Verb | Args | Notes |
 | --- | --- | --- |
-| `:enter` | `[room? nick?]` | Compatibility entry path. Creates/reuses avatar and sends to room. |
-| `:avatar?` | none | Returns caller avatar, creating if needed. |
-| `:arrived` | `<avatar> <room>` | Accepts only if sender is the same room actor. |
-| `:arrive-user` | `<user> <room> [nick]` | Arrival registration for user-based room enter flow. |
-| `:nick` | `<nick>` | Avatar-originated nick update and room ctx refresh. |
+| `:enter` | `[room? nick?]` | Compatibility path when no concrete room target is available. Creates caller avatar if absent, or asks an existing avatar to send its current ctx to the user. Root does not message rooms. |
+| `:avatar?` | none | Returns caller avatar, creating if needed in the configured start room. |
 
 ### 5.2 avatar actor
 
@@ -173,12 +208,12 @@ Key verbs:
 
 | Verb | Args | Caller constraints | Notes |
 | --- | --- | --- | --- |
-| `:set-location` | `<room> [text]` | room or root | Persists room and emits `:ctx` to user. |
-| `:set-nick` | `<nick>` | room or root | Persists nick and emits `:ctx`. |
+| `:entered-room` | `<room> [text]` | target room only | Persists current room and emits `:ctx` to user. |
+| `:sync-ctx` | none | root only | Emits current `:ctx` to user without changing avatar state. |
 | `:ctx?` | none | user only | Returns context term. |
 | `:help` | `[topic]` | user only | `help here` asks room `:help`. |
 | `:nick` | `[nick]` | user only | No args returns current nick; with args forwards to room. |
-| `:look` `:exits` `:who?` `:say` `:emote` `:go` | varies | user only | Delegates to room. |
+| `:look` `:exits?` `:who?` `:say` `:emote` `:go` | varies | user only | Delegates to room. |
 | `:claim` `:owner` `:dig` `:prop` | varies | user only | Delegated with prepended user DID. |
 | `:drop-thing` | `<user> <thing> <target-parent> [token] [ctx]` | room caller only | Parent-mediated drop helper; forwards optional user ctx map. |
 
@@ -190,12 +225,11 @@ Key verbs:
 
 | Verb | Args | Notes |
 | --- | --- | --- |
-| `:enter` | `<ctx-map>` | Room-first enter endpoint. Requires `ctx` required keys. |
+| `:enter` | `<ctx-map>` | Room-first enter endpoint. Absent/`avatar` kind ensures the caller's deterministic avatar; `agent`/`thing` require ctx required keys. |
 | `:enter` | `<avatar> [old-room]` | Admit known avatar flow. |
 | `:enter` | `<user> <avatar> <old-room> [nick]` | Cross-room/cross-runtime-friendly arrival shape. |
-| `:join-avatar` / `:leave-avatar` | event args | Root-origin only cache/event updates. |
-| `:ctx` | `:avatars <list>` | Root-origin only occupant snapshot refresh. |
-| `:look` `:exits` `:who?` `:things?` | none | Local presentation; `:look` prints room text plus `Here:` (avatars + local movable occupants) and `Things:` (non-avatar aliases), while `who?` returns the same presence set. |
+| `:leave-avatar` | `<avatar> <to-room>` | Target-room-origin cache removal during movement. |
+| `:look` `:exits?` `:who?` `:occupants?` `:things?` | none | Local presentation; `:look` prints room text plus `Occupants:` and `Things:`. `who?` is people/avatar-oriented; `occupants?` includes avatars plus room-local agents/occupants. |
 | `:thing` | `<name> [did-or-empty]` | Local occupant alias list/get/set/delete; owner-gated for write. |
 | `:take` / `:drop` / `:where` | `[user?] [token]` | Uses movable actor parent-authority contract. |
 | `:claim` / `:owner` / `:prop` | delegated or direct shapes | Room ownership controls write operations. |
@@ -263,15 +297,11 @@ Purpose: movable passive object with owner/parent authority.
 
 ## 6. State keys and authority boundaries
 
-### 6.1 root authoritative registry
+### 6.1 root keys
 
-| Key pattern | Meaning |
-| --- | --- |
-| `avatar:<user>` | user DID to avatar DID-URL |
-| `user:<avatar>` | avatar DID-URL to user DID |
-| `room:<avatar>` | avatar current room DID-URL |
-| `nick:<avatar>` | avatar display nick |
-| `avatars` | known avatar DID-URLs |
+Root stores no avatar registry. Avatar DID-URLs are derived from the caller DID
+using the runtime-scoped `ma-derived-id` primitive and the same entity-fragment
+context used by `ma_create_entity` fragment hints.
 
 ### 6.2 room keys
 
@@ -308,14 +338,18 @@ Purpose: movable passive object with owner/parent authority.
 
 1. Actor message payloads are ma-scheme terms serialized through runtime RPC.
 2. Verb dispatch follows `:verb` or tuple/list forms with `:verb` head.
-3. Enter `ctx` is a map value and MUST carry required string fields listed in
-   section 2.2.
+3. Enter `ctx` is an optional map value. Missing `ctx.kind` means client/session
+   entry: the client waits for committed context. Direct `agent`/`thing` entry
+   MUST carry required string fields listed in section 2.2.
 4. DID values crossing zion/runtime boundary SHOULD be full DID or DID-URL
    values, not runtime-local shorthand.
-5. Room `:enter` dispatch is kind-driven for ctx payloads: `avatar` goes through
-   root arrival registration; `thing` and `agent` are admitted into the same
-   room-local non-avatar occupant cache for now.
-6. Thing transfer validation is strict by default: user MUST be `did:ma:...`,
+5. Committed client context uses `/ma/lambda/ctx/0.0.1` and includes the
+   effective `kind` chosen by the world.
+6. Room `:enter` dispatch is kind-driven when `ctx.kind` is present: `avatar` or
+   absent kind ensures the caller's deterministic avatar and sends committed
+   context back asynchronously; `thing` and `agent` require explicit kind and
+   are admitted into the same room-local non-avatar occupant cache for now.
+7. Thing transfer validation is strict by default: user MUST be `did:ma:...`,
    parent refs MUST be `did:ma:...` or `#fragment`, and optional transfer ctx
    MUST include non-empty `kind`, `name`, `nick`, and `description` fields.
 

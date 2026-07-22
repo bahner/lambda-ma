@@ -260,7 +260,10 @@ mod tests {
     fn string_and_type_builtins() {
         assert_eq!(run(r#"(string-append "foo" "bar")"#), Value::str("foobar"));
         assert_eq!(run(r##"(string-prefix? "#" "#room")"##), Value::Bool(true));
-        assert_eq!(run(r##"(string-prefix? "#" "did:ma:abc#room")"##), Value::Bool(false));
+        assert_eq!(
+            run(r##"(string-prefix? "#" "did:ma:abc#room")"##),
+            Value::Bool(false)
+        );
         assert_eq!(run("(number->string 42)"), Value::str("42"));
         assert_eq!(run(r#"(string->number "42")"#), Value::Int(42));
         assert_eq!(run("(string? \"x\")"), Value::Bool(true));
@@ -272,15 +275,42 @@ mod tests {
 
     #[test]
     fn map_builtins() {
-        assert_eq!(run(r#"(map-ref (make-map "a" 1 "b" 2) "a")"#), Value::Int(1));
-        assert_eq!(run(r#"(map-ref (make-map) "missing" "fallback")"#), Value::str("fallback"));
-        assert_eq!(run(r#"(map-has-key? (make-map "a" 1) "a")"#), Value::Bool(true));
-        assert_eq!(run(r#"(map-keys (make-map "b" 2 "a" 1))"#), Value::list(vec![Value::str("a"), Value::str("b")]));
-        assert_eq!(run(r#"(map-values (make-map "b" 2 "a" 1))"#), Value::list(vec![Value::Int(1), Value::Int(2)]));
-        assert_eq!(run(r#"(map-ref (map-set (make-map "a" 1) "a" 9) "a")"#), Value::Int(9));
-        assert_eq!(run(r#"(map-has-key? (map-delete (make-map "a" 1) "a") "a")"#), Value::Bool(false));
-        assert_eq!(run(r#"(map-ref (alist->map (map->alist (make-map "a" 1))) "a")"#), Value::Int(1));
-        assert_eq!(run(r#"(map-ref (make-map "a" 1 "a" 2) "a")"#), Value::Int(2));
+        assert_eq!(
+            run(r#"(map-ref (make-map "a" 1 "b" 2) "a")"#),
+            Value::Int(1)
+        );
+        assert_eq!(
+            run(r#"(map-ref (make-map) "missing" "fallback")"#),
+            Value::str("fallback")
+        );
+        assert_eq!(
+            run(r#"(map-has-key? (make-map "a" 1) "a")"#),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            run(r#"(map-keys (make-map "b" 2 "a" 1))"#),
+            Value::list(vec![Value::str("a"), Value::str("b")])
+        );
+        assert_eq!(
+            run(r#"(map-values (make-map "b" 2 "a" 1))"#),
+            Value::list(vec![Value::Int(1), Value::Int(2)])
+        );
+        assert_eq!(
+            run(r#"(map-ref (map-set (make-map "a" 1) "a" 9) "a")"#),
+            Value::Int(9)
+        );
+        assert_eq!(
+            run(r#"(map-has-key? (map-delete (make-map "a" 1) "a") "a")"#),
+            Value::Bool(false)
+        );
+        assert_eq!(
+            run(r#"(map-ref (alist->map (map->alist (make-map "a" 1))) "a")"#),
+            Value::Int(1)
+        );
+        assert_eq!(
+            run(r#"(map-ref (make-map "a" 1 "a" 2) "a")"#),
+            Value::Int(2)
+        );
     }
 
     #[test]

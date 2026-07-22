@@ -3,6 +3,7 @@
 
 (define (self) (ma-get-config-key "self"))
 (define (runtime) (ma-get-config-key "runtime"))
+(define LAMBDA_CTX_PROTOCOL "/ma/lambda/ctx/0.0.1")
 (define (entity-url fragment) (string-append (runtime) "#" fragment))
 (define (user) (get-prop "user"))
 (define (root)
@@ -19,7 +20,9 @@
 
 (define (ctx-term text)
   (list :ctx
-    (list (list :root (root))
+    (list (list :protocol LAMBDA_CTX_PROTOCOL)
+          (list :kind "avatar")
+          (list :root (root))
           (list :avatar (self))
           (list :nick (nick))
           (list :room (room))
@@ -27,7 +30,9 @@
 
 (define (ctx-term-room r text)
   (list :ctx
-    (list (list :root (root))
+    (list (list :protocol LAMBDA_CTX_PROTOCOL)
+          (list :kind "avatar")
+          (list :root (root))
           (list :avatar (self))
           (list :nick (nick))
           (list :room r)
@@ -43,17 +48,8 @@
 (define (room? msg)
   (let ((current (room)))
     (and current (same-actor? (msg-from msg) current))))
-(define (room-or-root? msg)
-  (or (room? msg) (root? msg)))
-
-(define (initial-room-bind? new-room msg)
-  (let ((current (room)))
-    (and (not current)
-         new-room
-         (same-actor? (msg-from msg) new-room))))
-
-(define (room-caller? msg)
-  (room? msg))
+(define (entered-room-caller? new-room msg)
+  (and new-room (same-actor? (msg-from msg) new-room)))
 
 (define (join-words words)
   (cond ((null? words) "")
@@ -89,7 +85,7 @@
     "  help              show this help\n"
     "  help here         ask this place what is possible here\n"
     "  look              look around\n"
-    "  exits             list exits\n"
+    "  exits?            list exits\n"
     "  who?              show who is here\n"
     "  things?           list local non-avatar occupants\n"
     "  take <thing>      ask a local occupant to bind to you\n"
@@ -108,24 +104,25 @@
 (define (unknown-help-text topic)
   (string-append "No help topic: " topic "\nTry help or help here."))
 
-(set-method! :set-location
+(set-method! :entered-room
   (lambda (args msg)
     (let ((new-room (car args))
-          (text (if (or (null? (cdr args)) (equal? (car (cdr args)) "")) #f (car (cdr args)))))
-      (if (or (room-or-root? msg) (initial-room-bind? new-room msg))
+          (text (if (or (null? (cdr args)) (equal? (car (cdr args)) "")) #f (car (cdr args))))
+          (old-room (room)))
+            (if (entered-room-caller? new-room msg)
           (begin
             (set-prop! "room" new-room)
             (ma-save-state!)
-            (send-ctx text))
+            (send-ctx text)
+            (if (same-actor? new-room old-room)
+                #f
+                (if old-room (ma-send! old-room (list :leave-avatar (self) new-room)) #f)))
           #f))))
 
-(set-method! :set-nick
+(set-method! :sync-ctx
   (lambda (args msg)
-    (if (room-or-root? msg)
-        (begin
-          (set-prop! "nick" (car args))
-          (ma-save-state!)
-          (send-ctx #f))
+    (if (root? msg)
+        (send-ctx #f)
         #f)))
 
 (set-method! :ctx?
@@ -168,6 +165,9 @@
         (if (null? args)
             (ma-reply! msg (list :ok (nick)))
             (begin
+              (set-prop! "nick" (join-words args))
+              (ma-save-state!)
+              (send-ctx #f)
               (send-room :nick args)
               (reply-ok-silent msg)))))))
 
@@ -176,13 +176,6 @@
     (require-user msg
       (lambda ()
         (send-room :look '())
-        (reply-ok-silent msg)))))
-
-(set-method! :exits
-  (lambda (args msg)
-    (require-user msg
-      (lambda ()
-        (send-room :exits '())
         (reply-ok-silent msg)))))
 
 (set-method! :exits?

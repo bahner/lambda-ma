@@ -229,11 +229,16 @@ look
 
 Expected shape in output:
 
-- A `Here:` line that includes live avatar presence from the room occupant cache.
+- An `Occupants:` line that includes live room occupants, including avatar
+  presence and local agents such as `rms`.
 - A separate `Things:` line for room-local non-avatar aliases.
 
-If `look` only shows `Things: none.` while avatars are clearly in the room, the
-room behavior is stale. Rebuild and re-bootstrap (see troubleshooting below).
+Use `who?` when you specifically mean people/avatar presence. Use `occupants?`
+when you want the broader room occupant list.
+
+If `look` only shows `Things: none.` or misses expected occupants while actors
+are clearly active in the room, the room behavior is stale. Rebuild and
+re-bootstrap (see troubleshooting below).
 
 Useful room-building commands:
 

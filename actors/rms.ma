@@ -44,7 +44,25 @@
     "The most powerful programming language is Lisp. If you don't know Lisp (or Scheme), you don't appreciate what a powerful language is."
     "No person, no idea, and no religion deserves to be illegal to insult, not even the Church of Emacs."
     "Copying all or parts of a program is as natural to a programmer as breathing, and as productive. It ought to be as free."
-    "I consider that the golden rule requires that if I like a program I must share it with other people who like it."))
+    "I consider that the golden rule requires that if I like a program I must share it with other people who like it."
+    "Android is very different from the GNU/Linux operating system because it contains very little of GNU. Indeed, just about the only component in common between Android and GNU/Linux is Linux, the kernel."
+    "Facebook mistreats its users. Facebook is not your friend; it is a surveillance engine. For instance, if you browse the Web and you see a 'like' button in some page or some other site that has been displayed from Facebook. Therefore, Facebook knows that your machine visited that page."
+    "Many users of the GNU/Linux system will not have heard the ideas of free software. They will not be aware that we have ideas, that a system exists because of ethical ideals, which were omitted from ideas associated with the term 'open source.'"
+    "The idea of free software is that users of computing deserve freedom. They deserve in particular to have control over their computing. And proprietary software does not allow users to have control of their computing."
+    "CD stores have the disadvantage of an expensive inventory, but digital bookshops would need no such thing: they could write copies at the time of sale on to memory sticks, and sell you one if you forgot your own."
+    "The paradigm of competition is a race: by rewarding the winner, we encourage everyone to run faster. When capitalism really works this way, it does a good job; but its defenders are wrong in assuming it always works this way."
+    "One reason you should not use web applications to do your computing is that you lose control. It's just as bad as using a proprietary program. Do your own computing on your own computer with your copy of a freedom-respecting program. If you use a proprietary program or somebody else's web server, you're defenceless."
+    "In essence, Chrome OS is the GNU/Linux operating system. However, it is delivered without the usual applications, and rigged up to impede and discourage installing applications. I'd say the problem is in the nature of the job ChromeOS is designed to do."
+    "In the U.S., you even lose legal rights if you store your data in a company's machines instead of your own. The police need to present you with a search warrant to get your data from you; but if they are stored in a company's server, the police can get it without showing you anything. They may not even have to give the company a search warrant."
+    "Also, because schools must teach the spirit of goodwill, the habit of helping others around you, every class should have this rule: students, if you bring software to class you may not keep it for yourself."
+    "Facebook collects a lot of data from people and admits it. And it also collects data which isn't admitted. And Google does too. As for Microsoft, I don't know. But I do know that Windows has features that send data about the user."
+    "A smartphone is a computer - it's not built using a computer - the job it does is the job of being a computer. So, everything we say about computers, that the software you run should be free - you should insist on that - applies to smart phones just the same. And likewise to those tablets."
+    "If there is a Like button in a page, Facebook knows who visited that page. And it can get IP address of the computer visiting the page even if the person is not a Facebook user."
+    "In practice, the copyright system does a bad job of supporting authors, aside from the most popular ones. Other authors' principal interest is to be better known, so sharing their work benefits them as well as readers."
+    "Android is a major step towards an ethical, user-controlled, free-software portable phone, but there is a long way to go."
+    "If ebooks mean that readers' freedom must either increase or decrease, we must demand the increase."
+    "With paper printed books, you have certain freedoms. You can acquire the book anonymously by paying cash, which is the way I always buy books. I never use a credit card. I don't identify to any database when I buy books. Amazon takes away that freedom."
+    "There is nothing wrong with wanting pay for work, or seeking to maximize one's income, as long as one does not use means that are destructive."))
 
 (define (rms-defaults!)
   (begin

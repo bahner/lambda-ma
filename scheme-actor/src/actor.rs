@@ -16,6 +16,7 @@ mod host {
     extern "ExtismHost" {
         fn ma_create_entity(input: Vec<u8>) -> Vec<u8>;
         fn ma_entity_exists(input: Vec<u8>) -> Vec<u8>;
+        fn ma_derived_id(input: Vec<u8>) -> Vec<u8>;
     }
 
     /// `input` is CBOR-encoded `{"kind": text, "behaviour": text/null,
@@ -39,6 +40,13 @@ mod host {
             Err(e) => Err(format!("ma_entity_exists returned invalid UTF-8: {e}")),
         }
     }
+
+    /// `input` is CBOR-encoded `{"context": text, "hint": text, "bytes": int}`.
+    /// Returns raw UTF-8 lower-hex.
+    pub fn derived_id(input: &[u8]) -> Result<String, String> {
+        let out = unsafe { ma_derived_id(input.to_vec()) }.map_err(|e| e.to_string())?;
+        String::from_utf8(out).map_err(|e| format!("ma_derived_id returned invalid UTF-8: {e}"))
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -56,12 +64,22 @@ mod host {
                 .to_string(),
         )
     }
+
+    pub fn derived_id(_input: &[u8]) -> Result<String, String> {
+        Err(
+            "ma_derived_id is only available compiled to wasm32 (no host to call natively)"
+                .to_string(),
+        )
+    }
 }
 
 use std::rc::Rc;
 
 use crate::env::Env;
 use crate::value::{EvalError, EvalResult, Value};
+
+const ROOT_KIND: &str = "/ma/root/0.0.1";
+const ROOM_KIND: &str = "/ma/room/0.0.1";
 
 /// Register `ma-create-actor` into `env`.
 pub fn install(env: &Rc<Env>) {
@@ -73,6 +91,69 @@ pub fn install(env: &Rc<Env>) {
         Rc::from("ma-entity-exists?"),
         Value::Builtin("ma-entity-exists?", b_ma_entity_exists),
     );
+    env.define(
+        Rc::from("ma-derived-id"),
+        Value::Builtin("ma-derived-id", b_ma_derived_id),
+    );
+}
+
+/// `(ma-derived-id context hint bytes)` — runtime-scoped deterministic ID.
+fn b_ma_derived_id(args: &[Value]) -> EvalResult<Value> {
+    let kind = crate::state::config_value("kind");
+    if !matches!(kind.as_deref(), Some(ROOT_KIND) | Some(ROOM_KIND)) {
+        return Err(EvalError::new(
+            "ma-derived-id: only root and room actors may derive runtime IDs",
+        ));
+    }
+
+    let [context, hint, bytes] = args else {
+        return Err(EvalError::new(format!(
+            "ma-derived-id: expected exactly 3 arguments, got {}",
+            args.len()
+        )));
+    };
+    let Value::Str(context) = context else {
+        return Err(EvalError::new(format!(
+            "ma-derived-id: context must be a string, found {}",
+            context.type_name()
+        )));
+    };
+    let Value::Str(hint) = hint else {
+        return Err(EvalError::new(format!(
+            "ma-derived-id: hint must be a string, found {}",
+            hint.type_name()
+        )));
+    };
+    let Value::Int(bytes) = bytes else {
+        return Err(EvalError::new(format!(
+            "ma-derived-id: bytes must be an integer, found {}",
+            bytes.type_name()
+        )));
+    };
+    if !(1..=32).contains(bytes) {
+        return Err(EvalError::new("ma-derived-id: bytes must be in 1..=32"));
+    }
+
+    let cbor = ciborium::Value::Map(vec![
+        (
+            ciborium::Value::Text("context".to_string()),
+            ciborium::Value::Text(context.to_string()),
+        ),
+        (
+            ciborium::Value::Text("hint".to_string()),
+            ciborium::Value::Text(hint.to_string()),
+        ),
+        (
+            ciborium::Value::Text("bytes".to_string()),
+            ciborium::Value::Integer((*bytes).into()),
+        ),
+    ]);
+    let mut buf = Vec::new();
+    ciborium::ser::into_writer(&cbor, &mut buf)
+        .map_err(|e| EvalError::new(format!("ma-derived-id: CBOR encode failed: {e}")))?;
+    host::derived_id(&buf)
+        .map(|id| Value::Str(Rc::from(id.as_str())))
+        .map_err(|e| EvalError::new(format!("ma-derived-id: {e}")))
 }
 
 /// `(ma-entity-exists? actor)` — true if `actor` names a live local entity.
@@ -196,6 +277,7 @@ fn as_optional_string(fname: &str, argname: &str, v: &Value) -> EvalResult<Optio
 mod tests {
     use super::*;
     use crate::env::Env;
+    use std::collections::HashMap;
 
     fn env_with_actor() -> Rc<Env> {
         let env = Env::new_root();
@@ -203,12 +285,18 @@ mod tests {
         env
     }
 
+    fn set_kind(kind: &str) {
+        let mut config = HashMap::new();
+        config.insert("kind".to_string(), kind.to_string());
+        crate::state::set_config(config);
+    }
+
     #[test]
     fn wrong_arity_is_an_error() {
         let env = env_with_actor();
         let err =
             crate::eval_all(r#"(ma-create-actor "/ma/scheme/actor/0.0.1")"#, &env).unwrap_err();
-        assert!(err.0.contains("expected exactly 3 arguments"), "{}", err.0);
+        assert!(err.0.contains("expected 3 or 4 arguments"), "{}", err.0);
     }
 
     #[test]
@@ -230,6 +318,39 @@ mod tests {
 
         let err = crate::eval_all("(ma-create-actor \"/k\" #f 42)", &env).unwrap_err();
         assert!(err.0.contains("init must be a string or #f"), "{}", err.0);
+    }
+
+    #[test]
+    fn derived_id_validates_arguments() {
+        let env = env_with_actor();
+        set_kind(ROOT_KIND);
+        let err = crate::eval_all(r#"(ma-derived-id "ctx" "hint")"#, &env).unwrap_err();
+        assert!(err.0.contains("expected exactly 3 arguments"), "{}", err.0);
+
+        let err = crate::eval_all(r#"(ma-derived-id 42 "hint" 8)"#, &env).unwrap_err();
+        assert!(err.0.contains("context must be a string"), "{}", err.0);
+
+        let err = crate::eval_all(r#"(ma-derived-id "ctx" 42 8)"#, &env).unwrap_err();
+        assert!(err.0.contains("hint must be a string"), "{}", err.0);
+
+        let err = crate::eval_all(r#"(ma-derived-id "ctx" "hint" "8")"#, &env).unwrap_err();
+        assert!(err.0.contains("bytes must be an integer"), "{}", err.0);
+
+        let err = crate::eval_all(r#"(ma-derived-id "ctx" "hint" 0)"#, &env).unwrap_err();
+        assert!(err.0.contains("bytes must be in 1..=32"), "{}", err.0);
+    }
+
+    #[test]
+    fn derived_id_is_root_only() {
+        let env = env_with_actor();
+        set_kind("/ma/avatar/0.0.1");
+        let err = crate::eval_all(r#"(ma-derived-id "ctx" "hint" 8)"#, &env).unwrap_err();
+        assert!(
+            err.0
+                .contains("only root and room actors may derive runtime IDs"),
+            "{}",
+            err.0
+        );
     }
 
     /// On the native (non-wasm32) target there is no real Extism host to
@@ -258,6 +379,22 @@ mod tests {
         let err = crate::eval_all(r#"(ma-create-actor "/ma/scheme/actor/0.0.1" #f #f)"#, &env)
             .unwrap_err();
         // Still hits the (stubbed) host boundary, not an argument error.
+        assert!(
+            err.0.contains("only available compiled to wasm32"),
+            "{}",
+            err.0
+        );
+    }
+
+    #[test]
+    fn well_formed_derived_id_reaches_the_host_boundary() {
+        let env = env_with_actor();
+        set_kind(ROOT_KIND);
+        let err = crate::eval_all(
+            r#"(ma-derived-id "ma entity-fragment v1" "did:ma:k51user" 8)"#,
+            &env,
+        )
+        .unwrap_err();
         assert!(
             err.0.contains("only available compiled to wasm32"),
             "{}",

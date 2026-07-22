@@ -1,8 +1,11 @@
 ; Locked room actor.
 ; Rooms own exits and local room policy. Avatars act through their current room.
 
+(define AVATAR_KIND "/ma/avatar/0.0.1")
 (define ROOM_KIND "/ma/room/0.0.1")
 (define EXIT_KIND "/ma/exit/0.0.1")
+(define LAMBDA_CTX_PROTOCOL "/ma/lambda/ctx/0.0.1")
+(define ENTITY_FRAGMENT_CONTEXT "ma entity-fragment v1")
 
 (define (self) (ma-get-config-key "self"))
 (define (runtime) (ma-get-config-key "runtime"))
@@ -14,6 +17,14 @@
   (if (and actor (string-prefix? "#" actor)) (string-append (runtime) actor) actor))
 (define (same-actor? a b)
   (equal? (canonical-actor a) (canonical-actor b)))
+(define (local-actor-ref? actor)
+  (and (string? actor)
+       (or (string-prefix? "#" actor)
+           (string-prefix? (string-append (runtime) "#") actor))))
+(define (dead-local-actor? actor)
+  (and (local-actor-ref? actor) (not (ma-entity-exists? actor))))
+(define (entity-live? actor)
+  (and actor (ma-entity-exists? actor)))
 
 (define (join-words words)
   (cond ((null? words) "")
@@ -49,24 +60,24 @@
 
 (define (label-key actor) (string-append "label:" (canonical-actor actor)))
 
-(define (avatar-ref entry)
-  (if (pair? entry) (car entry) entry))
+(define (avatar-occupants)
+  (let ((xs (get-prop "avatar-occupants")))
+    (if xs xs '())))
 
-(define (avatar-label entry)
-  (if (and (pair? entry) (pair? (cdr entry))) (car (cdr entry)) #f))
-
-(define (avatar-refs entries)
-  (if (null? entries)
-      '()
-      (cons (avatar-ref (car entries)) (avatar-refs (cdr entries)))))
-
-(define (store-labels! entries)
-  (if (null? entries)
+(define (add-avatar-occupant! avatar)
+  (if (member-actor? avatar (avatar-occupants))
       #f
-      (let ((avatar (avatar-ref (car entries)))
-            (label (avatar-label (car entries))))
-        (if label (set-prop! (label-key avatar) label) #f)
-        (store-labels! (cdr entries)))))
+      (set-prop! "avatar-occupants" (cons avatar (avatar-occupants)))))
+
+(define (remove-avatar-occupant! avatar)
+  (set-prop! "avatar-occupants" (without-actors (avatar-occupants) (list avatar))))
+
+(define (without-actors xs drop)
+  (cond ((null? xs) '())
+        ((member-actor? (car xs) drop)
+         (without-actors (cdr xs) drop))
+        (else
+         (cons (car xs) (without-actors (cdr xs) drop)))))
 
 (define (speaker-name actor)
   (let ((label (get-prop (label-key actor))))
@@ -84,7 +95,7 @@
   (string-append
     (room-name) "\n"
     (room-description) "\n"
-    (who-text) "\n"
+    (occupants-text) "\n"
     (things-text)))
 
 (define (names-of actors)
@@ -127,12 +138,58 @@
 (define (non-empty-string? v)
   (and (string? v) (not (equal? v ""))))
 
+(define (default-nick) "avatar")
+
+(define (nick-or-default nick)
+  (if (non-empty-string? nick) nick (default-nick)))
+
+(define (avatar-fragment user)
+  (ma-derived-id ENTITY_FRAGMENT_CONTEXT user 8))
+
+(define (avatar-for-user user)
+  (entity-url (avatar-fragment user)))
+
+(define (avatar-init user nick room)
+  (let ((n (nick-or-default nick))
+        (r (root)))
+    (string-append
+      "(set-prop! \"user\" \"" user "\")\n"
+      "(set-prop! \"root\" \"" r "\")\n"
+      "(set-prop! \"nick\" \"" n "\")\n"
+      "(set-prop! \"room\" \"" room "\")\n"
+      "(ma-send! \"" user "\" (list :ctx (list"
+      " (list :protocol \"" LAMBDA_CTX_PROTOCOL "\")"
+      " (list :kind \"avatar\")"
+      " (list :root \"" r "\")"
+      " (list :avatar (ma-get-config-key \"self\"))"
+      " (list :nick \"" n "\")"
+      " (list :room \"" room "\")"
+      " (list :text \"You arrive.\"))))\n"
+      "(ma-send! \"" room "\" (list :enter (ma-get-config-key \"self\") #f \"" n "\"))\n")))
+
+(define (ensure-avatar! user nick)
+  (let ((avatar (avatar-for-user user)))
+    (if (entity-live? avatar)
+        (begin
+          (if nick (set-prop! (label-key avatar) (nick-or-default nick)) #f)
+          (add-occupant! avatar)
+          (add-avatar-occupant! avatar)
+          (ma-save-state!)
+          (broadcast (string-append (speaker-name avatar) " arrives."))
+          (ma-send! avatar (list :entered-room (self) "You arrive."))
+          avatar)
+        (entity-url (ma-create-actor AVATAR_KIND #f (avatar-init user nick (self)) user)))))
+
 (define (enter-ctx-valid? ctx)
   (and (map? ctx)
        (non-empty-string? (ctx-text ctx "kind"))
        (non-empty-string? (ctx-text ctx "name"))
        (non-empty-string? (ctx-text ctx "nick"))
        (non-empty-string? (ctx-text ctx "description"))))
+
+(define (enter-direct-ctx-valid? ctx kind)
+  (and (enter-ctx-valid? ctx)
+       (equal? (ctx-text ctx "kind") kind)))
 
 (define (agent-kind? kind) (equal? kind "agent"))
 (define (thing-kind? kind) (equal? kind "thing"))
@@ -159,6 +216,13 @@
 (define (things-text)
   (token-list-text "Things" (map-keys (things-map))))
 
+(define (reconcile-caller-occupant! actor)
+  (if (member-actor? actor (occupants))
+      #f
+      (begin
+        (add-occupant! actor)
+        (ma-save-state!))))
+
 (define (exits)
   (let ((xs (get-prop "exits")))
     (if (map? xs) xs (make-map))))
@@ -180,23 +244,33 @@
         (string-append "Exits: " (names-of directions)))))
 
 (define (who-text)
-  (let ((avatars (occupants))
-        (locals (map-keys (things-map))))
-    (cond ((and (null? avatars) (null? locals))
-           "Nobody is here.")
-          ((null? avatars)
-           (string-append "Here: " (names-of locals)))
-          ((null? locals)
-           (string-append "Here: " (names-of avatars)))
-          (else
-           (string-append "Here: " (names-of avatars) ", " (names-of locals))))))
+  (let ((avatars (avatar-occupants)))
+    (if (null? avatars)
+        "Who: none."
+        (string-append "Who: " (names-of avatars)))))
+
+(define (thing-token-names)
+  (map-keys (things-map)))
+
+(define (occupants-text)
+  (let ((actors (occupants))
+        (tokens (thing-token-names)))
+    (cond ((and (null? actors) (null? tokens))
+           "Occupants: none.")
+          ((null? actors)
+         (string-append "Occupants: " (names-of tokens)))
+        ((null? tokens)
+         (string-append "Occupants: " (names-of actors)))
+        (else
+         (string-append "Occupants: " (names-of actors) ", " (names-of tokens))))))
 
 (define (room-help-text)
   (string-append
     (room-name) " help\n"
     "  look              look around\n"
-    "  exits             list exits\n"
-    "  who?              show who is here\n"
+    "  exits?            list exits\n"
+    "  who?              show people here\n"
+    "  occupants?        show all occupants (avatars + room locals)\n"
     "  things?           list known non-avatar occupants\n"
     "  take <thing>      ask an occupant to bind to you\n"
     "  drop <thing>      ask an occupant to set this room as parent\n"
@@ -216,9 +290,6 @@
 
 (define (avatar-caller? msg)
   (member-actor? (msg-from msg) (occupants)))
-
-(define (from-root? msg)
-  (same-actor? (msg-from msg) (root)))
 
 (define (owner) (get-prop "owner"))
 (define (owned?) (if (owner) #t #f))
@@ -241,6 +312,11 @@
 
 (define (reply-ok msg text)
   (ma-reply! msg (list :ok text)))
+
+(define (print-and-reply-ok msg text)
+  (begin
+    (reply-to-sender msg text)
+    (reply-ok msg "")))
 
 (define (reply-error msg text)
   (ma-reply! msg (list :error text)))
@@ -344,25 +420,28 @@
          (reply-to-sender msg "Only this room's owner can build exits here."))))
 
 (define (on-event event args msg)
-  (cond ((equal? event :join-avatar)
-         (let ((avatar (car args)))
-           (add-occupant! avatar)
-           (ma-save-state!)
-           (broadcast (string-append (speaker-name avatar) " arrives."))))
-        ((equal? event :leave-avatar)
+  (cond ((equal? event :leave-avatar)
          (let ((avatar (car args)))
            (remove-occupant! avatar)
+           (remove-avatar-occupant! avatar)
            (ma-save-state!)
            (broadcast (string-append (speaker-name avatar) " leaves."))))
         (else #f)))
 
 (define (broadcast text)
-  (let loop ((xs (occupants)))
-    (if (null? xs)
-        #f
-        (begin
-          (ma-send! (car xs) (list :print text))
-          (loop (cdr xs))))))
+  (let loop ((xs (occupants))
+             (changed #f))
+    (cond ((null? xs)
+           (if changed (ma-save-state!) #f))
+          ((dead-local-actor? (car xs))
+           (begin
+             (remove-occupant! (car xs))
+             (remove-avatar-occupant! (car xs))
+             (loop (cdr xs) #t)))
+          (else
+           (begin
+             (ma-send! (car xs) (list :print text))
+             (loop (cdr xs) changed))))))
 
 (define (exit-key direction) (string-append "exit:" direction))
 
@@ -459,55 +538,41 @@
   (ma-send! target-room (list :enter user requester (self) (speaker-name requester)))
       #f))
 
-(set-method! :join-avatar
-  (lambda (args msg)
-    (if (from-root? msg)
-        (on-event :join-avatar args msg)
-        #f)))
-
 (set-method! :leave-avatar
   (lambda (args msg)
-    (if (from-root? msg)
+    (if (and (not (null? args))
+             (not (null? (cdr args)))
+             (same-actor? (msg-from msg) (car (cdr args))))
         (on-event :leave-avatar args msg)
-        #f)))
-
-(set-method! :ctx
-  (lambda (args msg)
-    (if (from-root? msg)
-        (let ((kind (car args))
-              (payload (car (cdr args))))
-          (if (equal? kind :avatars)
-              (begin
-                (set-prop! "occupants" (avatar-refs payload))
-                (store-labels! payload)
-                (ma-save-state!))
-              #f))
         #f)))
 
 (set-method! :look
   (lambda (args msg)
     (let ((avatar (msg-from msg)))
-      (ma-send! avatar (list :print (room-text))))))
-
-(set-method! :exits
-  (lambda (args msg)
-    (let ((avatar (msg-from msg)))
-      (ma-send! avatar (list :print (exits-text))))))
+      (reconcile-caller-occupant! avatar)
+      (print-and-reply-ok msg (room-text)))))
 
 (set-method! :exits?
   (lambda (args msg)
     (let ((avatar (msg-from msg)))
-      (ma-send! avatar (list :print (exits-text))))))
+      (print-and-reply-ok msg (exits-text)))))
 
 (set-method! :who?
   (lambda (args msg)
     (let ((avatar (msg-from msg)))
-      (ma-send! avatar (list :print (who-text))))))
+      (reconcile-caller-occupant! avatar)
+      (print-and-reply-ok msg (who-text)))))
+
+(set-method! :occupants?
+  (lambda (args msg)
+    (let ((avatar (msg-from msg)))
+      (reconcile-caller-occupant! avatar)
+      (print-and-reply-ok msg (occupants-text)))))
 
 (set-method! :things?
   (lambda (args msg)
     (let ((avatar (msg-from msg)))
-      (ma-send! avatar (list :print (things-text))))))
+      (print-and-reply-ok msg (things-text)))))
 
 (set-method! :thing
   (lambda (args msg)
@@ -739,7 +804,6 @@
                   (avatar (msg-from msg)))
               (set-prop! (label-key avatar) new-nick)
               (ma-save-state!)
-              (ma-send! avatar (list :set-nick new-nick))
               (broadcast (string-append (speaker-name avatar) " is now known as " new-nick "."))
               (reply-ok msg new-nick)))
         (reply-error msg "nick sender must be an avatar"))))
@@ -748,57 +812,76 @@
   (lambda (args msg)
     (cond
       ((null? args)
-       (reply-error msg "enter requires ctx map or arrival payload"))
+       (reply-error msg "avatar entry must come from an avatar actor"))
       ((map? (car args))
        (let* ((user (msg-from msg))
               (ctx (car args))
               (kind (ctx-text ctx "kind"))
               (name (ctx-text ctx "name")))
-         (if (not (enter-ctx-valid? ctx))
-             (reply-error msg "enter requires ctx map with non-empty kind, name, nick, description")
-             (cond
-               ((equal? kind "avatar")
-                (let ((nick (ctx-text ctx "nick")))
-                  (set-claim! user ctx)
-                  (ma-send! (root) (list :arrive-user user (self) nick))
-                  (ma-reply! msg (list :ok "entering"))))
-               ((agent-kind? kind)
-                ; Direct occupant entry — msg.from IS the actor (user or agent DID).
-                ; No separate avatar actor is created; the sender occupies the room directly.
-                (let* ((actor (canonical-actor user))
-                       (nick (ctx-text ctx "nick")))
-                  (set-claim! actor ctx)
-                  (if nick (set-prop! (label-key actor) nick) #f)
-                  (add-occupant! actor)
-                  (ma-save-state!)
-                  (broadcast (string-append (speaker-name actor) " arrives."))
-                  (ma-send! actor (list :ctx
-                    (list (list :root (root))
-                          (list :avatar "")
-                          (list :nick (if nick nick ""))
-                          (list :room (self))
-                          (list :text "You arrive."))))
-                  (ma-reply! msg (list :ok "entered"))))
-               ((thing-kind? kind)
-                (let* ((actor (canonical-actor user))
-                       (label (ctx-text ctx "nick"))
-                       (token (if (non-empty-string? (ctx-text ctx "nick"))
-                                  (ctx-text ctx "nick")
-                                  name))
-                       (bound (thing-ref token)))
-                  (cond ((not (actor-token-valid? name))
-                    (reply-error msg "enter requires non-empty name token"))
-                        ((not (actor-token-valid? token))
-                         (reply-error msg "enter requires non-empty nick token"))
-                        ((and bound (not (same-actor? bound actor)))
-                         (reply-error msg "nick token is already bound to another actor"))
-                        (else
-                         (set-claim! actor ctx)
-                         (if label (set-prop! (label-key actor) label) #f)
-                         (set-thing! token actor)
-                         (ma-reply! msg (list :ok "entered"))))))
-               (else
-                (reply-error msg "unsupported ctx kind for enter"))))))
+         (cond
+           ((or (not kind) (equal? kind "") (equal? kind "avatar"))
+            (let ((avatar (ensure-avatar! user (ctx-text ctx "nick"))))
+              (ma-reply! msg (list :ok avatar))))
+           ((and (agent-kind? kind) (enter-direct-ctx-valid? ctx "agent"))
+            ; Direct occupant entry — msg.from IS the actor (user or agent DID).
+            ; No separate avatar actor is created; the sender occupies the room directly.
+            (let* ((actor (canonical-actor user))
+                   (nick (ctx-text ctx "nick")))
+              (set-claim! actor ctx)
+              (if nick (set-prop! (label-key actor) nick) #f)
+              (add-occupant! actor)
+              (ma-save-state!)
+              (broadcast (string-append (speaker-name actor) " arrives."))
+              (ma-send! actor (list :ctx
+                (list (list :protocol LAMBDA_CTX_PROTOCOL)
+                      (list :kind "agent")
+                      (list :root (root))
+                      (list :avatar "")
+                      (list :nick (if nick nick ""))
+                      (list :room (self))
+                      (list :text "You arrive."))))
+              (ma-reply! msg (list :ok "entered"))))
+           ((agent-kind? kind)
+            (reply-error msg "agent enter requires ctx map with kind, name, nick, description"))
+           ((and (thing-kind? kind) (enter-direct-ctx-valid? ctx "thing"))
+            (let* ((actor (canonical-actor user))
+                   (label (ctx-text ctx "nick"))
+                   (token (if (non-empty-string? (ctx-text ctx "nick"))
+                              (ctx-text ctx "nick")
+                              name))
+                   (bound (thing-ref token)))
+              (cond ((not (actor-token-valid? name))
+                     (reply-error msg "enter requires non-empty name token"))
+                    ((not (actor-token-valid? token))
+                     (reply-error msg "enter requires non-empty nick token"))
+                    ((and bound (not (same-actor? bound actor)))
+                     (reply-error msg "nick token is already bound to another actor"))
+                    (else
+                     (set-claim! actor ctx)
+                     (if label (set-prop! (label-key actor) label) #f)
+                     (set-thing! token actor)
+                     (ma-reply! msg (list :ok "entered"))))))
+           ((thing-kind? kind)
+            (reply-error msg "thing enter requires ctx map with kind, name, nick, description"))
+           (else
+            (reply-error msg "unsupported ctx kind for enter")))))
+      ((and (string? (car args))
+            (same-actor? (msg-from msg) (car args)))
+       (let ((avatar (car args))
+             (old-room (if (or (null? (cdr args)) (equal? (car (cdr args)) "")) #f (car (cdr args))))
+             (nick (if (or (null? (cdr args)) (null? (cdr (cdr args)))) #f (car (cdr (cdr args))))))
+         (if nick
+             (begin
+               (set-prop! (label-key avatar) nick)
+               #f)
+             #f)
+         (if (and old-room (not (same-actor? old-room (self))))
+             (ma-send! old-room (list :leave-avatar avatar (self)))
+             #f)
+         (add-occupant! avatar)
+         (add-avatar-occupant! avatar)
+         (ma-save-state!)
+         (broadcast (string-append (speaker-name avatar) " arrives."))))
       ((and (string? (car args))
             (string-prefix? "did:ma:" (car args))
             (not (null? (cdr args))))
@@ -820,8 +903,8 @@
                        (ma-send! old-room (list :leave-avatar avatar (self)))
                        #f)
                    (add-occupant! avatar)
+                     (add-avatar-occupant! avatar)
                    (ma-save-state!)
-                   (ma-send! (root) (list :arrived avatar (self)))
                    (broadcast (string-append user " arrives.")))))))
       (else
        (let* ((avatar (car args))
@@ -830,6 +913,6 @@
              (ma-send! old-room (list :leave-avatar avatar (self)))
              #f)
          (add-occupant! avatar)
+         (add-avatar-occupant! avatar)
          (ma-save-state!)
-           (ma-send! (root) (list :arrived avatar (self)))
          (broadcast (string-append (speaker-name avatar) " arrives.")))))))

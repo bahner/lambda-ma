@@ -52,8 +52,14 @@ When documenting or changing behavior, keep these contracts aligned:
 - Enter payload naming: one extensible map named `ctx` (not `attrs`) with
   required fields `kind`, `name`, `nick`, `description`.
 - Enter kind routing: room `:enter` dispatch is kind-driven for ctx payloads.
-  `ctx.kind = "avatar"` follows root arrival registration; `ctx.kind` of
-  `"thing"` or `"agent"` is categorized by room-local policy.
+  Missing kind or `ctx.kind = "avatar"` follows client/avatar entry; `ctx.kind`
+  of `"thing"` or `"agent"` is categorized by room-local policy.
+- Root actor boundary: root may create/find an avatar and ask that avatar to
+  send its current ctx to the user, but root must not send messages to rooms.
+- Avatar placement boundary: do not reintroduce generic avatar setter verbs such
+  as `:set-location` or `:set-nick`. Room entry may notify an avatar with the
+  narrow room-origin `:entered-room` event; nick changes are initiated by the
+  avatar and accepted by the room.
 - Authority model: room ownership is by user DID; avatars are delegates;
   parent authority governs `take`/`drop` flows.
 - Transfer strictness (default): thing/agent transfer calls must keep strict

@@ -2,19 +2,16 @@
 
 ## Location and occupants
 
-Root is the authoritative location registry:
-
-- `avatar:<user>` -> avatar DID-URL
-- `user:<avatar>` -> user DID
-- `room:<avatar>` -> current room DID-URL
-- `nick:<avatar>` -> non-unique display name
-- `avatars` -> known avatar DID-URLs
+Root is a deterministic avatar factory, not a location registry. It derives a
+user's avatar DID-URL from the user DID via the runtime-scoped entity-fragment
+derivation, creates the avatar only if absent, and otherwise only returns the
+avatar DID-URL.
 
 Rooms keep a local `occupants` cache for broadcast and room-local presentation. That cache is derived state, not authority.
 
 Actors do not have to be root-tracked occupants to speak. Any actor that knows
 the room DID-URL can send `:say` or `:emote`; the room broadcasts the text to
-the current root-tracked occupants.
+the current room-local occupants.
 
 ## Actor categories
 
@@ -27,11 +24,12 @@ Actors use three starting categories:
 - `thing` — a passive object with state, ownership, and location, but no agenda
    of its own.
 
-Rooms accept the category in `:enter ctx`, but do not need separate room-side
-policy for agents and things yet. From the room's point of view, avatars,
-users, agents, and things are all ordinary occupants. Root still feeds avatar
-presence, while agents and things self-enter into the room's local occupant
-cache.
+Rooms accept the category in `:enter ctx`, but clients may omit `kind` when they
+do not know their effective world kind yet. Missing `kind` means session/avatar
+entry: the room ensures the deterministic avatar and the client waits for the
+avatar to send committed `/ma/lambda/ctx/0.0.1` context back. Direct `agent` and
+`thing` entry must provide `kind`; without it, the room assigns the default
+session kind and reports that in ctx.
 
 ## Free objects and agents
 
@@ -158,22 +156,16 @@ before the exit is created.
 
 ## Context flow
 
-Zion's normal contact point is the active avatar. Root creates or finds that
-avatar and owns the authoritative placement registry, but avatar owns the client
+Zion enters by sending `:enter ctx` to the target room. The room creates or finds
+the deterministic local avatar in the background. The avatar owns the client
 context it reports to Zion: current root, avatar, room, nick, and optional text.
-Root corrects avatar placement with `:set-location`; avatar persists it and
-pushes `:ctx` to the user. Zion may cache the room for direct `:` commands, but
-plain commands are addressed to the avatar.
+Zion may cache the room for direct `:` commands, but plain commands are
+addressed to the avatar.
 
-Normal flow is push-based: whenever root registers that someone enters or
-leaves a room, root sends the affected room an event and then sends a fresh
-context snapshot.
-
-Entry event:
-
-```scheme
-(:join-avatar <avatar> <from-room-or-#f>)
-```
+New avatar init is push-based: the live avatar sends user `:ctx`. Existing
+avatars receive a room-origin `:entered-room` event and then send user `:ctx`
+themselves. Root may ask an existing avatar to resend its current ctx, but root
+must not send messages to rooms.
 
 Leave event:
 
@@ -181,31 +173,19 @@ Leave event:
 (:leave-avatar <avatar> <to-room>)
 ```
 
-Occupant context snapshot:
-
-```scheme
-(:ctx :avatars ((<avatar> <nick>) ...))
-```
-
-Rooms also accept the older `(<avatar> ...)` shape as a repair/backwards-
-compatibility input, but root now sends nick-bearing entries.
-
-Room accepts `:join-avatar`, `:leave-avatar`, and `:ctx` only from root.
-Root sends fresh occupant context to rooms after movement or nick change; rooms
-do not pull avatar context. User-facing context is sent by avatar.
+Rooms accept ordinary avatar `:enter` and target-room-origin `:leave-avatar` for
+movement cleanup. User-facing context is sent by avatar.
 
 ## Movement flow
 
-External entry uses the same exit traversal contract as ordinary movement:
+External entry is room-first:
 
-1. User asks root to enter with `:enter [nick]`.
-2. Root creates/fetches the user's avatar and replies with the avatar URL.
-3. Root sends the avatar through the stable entry exit with `:traverse`.
-4. The entry exit sends `:enter <avatar> <old-room?>` to its target room.
-5. The room asks root to register arrival with `:arrived <avatar> <target-room>`.
-6. Root updates the authoritative `room:<avatar>` register and sends
-   `:set-location` to avatar.
-7. Avatar persists the room and pushes zion context to the user.
+1. User asks the target room to enter with `:enter ctx`.
+2. Room derives the caller's deterministic avatar URL.
+3. Existing avatar: room asks avatar to set location here; avatar sends user
+   `:ctx` and room `:enter`.
+4. New avatar: room creates it with user DID as fragment hint; avatar init sends
+   user `:ctx` and room `:enter` after the avatar is live.
 
 Room-to-room movement uses the same tail of that flow inside one runtime. When
 the exit crosses to another runtime, the source avatar carries the user DID and
@@ -215,7 +195,5 @@ local avatar before publishing the new context.
 1. Avatar sends `:go <direction>` to its current room.
 2. Room sends `:traverse <avatar> <source-room> <user> <nick>` to the exit.
 3. Exit sends `:enter <user> <avatar> <exit> <nick>` to the target room.
-4. Target room asks root to register arrival with `:arrive-user <user> <target-room> <nick>`.
-5. Root creates or reuses the local avatar, updates its authoritative
-   `room:<avatar>` register, and sends fresh client context.
-6. Root pushes `:leave-avatar` + `:ctx` to the old room and `:join-avatar` + `:ctx` to the new room.
+4. Target room updates its room-local cache and asks the old room to remove the
+   avatar with `:leave-avatar` when needed.

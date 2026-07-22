@@ -33,6 +33,10 @@ pub fn set_config(entries: HashMap<String, String>) {
     CONFIG.with(|c| *c.borrow_mut() = entries);
 }
 
+pub fn config_value(key: &str) -> Option<String> {
+    CONFIG.with(|c| c.borrow().get(key).cloned())
+}
+
 /// Replace the entire in-memory props table — used by `set_state` (§3.1)
 /// to restore persisted state at load time.
 pub fn load_from_cbor(bytes: &[u8]) -> EvalResult<()> {
@@ -189,12 +193,7 @@ fn b_get_config_key(args: &[Value]) -> EvalResult<Value> {
         )));
     }
     let key = as_key("ma-get-config-key", &args[0])?;
-    Ok(CONFIG.with(|c| {
-        c.borrow()
-            .get(&key)
-            .cloned()
-            .map_or(Value::Bool(false), Value::str)
-    }))
+    Ok(config_value(&key).map_or(Value::Bool(false), Value::str))
 }
 
 #[cfg(test)]

@@ -18,7 +18,7 @@ creating, while staying small enough that a runtime can make it its own.
 ## What is here
 
 ```text
-actors/root.ma          placement registry, avatar creation, zion :ctx receipts
+actors/root.ma          deterministic avatar factory
 actors/avatar.ma        user command endpoint
 actors/room.ma          room policy, occupants, claim/owner, dig/go, exit ownership
 actors/exit.ma          traversal between rooms
