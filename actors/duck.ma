@@ -3,11 +3,11 @@
 
 (define (duck-defaults!)
   (begin
-    (if (get-prop "name") #f (set-prop! "name" "Duck"))
-    (if (get-prop "nick") #f (set-prop! "nick" "duck"))
+    (if (get-prop "name") #f (set-prop! "name" "Rubber Duckie™"))
+    (if (get-prop "nick") #f (set-prop! "nick" "Duckie"))
     (if (get-prop "description")
         #f
-        (set-prop! "description" "A curious duck that waddles around and quacks."))
+        (set-prop! "description" "A curious rubber duck that waddles around and quacks because one is never alone with a rubber duck"))
     (ma-save-state!)))
 
 (define (duck-say msg text)
