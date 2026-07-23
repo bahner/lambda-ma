@@ -199,16 +199,16 @@ External entry is room-first:
 5. Room registers entry and sends committed `:ctx` to avatar; avatar persists
    room state and forwards the ctx to user.
 
-Room-to-room movement uses the same tail of that flow inside one runtime. When
-the exit crosses to another runtime, the source avatar carries the user DID and
-nick through the exit; the target room creates or reuses that user's target-
-runtime local avatar before publishing the new context.
+Room-to-room movement uses the same avatar handshake as external entry. The
+source avatar carries the user DID and nick through the exit; the target room
+creates or reuses that user's deterministic local avatar before publishing the
+new context.
 
 1. Avatar sends `:go <direction>` to its current room.
 2. Room sends `:traverse <avatar-did-url> <source-room-did-url> <user> <nick>` to the exit.
 3. Exit sends `:enter <user> <avatar-did-url> <source-room-did-url> <nick>` to the target room.
-4. Same-runtime target rooms admit that avatar directly. Cross-runtime target
-   rooms create or reuse the deterministic target-runtime avatar for `user`.
+4. Target rooms ask the deterministic local avatar for `user` to enter the room;
+   stale or foreign source avatars are used only for old-room cleanup.
 5. Target room asks the old room to remove the source avatar with
    `:leave-avatar` when needed.
 

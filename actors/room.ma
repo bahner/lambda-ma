@@ -152,9 +152,10 @@
   (let ((n (nick-or-default nick))
         (r (root)))
     (string-append
-      "(set-prop! \"user\" \"" user "\")\n"
+      "(set-prop! \"did\" \"" user "\")\n"
       "(set-prop! \"root\" \"" r "\")\n"
       "(set-prop! \"nick\" \"" n "\")\n"
+      "(ma-save-state!)\n"
       "(ma-send! \"" room "\" (list :enter (ma-get-config-key \"self\") #f \"" n "\"))\n")))
 
 (define (ensure-avatar! user nick)
@@ -184,29 +185,41 @@
   (list :ctx
     (list (list :protocol LAMBDA_CTX_PROTOCOL)
           (list :kind kind)
-          (list :root (root))
+          (list :root (canonical-actor (root)))
           (list :avatar "")
           (list :nick (if nick nick ""))
-          (list :room (self))
+          (list :room (canonical-actor (self)))
           (list :text text))))
 
 (define (avatar-room-ctx avatar nick text)
   (list :ctx
     (list (list :protocol LAMBDA_CTX_PROTOCOL)
           (list :kind "avatar")
-          (list :root (root))
+          (list :root (canonical-actor (root)))
           (list :avatar (canonical-actor avatar))
           (list :nick (nick-or-default nick))
-          (list :room (self))
+          (list :room (canonical-actor (self)))
           (list :text text))))
 
 (define (request-avatar-entry! user nick)
   (let* ((avatar (avatar-for-user user))
          (n (nick-or-default nick)))
     (if (entity-live? avatar)
-        (ma-send! avatar (list :enter-room (self)))
+        (ma-send! avatar (list :enter-room (self) user (avatar-fragment user) n))
         (ma-create-actor AVATAR_KIND #f (avatar-init user n (self)) user))
     avatar))
+
+(define (expected-avatar? user avatar)
+  (same-actor? avatar (avatar-for-user user)))
+
+(define (handle-avatar-arrival! user avatar old-room nick)
+  (if (and (local-actor-ref? avatar)
+           (entity-live? avatar)
+           (expected-avatar? user avatar))
+      (ma-send! avatar (list :enter-room (self) user (avatar-fragment user) (nick-or-default nick)))
+      (begin
+        (notify-old-room! old-room avatar)
+        (request-avatar-entry! user nick))))
 
 (define (handle-agent-enter! msg user ctx)
   (let* ((actor (canonical-actor user))
@@ -956,18 +969,7 @@
               (nick (if (or (null? rest) (null? (cdr rest)) (null? (cdr (cdr rest)))) #f (car (cdr (cdr rest))))))
          (if (not avatar)
              #f
-             (if (local-actor-ref? avatar)
-                 (begin
-                   (set-label! avatar nick)
-                   (notify-old-room! old-room avatar)
-                     (if (add-avatar-presence! avatar)
-                       (broadcast (string-append user " arrives."))
-                       #f)
-                   (ma-save-state!)
-                   (ma-send! avatar (avatar-room-ctx avatar nick "You arrive.")))
-                 (begin
-                   (notify-old-room! old-room avatar)
-                   (request-avatar-entry! user nick))))))
+             (handle-avatar-arrival! user avatar old-room nick))))
       (else
        (let* ((avatar (car args))
               (old-room (if (or (null? (cdr args)) (equal? (car (cdr args)) "")) #f (car (cdr args)))))

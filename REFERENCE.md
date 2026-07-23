@@ -180,9 +180,8 @@ Rules:
 3. Exit sends `:enter` to target room with either
    `<user> <avatar-did-url> <old-room-did-url> [nick]` or
    `<avatar-did-url> <old-room-did-url?>` shape.
-4. Same-runtime target rooms admit that avatar into their local cache. Cross-
-   runtime target rooms create or reuse the deterministic target-runtime avatar
-   for `user`; the source avatar is used only to clean up the old room.
+4. Target rooms ask the deterministic local avatar for `user` to enter the
+   room. Stale or foreign source avatars are used only to clean up the old room.
 5. Target room asks the old room to remove the source avatar with
    `:leave-avatar` when needed.
 

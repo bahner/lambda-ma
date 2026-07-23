@@ -1,11 +1,12 @@
 ; Locked avatar actor.
-; Root owns protected state. The user may call exposed command methods only.
+; Root owns protected state. The controlling DID may call exposed command methods only.
 
 (define (self) (ma-get-config-key "self"))
 (define (runtime) (ma-get-config-key "runtime"))
 (define LAMBDA_CTX_PROTOCOL "/ma/lambda/ctx/0.0.1")
+(define ENTITY_FRAGMENT_CONTEXT "ma entity-fragment v1")
 (define (entity-url fragment) (string-append (runtime) "#" fragment))
-(define (user) (get-prop "user"))
+(define (did) (get-prop "did"))
 (define (root)
   (let ((configured (ma-get-config-key "root")))
     (if configured configured (entity-url "root"))))
@@ -20,6 +21,36 @@
        (not (local-fragment? actor))))
 (define (same-actor? a b)
   (equal? (canonical-actor a) (canonical-actor b)))
+(define (entity-id) (ma-get-config-key "id"))
+(define (avatar-fragment did)
+  (ma-derived-id ENTITY_FRAGMENT_CONTEXT did 8))
+(define (valid-did? value)
+  (and (string? value) (string-prefix? "did:ma:" value)))
+(define (ensure-did! expected-did expected-id)
+  (if (and (valid-did? expected-did)
+           (equal? expected-id (entity-id)))
+      (let ((current (did)))
+        (cond ((not current)
+               (begin
+                 (set-prop! "did" expected-did)
+                 (ma-save-state!)
+                 #t))
+              ((equal? current expected-did) #t)
+              (else #f)))
+      #f))
+(define (ensure-msg-did! msg)
+  (let ((candidate (msg-from msg)))
+    (if (and (valid-did? candidate)
+             (equal? (avatar-fragment candidate) (entity-id)))
+        (let ((current (did)))
+          (cond ((not current)
+                 (begin
+                   (set-prop! "did" candidate)
+                   (ma-save-state!)
+                   #t))
+                ((equal? current candidate) #t)
+                (else #f)))
+        #f)))
 (define (room) (get-prop "room"))
 (define (nick)
   (let ((value (get-prop "nick")))
@@ -48,9 +79,9 @@
 (define (start-room) (ma-get-config-key "start"))
 
 (define (send-ctx text)
-  (ma-send! (user) (ctx-term text)))
+  (ma-send! (did) (ctx-term text)))
 
-(define (user? msg) (equal? (msg-from msg) (user)))
+(define (did? msg) (ensure-msg-did! msg))
 (define (root? msg) (same-actor? (msg-from msg) (root)))
 (define (room? msg)
   (let ((current (room)))
@@ -79,8 +110,11 @@
          (same-actor? (msg-from msg) target-room))))
 
 (define (enter-room-authorised? args msg)
-  (or (root? msg)
-      (and (not (null? args))
+  (and (not (null? args))
+       (not (null? (cdr args)))
+       (not (null? (cdr (cdr args))))
+       (ensure-did! (car (cdr args)) (car (cdr (cdr args))))
+       (or (root? msg)
            (same-actor? (msg-from msg) (car args)))))
 
 (define (join-words words)
@@ -88,8 +122,8 @@
         ((null? (cdr words)) (car words))
         (else (string-append (car words) " " (join-words (cdr words))))))
 
-(define (require-user msg thunk)
-  (if (user? msg)
+(define (require-did msg thunk)
+  (if (did? msg)
       (thunk)
       (ma-reply! msg (list :error "avatar command denied"))))
 
@@ -99,14 +133,14 @@
         (ma-send! target (cons verb args))
         (let ((start (start-room)))
           (if start
-              (ma-send! (user) (ctx-term-room start #f))
-              (ma-send! (user) (list :print "You are nowhere.")))))))
+              (ma-send! (did) (ctx-term-room start #f))
+              (ma-send! (did) (list :print "You are nowhere.")))))))
 
-(define (send-room-as-user verb args)
-  (send-room verb (cons (user) args)))
+(define (send-room-as-did verb args)
+  (send-room verb (cons (did) args)))
 
-(define (send-user-text text)
-  (ma-send! (user) (list :print text)))
+(define (send-did-text text)
+  (ma-send! (did) (list :print text)))
 
 (define (reply-ok-silent msg)
   (ma-reply! msg (list :ok "")))
@@ -146,7 +180,17 @@
   (lambda (args msg)
     (if (and (enter-room-authorised? args msg) (not (null? args)))
         (let ((target-room (car args))
-              (old-room (room)))
+              (old-room (room))
+              (requested-nick (if (or (null? (cdr args))
+                                      (null? (cdr (cdr args)))
+                                      (null? (cdr (cdr (cdr args)))))
+                                  #f
+                                  (car (cdr (cdr (cdr args)))))))
+          (if (non-empty-string? requested-nick)
+              (begin
+                (set-prop! "nick" requested-nick)
+                (ma-save-state!))
+              #f)
           (ma-send! target-room (list :enter (self) old-room (nick))))
         #f)))
 
@@ -160,32 +204,32 @@
                 (set-prop! "room" (ctx-value payload :room))
                 (set-prop! "nick" (ctx-value payload :nick))
                 (ma-save-state!)
-                (ma-send! (user) (cons :ctx args)))
+                (ma-send! (did) (cons :ctx args)))
               #f)))))
 
 (set-method! :ctx?
   (lambda (args msg)
-    (require-user msg
+    (require-did msg
       (lambda ()
         (ma-reply! msg (list :ok (ctx-term #f)))))))
 
 (set-method! :print
   (lambda (args msg)
-    (ma-send! (user) (list :print (join-words args)))))
+    (ma-send! (did) (list :print (join-words args)))))
 
 (set-method! :here?
   (lambda (args msg)
-    (require-user msg
+    (require-did msg
       (lambda ()
         (ma-reply! msg (list :ok (room)))))))
 
 (set-method! :help
   (lambda (args msg)
-    (require-user msg
+    (require-did msg
       (lambda ()
         (cond ((null? args)
                (begin
-                 (send-user-text (avatar-help-text))
+                 (send-did-text (avatar-help-text))
                  (ma-reply! msg (list :ok "help"))))
               ((equal? (car args) "here")
                (begin
@@ -193,12 +237,12 @@
                  (ma-reply! msg (list :ok "help here"))))
               (else
                (begin
-                 (send-user-text (unknown-help-text (car args)))
+                 (send-did-text (unknown-help-text (car args)))
                  (ma-reply! msg (list :ok "help")))))))))
 
 (set-method! :nick
   (lambda (args msg)
-    (require-user msg
+    (require-did msg
       (lambda ()
         (if (null? args)
             (ma-reply! msg (list :ok (nick)))
@@ -211,72 +255,72 @@
 
 (set-method! :look
   (lambda (args msg)
-    (require-user msg
+    (require-did msg
       (lambda ()
         (send-room :look '())
         (reply-ok-silent msg)))))
 
 (set-method! :exits?
   (lambda (args msg)
-    (require-user msg
+    (require-did msg
       (lambda ()
         (send-room :exits? '())
         (reply-ok-silent msg)))))
 
 (set-method! :who?
   (lambda (args msg)
-    (require-user msg
+    (require-did msg
       (lambda ()
         (send-room :who? '())
         (reply-ok-silent msg)))))
 
 (set-method! :say
   (lambda (args msg)
-    (require-user msg
+    (require-did msg
       (lambda ()
         (send-room :say (list (join-words args)))
         (reply-ok-silent msg)))))
 
 (set-method! :emote
   (lambda (args msg)
-    (require-user msg
+    (require-did msg
       (lambda ()
         (send-room :emote (list (join-words args)))
         (reply-ok-silent msg)))))
 
 (set-method! :claim
   (lambda (args msg)
-    (require-user msg
+    (require-did msg
       (lambda ()
-        (send-room-as-user :claim args)
+        (send-room-as-did :claim args)
         (reply-ok-silent msg)))))
 
 (set-method! :owner
   (lambda (args msg)
-    (require-user msg
+    (require-did msg
       (lambda ()
-        (send-room-as-user :owner args)
+        (send-room-as-did :owner args)
         (reply-ok-silent msg)))))
 
 (set-method! :dig
   (lambda (args msg)
-    (require-user msg
+    (require-did msg
       (lambda ()
-        (send-room-as-user :dig args)
+        (send-room-as-did :dig args)
         (reply-ok-silent msg)))))
 
 (set-method! :prop
   (lambda (args msg)
-    (require-user msg
+    (require-did msg
       (lambda ()
-        (send-room-as-user :prop args)
+        (send-room-as-did :prop args)
         (reply-ok-silent msg)))))
 
 (set-method! :go
   (lambda (args msg)
-    (require-user msg
+    (require-did msg
       (lambda ()
-        (send-room-as-user :go args)
+        (send-room-as-did :go args)
         (reply-ok-silent msg)))))
 
 (set-method! :drop-thing
@@ -284,18 +328,18 @@
     (if (room-caller? msg)
         (if (or (null? args) (null? (cdr args)) (null? (cdr (cdr args))))
             #f
-            (let ((user (car args))
+            (let ((did (car args))
                   (thing (car (cdr args)))
           (target-parent (car (cdr (cdr args))))
           (ctx (if (or (null? (cdr (cdr (cdr args)))) (not (map? (car (cdr (cdr (cdr args))))))) #f (car (cdr (cdr (cdr args)))))))
         (if ctx
-          (ma-send! thing (list :drop user target-parent ctx))
-          (ma-send! thing (list :drop user target-parent)))))
+          (ma-send! thing (list :drop did target-parent ctx))
+          (ma-send! thing (list :drop did target-parent)))))
         #f)))
 
 (set-default-method!
   (lambda (verb args msg)
-    (require-user msg
+    (require-did msg
       (lambda ()
         (send-room verb args)
         (reply-ok-silent msg)))))

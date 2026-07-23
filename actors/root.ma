@@ -65,16 +65,17 @@
   (let ((n (nick-or-default nick))
         (r (self)))
     (string-append
-      "(set-prop! \"user\" \"" user "\")\n"
+      "(set-prop! \"did\" \"" user "\")\n"
       "(set-prop! \"root\" \"" r "\")\n"
       "(set-prop! \"nick\" \"" n "\")\n"
+      "(ma-save-state!)\n"
       "(ma-send! \"" room "\" (list :enter (ma-get-config-key \"self\") #f \"" n "\"))\n")))
 
 (define (ensure-avatar user nick room)
   (let ((avatar (avatar-for-user user)))
     (if (entity-live? avatar)
         (begin
-          (ma-send! avatar (list :enter-room room))
+          (ma-send! avatar (list :enter-room room user (avatar-fragment user) (nick-or-default nick)))
           avatar)
         (entity-url (ma-create-actor AVATAR_KIND #f (avatar-init user nick room) user)))))
 

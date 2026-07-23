@@ -80,6 +80,7 @@ use crate::value::{EvalError, EvalResult, Value};
 
 const ROOT_KIND: &str = "/ma/root/0.0.1";
 const ROOM_KIND: &str = "/ma/room/0.0.1";
+const AVATAR_KIND: &str = "/ma/avatar/0.0.1";
 
 /// Register `ma-create-actor` into `env`.
 pub fn install(env: &Rc<Env>) {
@@ -100,9 +101,12 @@ pub fn install(env: &Rc<Env>) {
 /// `(ma-derived-id context hint bytes)` — runtime-scoped deterministic ID.
 fn b_ma_derived_id(args: &[Value]) -> EvalResult<Value> {
     let kind = crate::state::config_value("kind");
-    if !matches!(kind.as_deref(), Some(ROOT_KIND) | Some(ROOM_KIND)) {
+    if !matches!(
+        kind.as_deref(),
+        Some(ROOT_KIND) | Some(ROOM_KIND) | Some(AVATAR_KIND)
+    ) {
         return Err(EvalError::new(
-            "ma-derived-id: only root and room actors may derive runtime IDs",
+            "ma-derived-id: only root, room, and avatar actors may derive runtime IDs",
         ));
     }
 
@@ -341,13 +345,26 @@ mod tests {
     }
 
     #[test]
-    fn derived_id_is_root_only() {
+    fn derived_id_is_limited_to_root_room_and_avatar() {
         let env = env_with_actor();
-        set_kind("/ma/avatar/0.0.1");
+        set_kind("/ma/thing/0.0.1");
         let err = crate::eval_all(r#"(ma-derived-id "ctx" "hint" 8)"#, &env).unwrap_err();
         assert!(
             err.0
-                .contains("only root and room actors may derive runtime IDs"),
+                .contains("only root, room, and avatar actors may derive runtime IDs"),
+            "{}",
+            err.0
+        );
+    }
+
+    #[test]
+    fn derived_id_is_available_to_avatar() {
+        let env = env_with_actor();
+        set_kind(AVATAR_KIND);
+        let err = crate::eval_all(r#"(ma-derived-id "ctx" "hint" 8)"#, &env).unwrap_err();
+        assert!(
+            err.0
+                .contains("ma_derived_id is only available compiled to wasm32"),
             "{}",
             err.0
         );

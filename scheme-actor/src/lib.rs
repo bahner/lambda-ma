@@ -177,6 +177,39 @@ mod tests {
     }
 
     #[test]
+    fn room_ctx_terms_use_fully_qualified_actor_refs() {
+        let env = room_env();
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:k51target".to_string());
+        config.insert("self".to_string(), "#construct".to_string());
+        config.insert("root".to_string(), "#root".to_string());
+        crate::state::set_config(config);
+                eval_all(
+                        r##"(define (ctx-term-value term key)
+    (let loop ((pairs (car (cdr term))))
+        (cond ((null? pairs) #f)
+                    ((equal? (car (car pairs)) key) (car (cdr (car pairs))))
+                    (else (loop (cdr pairs))))))
+(define avatar-ctx (avatar-room-ctx "#alice" "Alice" "You arrive."))"##,
+                        &env,
+                )
+        .unwrap();
+
+        assert_eq!(
+            eval_str("(ctx-term-value avatar-ctx :root)", &env),
+            "did:ma:k51target#root"
+        );
+        assert_eq!(
+            eval_str("(ctx-term-value avatar-ctx :avatar)", &env),
+            "did:ma:k51target#alice"
+        );
+        assert_eq!(
+            eval_str("(ctx-term-value avatar-ctx :room)", &env),
+            "did:ma:k51target#construct"
+        );
+    }
+
+    #[test]
     fn random_builtin_returns_integer_in_range() {
         let env = new_root_env();
         let value = eval_int("(random 3)", &env);
