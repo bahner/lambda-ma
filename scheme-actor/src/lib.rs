@@ -72,6 +72,7 @@ pub fn on_message(input: Vec<u8>) -> FnResult<Vec<u8>> {
 mod tests {
     use super::*;
     use ciborium::Value as Cbor;
+    use std::rc::Rc;
 
     fn run(src: &str) -> Value {
         let env = new_root_env();
@@ -88,9 +89,44 @@ mod tests {
         crate::state::load_from_cbor(&empty_state_cbor()).unwrap();
         let env = new_root_env();
         crate::state::install(&env);
+        crate::msg::install(&env);
         eval_all(include_str!("../stdlib.ma"), &env).unwrap();
         eval_all(include_str!("../../actors/room.ma"), &env).unwrap();
+        eval_all(
+            "(define (ma-send! target term) #f) (define (ma-reply! msg term) #f) (define (ma-save-state!) #f)",
+            &env,
+        )
+        .unwrap();
         env
+    }
+
+    fn agent_env() -> Rc<Env> {
+        crate::state::load_from_cbor(&empty_state_cbor()).unwrap();
+        let env = new_root_env();
+        crate::state::install(&env);
+        crate::msg::install(&env);
+        eval_all(include_str!("../stdlib.ma"), &env).unwrap();
+        eval_all(include_str!("../../actors/agent.ma"), &env).unwrap();
+        eval_all(
+            "(define (ma-send! target term) #f) (define (ma-reply! msg term) #f) (define (ma-save-state!) #f)",
+            &env,
+        )
+        .unwrap();
+        env
+    }
+
+    fn sample_msg(from: &str, to: &str) -> Rc<crate::msg::MsgRecord> {
+        Rc::new(crate::msg::MsgRecord {
+            id: "msg-1".to_string(),
+            from: from.to_string(),
+            to: to.to_string(),
+            created_at: 0,
+            exp: 0,
+            reply_to: None,
+            msg_type: "application/vnd.ma.rpc.request".to_string(),
+            content_type: "application/vnd.ma.term".to_string(),
+            content: Value::symbol(":test"),
+        })
     }
 
     fn eval_str(src: &str, env: &Rc<Env>) -> String {
@@ -169,6 +205,94 @@ mod tests {
     }
 
     #[test]
+    fn room_leave_occupant_canonicalises_sender() {
+        let env = room_env();
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#old-room".to_string());
+        crate::state::set_config(config);
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_msg("#rms", "did:ma:runtime#old-room")),
+        );
+
+        eval_all(
+            r#"
+            (set-label! "did:ma:runtime#rms" "rms")
+            (add-occupant! "did:ma:runtime#rms")
+            (on-event :leave-occupant '() msg)
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        assert_eq!(eval_str("(occupants-text)", &env), "Occupants: none.");
+    }
+
+    #[test]
+    fn agent_commits_parent_from_pending_room_ctx() {
+        let env = agent_env();
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#rms".to_string());
+        crate::state::set_config(config);
+
+        eval_all(
+            r#"
+            (set-prop! "parent" "did:ma:runtime#room-b")
+            (enter "did:ma:runtime#room-a")
+            "#,
+            &env,
+        )
+        .unwrap();
+        assert_eq!(eval_str("(pending-room)", &env), "did:ma:runtime#room-a");
+
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_msg(
+                "did:ma:runtime#room-a",
+                "did:ma:runtime#rms",
+            )),
+        );
+        eval_all(
+            r#"
+            ((find-method :ctx)
+              (list (list (list :protocol LAMBDA_CTX_PROTOCOL)
+                          (list :kind "agent")
+                          (list :room "did:ma:runtime#room-a")))
+              msg)
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        assert_eq!(eval_str("(parent)", &env), "did:ma:runtime#room-a");
+        assert_eq!(eval_str("(pending-room)", &env), "");
+    }
+
+    #[test]
+    fn agent_does_not_route_new_move_while_entry_pending() {
+        let env = agent_env();
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_msg("did:ma:owner", "did:ma:runtime#rms")),
+        );
+        eval_all(
+            r#"
+            (set-prop! "parent" "did:ma:runtime#room-b")
+            (set-prop! "pending-room" "did:ma:runtime#room-a")
+            (define (ma-send! target term)
+              (inc-prop! "sent-count" 1))
+            ((find-method :move) '() msg)
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        assert!(eval_bool("(not (has-prop? \"sent-count\"))", &env));
+    }
+
+    #[test]
     fn room_move_selects_an_available_exit() {
         let env = room_env();
         assert!(eval_bool("(not (random-exit-direction))", &env));
@@ -193,6 +317,19 @@ mod tests {
             eval_str("(exit-init \"dør\" \"did:ma:runtime#kitchen\")", &env),
             "(set-prop! \"direction\" \"dør\")\n(set-prop! \"target-room\" \"did:ma:runtime#kitchen\")\n(ma-save-state!)\n"
         );
+    }
+
+    #[test]
+    fn room_remembers_named_dig_target_for_idempotency() {
+        let env = room_env();
+        eval_all("(remember-exit-target! \"dør\" \"did:ma:runtime#kitchen\" \"køkken\")", &env)
+            .unwrap();
+
+        assert_eq!(
+            eval_str("(remembered-new-room-target \"dør\" \"køkken\")", &env),
+            "did:ma:runtime#kitchen"
+        );
+        assert!(eval_bool("(not (remembered-new-room-target \"dør\" \"stue\"))", &env));
     }
 
     #[test]

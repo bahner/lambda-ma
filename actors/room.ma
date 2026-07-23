@@ -534,6 +534,8 @@
              (loop (cdr xs) changed))))))
 
 (define (exit-key direction) (string-append "exit:" direction))
+(define (exit-target-key direction) (string-append "exit-target:" direction))
+(define (exit-target-name-key direction) (string-append "exit-target-name:" direction))
 
 (define (pending-link-key direction) (string-append "pending-link:" direction))
 (define (pending-link-user-key direction) (string-append "pending-link-user:" direction))
@@ -545,11 +547,24 @@
     (del-prop! (pending-link-user-key direction))
     (del-prop! (pending-link-requester-key direction))))
 
-(define (create-exit! direction target-room)
+(define (remember-exit-target! direction target-room target-name)
+  (begin
+    (set-prop! (exit-target-key direction) target-room)
+    (if target-name
+        (set-prop! (exit-target-name-key direction) target-name)
+        (del-prop! (exit-target-name-key direction)))))
+
+(define (remembered-new-room-target direction target-name)
+  (if (and target-name (equal? (get-prop (exit-target-name-key direction)) target-name))
+      (get-prop (exit-target-key direction))
+      #f))
+
+(define (create-exit! direction target-room target-name)
   (let* ((exit-fragment (ma-create-actor EXIT_KIND #f (exit-init direction target-room)))
          (exit (entity-url exit-fragment)))
     (set-prop! (exit-key direction) exit)
     (put-exit! direction exit)
+    (remember-exit-target! direction target-room target-name)
     exit))
 
 (define (room-init name owner-did custom-init)
@@ -857,7 +872,7 @@
                        (ma-send! requester (list :print "You no longer own this room."))))
                     (else
                      (begin
-                       (create-exit! direction target-room)
+                       (create-exit! direction target-room #f)
                        (clear-pending-link! direction)
                        (ma-save-state!)
                        (broadcast (string-append user " digs " direction "."))
@@ -877,14 +892,21 @@
               (let* ((target (dig-target-text dig-args))
                      (custom-init (dig-custom-init-text dig-args))
                      (custom-behaviour (dig-custom-behaviour-ref dig-args))
-                     (existing-room (existing-room-target target)))
+                     (existing-room (existing-room-target target))
+                     (remembered-room (if (or existing-room custom-init custom-behaviour)
+                                          #f
+                                          (remembered-new-room-target direction target))))
                 (cond ((and existing-room (or custom-init custom-behaviour))
                        (reply-to-sender msg "Custom room code only applies when digging a new room."))
                       (existing-room
                        (request-existing-link! msg user direction existing-room))
+                      (remembered-room
+                       (begin
+                         (reply-to-sender msg (string-append "Exit " direction " already leads to " target "."))
+                         (enter-dig-target! (msg-from msg) user remembered-room)))
                       (else
                        (let ((target-room (entity-url (ma-create-actor ROOM_KIND custom-behaviour (room-init target user custom-init)))))
-                         (create-exit! direction target-room)
+                         (create-exit! direction target-room target)
                          (ma-save-state!)
                          (broadcast (string-append user " digs " direction "."))
                          (reply-to-sender msg (string-append "You dig " direction " and open a new exit."))

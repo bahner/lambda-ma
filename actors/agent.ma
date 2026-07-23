@@ -45,6 +45,9 @@
   (let ((p (get-prop "pending-room")))
     (if p p "")))
 
+(define (movement-pending?)
+  (not (equal? (pending-room) "")))
+
 (define (set-pending-room! room)
   (set-prop! "pending-room" room)
   (ma-save-state!))
@@ -187,16 +190,20 @@
           (reply-ok msg "queued")))))
 
 (define (move-to-room! target-room source-room)
-  (if (same-actor? source-room (parent))
+  (if (and (not (movement-pending?))
+           (same-actor? source-room (parent)))
       (begin
         (leave-current-parent!)
         (enter (canonical-actor target-room)))
       #f))
 
 (define (agent-go! args msg)
-  (if (movement-caller? msg)
-      (send-parent-room! msg (cons :go args))
-      (reply-error msg "only a free agent or owner may move this agent")))
+  (cond ((movement-pending?)
+         (reply-error msg "movement already pending"))
+        ((movement-caller? msg)
+         (send-parent-room! msg (cons :go args)))
+        (else
+         (reply-error msg "only a free agent or owner may move this agent"))))
 
 (set-method! :about
   (lambda (args msg)
@@ -229,9 +236,12 @@
 
 (set-method! :move
   (lambda (args msg)
-    (if (movement-caller? msg)
-        (send-parent-room! msg (list :move))
-        (reply-error msg "only a free agent or owner may move this agent"))))
+    (cond ((movement-pending?)
+           (reply-error msg "movement already pending"))
+          ((movement-caller? msg)
+           (send-parent-room! msg (list :move)))
+          (else
+           (reply-error msg "only a free agent or owner may move this agent")))))
 
 (set-method! :enter-room
   (lambda (args msg)
