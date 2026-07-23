@@ -563,7 +563,8 @@
 (define (exit-init direction target-room)
   (string-append
     "(set-prop! \"direction\" \"" direction "\")\n"
-    "(set-prop! \"target-room\" \"" target-room "\")"))
+    "(set-prop! \"target-room\" \"" target-room "\")\n"
+    "(ma-save-state!)\n"))
 
 (define (dig-target-args args)
   (if (null? args)

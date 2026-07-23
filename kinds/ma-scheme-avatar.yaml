@@ -1,0 +1,4 @@
+protocol: /ma/avatar/0.0.1
+extends: /ma/scheme/actor/0.0.1
+behaviour:
+  "/": __AVATAR_BEHAVIOUR_CID__

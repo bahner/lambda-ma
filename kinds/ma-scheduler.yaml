@@ -1,0 +1,5 @@
+protocol: /ma/scheduler/0.0.1
+type: native
+attributes:
+  stateful: true
+  genesis: true

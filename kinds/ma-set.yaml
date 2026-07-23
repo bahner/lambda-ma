@@ -1,0 +1,10 @@
+protocol: /ma/python/set/0.0.1
+cid:
+  "/": bafybeihpyclh2jjykfahseoculz3y3rysohl3g7gqnjz5xsrty6xfobwfi
+type: extism
+attributes:
+  wasi: false
+  stateful: true
+host_functions:
+  - ma_set_state
+  - ma_reply

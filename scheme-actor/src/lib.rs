@@ -177,6 +177,25 @@ mod tests {
     }
 
     #[test]
+    fn room_exit_lookup_accepts_non_ascii_direction() {
+        let env = room_env();
+        eval_all("(put-exit! \"dør\" \"did:ma:runtime#door-exit\")", &env).unwrap();
+
+        assert_eq!(eval_str("(exits-text)", &env), "Exits: dør");
+        assert_eq!(eval_str("(exit-target \"dør\")", &env), "did:ma:runtime#door-exit");
+    }
+
+    #[test]
+    fn room_exit_init_persists_exit_state() {
+        let env = room_env();
+
+        assert_eq!(
+            eval_str("(exit-init \"dør\" \"did:ma:runtime#kitchen\")", &env),
+            "(set-prop! \"direction\" \"dør\")\n(set-prop! \"target-room\" \"did:ma:runtime#kitchen\")\n(ma-save-state!)\n"
+        );
+    }
+
+    #[test]
     fn room_ctx_terms_use_fully_qualified_actor_refs() {
         let env = room_env();
         let mut config = std::collections::HashMap::new();

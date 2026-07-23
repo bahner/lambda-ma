@@ -1,0 +1,4 @@
+protocol: /ma/exit/0.0.1
+extends: /ma/scheme/actor/0.0.1
+behaviour:
+  "/": __EXIT_BEHAVIOUR_CID__

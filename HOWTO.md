@@ -428,7 +428,8 @@ custom code. To add code to an already-existing room, enter it and use
 
 ## Modify λ-間 itself
 
-The actor behaviours live in `actors/`:
+The kind definitions live in `kinds/`, and the actor behaviours live in
+`actors/`:
 
 ```text
 actors/root.ma
@@ -440,6 +441,11 @@ actors/exit.ma
 To change the default room behaviour, edit `actors/room.ma`. To change movement
 or user commands, start with `actors/avatar.ma` and `actors/room.ma`. To change
 world entry and zion context, start with `actors/root.ma`.
+
+To change a kind descriptor, edit the matching `kinds/*.yaml` file. `make`
+generates the `runtime.kinds` bootstrap map from those files; keep example
+descriptors with placeholder CIDs out of `BOOTSTRAP_KIND_FILES` until they are
+ready to publish.
 
 After editing, regenerate and test the bootstrap:
 

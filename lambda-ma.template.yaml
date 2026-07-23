@@ -1,5 +1,5 @@
 # λ-間 bootstrap template.
-# Edit this file or actors/*.ma, then run `make`.
+# Edit this file, kinds/*.yaml, or actors/*.ma, then run `make`.
 # Generated output is written to dist/lambda-ma.yaml.
 
 runtime:
@@ -20,62 +20,7 @@ runtime:
       - rpc
 
   kinds:
-    /ma/scheme/actor/0.0.1:
-      cid:
-        "/": __SCHEME_ACTOR_CID__
-      type: extism
-      behaviour:
-        "/": __SCHEME_STDLIB_CID__
-      attributes:
-        wasi: false
-        stateful: true
-      host_functions:
-        - ma_reply
-        - ma_set_state
-        - ma_send
-        - ma_ipfs_include
-        - ma_create_entity
-        - ma_entity_exists
-        - ma_derived_id
-        - ma_set_behaviour
-
-    /ma/root/0.0.1:
-      extends: /ma/scheme/actor/0.0.1
-      attributes:
-        genesis: true
-      behaviour:
-        "/": __ROOT_BEHAVIOUR_CID__
-
-    /ma/avatar/0.0.1:
-      extends: /ma/scheme/actor/0.0.1
-      behaviour:
-        "/": __AVATAR_BEHAVIOUR_CID__
-
-    /ma/room/0.0.1:
-      extends: /ma/scheme/actor/0.0.1
-      behaviour:
-        "/": __ROOM_BEHAVIOUR_CID__
-
-    /ma/exit/0.0.1:
-      extends: /ma/scheme/actor/0.0.1
-      behaviour:
-        "/": __EXIT_BEHAVIOUR_CID__
-
-    /ma/scheme/agent/0.0.1:
-      extends: /ma/scheme/actor/0.0.1
-      behaviour:
-        "/": __AGENT_BEHAVIOUR_CID__
-
-    /ma/thing/0.0.1:
-      extends: /ma/scheme/actor/0.0.1
-      behaviour:
-        "/": __THING_BEHAVIOUR_CID__
-
-    /ma/scheduler/0.0.1:
-      type: native
-      attributes:
-        stateful: true
-        genesis: true
+  # __KIND_DEFINITIONS__
 
   entities:
     scheduler:

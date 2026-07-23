@@ -23,11 +23,12 @@ actors/avatar.ma        user command endpoint
 actors/room.ma          room policy, occupants, claim/owner, dig/go, exit ownership
 actors/exit.ma          traversal between rooms
 actors/python/          reserved for Python actors when a concrete feature needs them
+kinds/                  kind definitions used by the generated bootstrap
 scheme-actor/           generic ma-scheme actor Wasm crate and stdlib
 Makefile                publishes actor sources and generates dist/lambda-ma.yaml
 ```
 
-The generated bootstrap currently contains only what this MVP needs: the generic ma-scheme actor kind built from `scheme-actor/`, a genesis variant, the λ-間 actor kinds, the scheduler, `#root`, and the initial `#construct` room.
+The generated bootstrap reads its kind registry from `kinds/*.yaml`, then fills in CIDs for the local ma-scheme actor and actor behaviour sources. It currently includes the generic ma-scheme actor kind built from `scheme-actor/`, the λ-間 actor kinds, the scheduler, `#root`, the initial `#construct` room, and the ready Python kind descriptors kept in `kinds/`.
 
 The bundled ma-scheme actor implements the core `random` builtin from
 `ma-scheme-v1`: `(random n)` returns a non-cryptographic integer in `[0,n)`.
@@ -37,7 +38,7 @@ capabilities, tokens, proofs, authentication challenges, or anything where
 prediction changes authority or privacy. The reference implementation uses a
 runtime/entity-seeded 64-bit PRNG.
 
-Python actors are intentionally not bulk-copied yet. The existing Python actor libraries still live in the workspace-level `python-ma-actors` repo; they should move into `actors/python/` when a concrete λ-間 feature uses them, along with a Makefile path that builds their Wasm and wires their kind CIDs into the generated bootstrap.
+Python actor libraries are intentionally not bulk-copied yet. Their reusable kind descriptors live in `kinds/`; actor source and build paths should move into `actors/python/` when a concrete λ-間 feature uses them.
 
 For a full first-run guide, including Kubo/IPFS setup, installing `ma`,
 generating `dist/lambda-ma.yaml`, bootstrapping a runtime, generating a reusable

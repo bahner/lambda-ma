@@ -1,0 +1,11 @@
+protocol: /ma/python/room/0.0.1
+cid:
+  "/": bafybeihwot7j6lxqiuzrfboyo4ie5olochmc7mgcu5xutbs2tscwxvfhhu
+type: extism
+attributes:
+  wasi: true
+  stateful: true
+host_functions:
+  - ma_reply
+  - ma_set_state
+  - ma_send
