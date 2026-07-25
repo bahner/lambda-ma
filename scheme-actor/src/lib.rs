@@ -115,7 +115,7 @@ mod tests {
         env
     }
 
-    fn sample_msg(from: &str, to: &str) -> Rc<crate::msg::MsgRecord> {
+    fn sample_term_msg(from: &str, to: &str, content: Value) -> Rc<crate::msg::MsgRecord> {
         Rc::new(crate::msg::MsgRecord {
             id: "msg-1".to_string(),
             from: from.to_string(),
@@ -125,8 +125,12 @@ mod tests {
             reply_to: None,
             msg_type: "application/vnd.ma.rpc.request".to_string(),
             content_type: "application/vnd.ma.term".to_string(),
-            content: Value::symbol(":test"),
+            content,
         })
+    }
+
+    fn sample_msg(from: &str, to: &str) -> Rc<crate::msg::MsgRecord> {
+        sample_term_msg(from, to, Value::symbol(":test"))
     }
 
     fn eval_str(src: &str, env: &Rc<Env>) -> String {
@@ -205,6 +209,21 @@ mod tests {
     }
 
     #[test]
+    fn room_look_includes_exits() {
+        let env = room_env();
+
+        assert!(eval_str("(room-text)", &env).ends_with("\nExits: none."));
+
+        eval_all(
+            "(put-exit! \"north\" \"did:ma:runtime#north-exit\")",
+            &env,
+        )
+        .unwrap();
+
+        assert!(eval_str("(room-text)", &env).ends_with("\nExits: north"));
+    }
+
+    #[test]
     fn room_leave_occupant_canonicalises_sender() {
         let env = room_env();
         let mut config = std::collections::HashMap::new();
@@ -227,6 +246,125 @@ mod tests {
         .unwrap();
 
         assert_eq!(eval_str("(occupants-text)", &env), "Occupants: none.");
+    }
+
+    #[test]
+    fn room_parent_report_mismatch_removes_occupant() {
+        let env = room_env();
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#room-a".to_string());
+        crate::state::set_config(config);
+
+        eval_all(
+            r#"
+            (define (ma-entity-exists? actor) #t)
+            (define avatar "did:ma:runtime#avatar")
+            (set-label! avatar "Alice")
+            (add-avatar-presence! avatar)
+            (presence-request! avatar 1 "n1")
+            "#,
+            &env,
+        )
+        .unwrap();
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:runtime#avatar",
+                "did:ma:runtime#room-a",
+                Value::list(vec![
+                    Value::symbol(":parent-report"),
+                    Value::str("did:ma:runtime#avatar"),
+                    Value::str("did:ma:runtime#room-b"),
+                    Value::Int(1),
+                    Value::str("n1"),
+                ]),
+            )),
+        );
+
+        eval_all("(on-message msg)", &env).unwrap();
+
+        assert_eq!(eval_str("(occupants-text)", &env), "Occupants: none.");
+        assert_eq!(eval_str("(who-text)", &env), "Who: none.");
+    }
+
+    #[test]
+    fn room_presence_tick_removes_unresponsive_occupant_after_timeout() {
+        let env = room_env();
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#room".to_string());
+        crate::state::set_config(config);
+
+        eval_all(
+            r#"
+            (define (ma-entity-exists? actor) #t)
+            (define avatar "did:ma:runtime#avatar")
+            (set-label! avatar "Alice")
+            (add-avatar-presence! avatar)
+            (set-prop! "presence:tick" 10)
+            "#,
+            &env,
+        )
+        .unwrap();
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:runtime#room",
+                "did:ma:runtime#room",
+                Value::symbol(":presence-tick"),
+            )),
+        );
+
+        eval_all("(on-message msg)", &env).unwrap();
+
+        assert_eq!(eval_str("(occupants-text)", &env), "Occupants: none.");
+    }
+
+    #[test]
+    fn room_registers_presence_schedule_on_init_and_start() {
+        let env = room_env();
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#room".to_string());
+        config.insert("started_at".to_string(), "123".to_string());
+        crate::state::set_config(config);
+
+        eval_all(
+            r#"
+            (define (ma-send! target term)
+              (inc-prop! "sent-count" 1)
+              (set-prop! (string-append "sent-target:" (number->string (get-prop "sent-count"))) target)
+              (set-prop! (string-append "sent-term:" (number->string (get-prop "sent-count"))) term))
+            (on-signal :init)
+            (set-prop! "schedule:presence:started-at" "old-runtime")
+            (on-signal :start)
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 2);
+        assert_eq!(eval_str("(get-prop \"sent-target:1\")", &env), "did:ma:runtime#scheduler");
+        assert_eq!(
+            eval_all("(get-prop \"sent-term:1\")", &env).unwrap(),
+            Value::list(vec![
+                Value::str("presence"),
+                Value::symbol(":interval"),
+                Value::str("30s"),
+                Value::symbol(":presence-tick"),
+            ])
+        );
+        assert_eq!(eval_str("(get-prop \"sent-target:2\")", &env), "did:ma:runtime#scheduler");
+        assert_eq!(
+            eval_all("(get-prop \"sent-term:2\")", &env).unwrap(),
+            Value::list(vec![
+                Value::str("presence"),
+                Value::symbol(":interval"),
+                Value::str("30s"),
+                Value::symbol(":presence-tick"),
+            ])
+        );
     }
 
     #[test]
@@ -344,6 +482,40 @@ mod tests {
             eval_str("(exit-init \"dør\" \"did:ma:runtime#kitchen\")", &env),
             "(set-prop! \"direction\" \"dør\")\n(set-prop! \"target-room\" \"did:ma:runtime#kitchen\")\n(ma-save-state!)\n"
         );
+    }
+
+    #[test]
+    fn room_heals_dead_local_exit_before_traversal() {
+        let env = room_env();
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "#room".to_string());
+        crate::state::set_config(config);
+
+        eval_all(
+            r#"
+            (set-prop! "exit-target:north" "did:ma:runtime#kitchen")
+            (put-exit! "north" "did:ma:runtime#dead-exit")
+            (define (ma-entity-exists? actor) #f)
+            (define (ma-create-actor kind behaviour init fragment)
+              (set-prop! "created-fragment" fragment)
+              fragment)
+            (define (ma-send! target term)
+              (inc-prop! "sent-count" 1)
+              (if (= (get-prop "sent-count") 1)
+                  (set-prop! "sent-1" target)
+                  (set-prop! "sent-2" target)))
+            (traverse-exit! "did:ma:runtime#avatar" "did:ma:user" "north" "did:ma:runtime#dead-exit")
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        assert_eq!(eval_str("(get-prop \"created-fragment\")", &env), eval_str("(exit-fragment \"north\")", &env));
+        assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 2);
+        assert_eq!(eval_str("(get-prop \"sent-1\")", &env), "did:ma:runtime#avatar");
+        assert_eq!(eval_str("(get-prop \"sent-2\")", &env), "did:ma:runtime#kitchen");
+        assert_ne!(eval_str("(exit-target \"north\")", &env), "did:ma:runtime#dead-exit");
     }
 
     #[test]

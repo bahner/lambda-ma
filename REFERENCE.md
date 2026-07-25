@@ -234,6 +234,7 @@ Key verbs:
 | `:look` `:exits?` `:who?` `:say` `:emote` `:go` | varies | user only | Delegates to room. |
 | `:claim` `:owner` `:dig` `:prop` | varies | user only | Delegated with prepended user DID. |
 | `:drop-thing` | `<user> <thing> <target-parent> [token] [ctx]` | room caller only | Parent-mediated drop helper; forwards optional user ctx map. |
+| `:report-parent` | `<room> <tick> <nonce>` | room caller | Machine presence request; replies with `:parent-report <self> <room> <tick> <nonce>` using the avatar's persisted room. |
 
 ### 5.3 room actor
 
@@ -249,7 +250,7 @@ Key verbs:
 | `:enter` | `<user> <avatar-did-url> <old-room-did-url> [nick]` | Cross-room/cross-runtime-friendly arrival shape. |
 | `:leave-avatar` | `<avatar-did-url> <to-room-did-url>` | Target-room-origin cache removal during movement. |
 | `:leave-occupant` | none | Sender-origin cache removal for non-avatar occupants such as agents after actor-owned parent changes. |
-| `:look` `:exits?` `:who?` `:occupants?` `:things?` | none | Local presentation; `:look` prints room text plus `Occupants:` and `Things:`. `who?` is people/avatar-oriented; `occupants?` includes avatars plus room-local agents/occupants. |
+| `:look` `:exits?` `:who?` `:occupants?` `:things?` | none | Local presentation; `:look` prints room text plus `Occupants:`, `Things:`, and `Exits:`. `who?` is people/avatar-oriented; `occupants?` includes avatars plus room-local agents/occupants. |
 | `:go` / `:move` | `<direction>` / none | `:go` traverses a named exit. `:move` chooses one currently available room exit for the caller. |
 | `:thing` | `<name> [did-or-empty]` | Local occupant alias list/get/set/delete; owner-gated for write. |
 | `:take` / `:drop` / `:where` | `[user?] [token]` | Uses movable actor parent-authority contract. |
@@ -257,6 +258,24 @@ Key verbs:
 | `:dig` | delegated or direct shape | Owner-gated exit creation/linking. |
 | `:behaviour` | `[ /ipfs/<cid> ]` | Owner-gated behaviour update. |
 | `:ping` / `:pong` / `:authorise-link` / `:link-authorised` / `:link-denied` | link handshake args | Existing-room link handshake. |
+| `:presence-tick` | none | Scheduled room-local occupant sweep. Asks occupants to report their parent and removes occupants that have not reported within the room timeout. |
+| `:parent-report` | `<child> <parent> <tick> <nonce>` | Machine reply from a child to the room's `:report-parent` request. A parent different from the room removes the child immediately. |
+
+Room presence cache rules:
+
+1. `occupants` and `avatar-occupants` are room-local derived caches.
+2. On lifecycle `:start`, a room registers a `#scheduler` interval for
+   `:presence-tick`.
+3. `#scheduler` later sends `:presence-tick` to the room as an ordinary
+   message. On each tick, the room sends `:report-parent <room> <tick> <nonce>` to
+   current occupants.
+4. Avatars report their current `room`; agents and things report their current
+   `parent`.
+5. If a child reports a parent other than the room, the room removes that child
+   from local occupant caches immediately.
+6. If a child does not report for the configured timeout, the room removes it
+   from local occupant caches. The child may re-enter later through normal
+   `:enter` flow.
 
 ### 5.4 exit actor
 
@@ -284,6 +303,7 @@ Key helpers and verbs:
 | `:go` | `<direction>` | Free-agent or owner movement through a named room exit; no exit creation. |
 | `:move` | none | Asks the current parent room to choose one available exit at random and traverse it. |
 | `:enter-room` | `<target-room-did-url> <source-room-did-url>` | Exit-facing movement helper; performs ordinary room-visible `:leave-occupant` plus map-shaped agent `:enter`. |
+| `:report-parent` | `<room> <tick> <nonce>` | Machine presence request; replies to the requesting room with `:parent-report <self> <parent> <tick> <nonce>`. |
 | `:claim` | `<secret>` | Recovery-path ownership claim. |
 | `:take` | `<user> <carrier-parent> [ctx]` | Caller must be current parent. |
 | `:drop` | `<user> <target-parent> [ctx]` | Caller must be current parent. |
@@ -316,6 +336,7 @@ Purpose: movable passive object with owner/parent authority.
 | `:owner` | none | Current owner. |
 | `:set-recovery-secret` | `[text]` | Owner only. |
 | `:claim` | `<secret>` | Recovery-path ownership claim. |
+| `:report-parent` | `<room> <tick> <nonce>` | Machine presence request; replies to the requesting room with `:parent-report <self> <parent> <tick> <nonce>`. |
 | `:take` | `<user> <carrier-parent> [ctx]` | Caller must be current parent; optional ctx map is accepted and persisted. |
 | `:drop` | `<user> <target-parent> [ctx]` | Caller must be current parent; optional ctx map is accepted and persisted. |
 
@@ -340,7 +361,13 @@ world-level actor names.
 | `things` map | map | room-local alias map to non-avatar occupant DID-URLs |
 | `claim:<actor>` | map | stored enter claim/context |
 | `occupants` | list | derived cache (presentation/broadcast), root-fed |
+| `avatar-occupants` | list | derived avatar-only presence cache for people-oriented presentation |
 | `label:<actor>` | string | derived display cache |
+| `presence:tick` | integer | room-local scheduled presence counter |
+| `presence:last-report:<actor>` | integer | last tick where actor reported this room as parent |
+| `presence:last-request:<actor>` | integer | last tick where room requested parent report |
+| `presence:nonce:<actor>` | string | pending parent-report nonce |
+| `presence:last-parent:<actor>` | string | last parent reported by actor, for debugging |
 
 ### 6.3 avatar keys
 

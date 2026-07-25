@@ -140,6 +140,13 @@
   (lambda (args msg)
     (reply-ok msg (if (equal? (parent) "") "(none)" (parent)))))
 
+(set-method! :report-parent
+  (lambda (args msg)
+    (let ((tick (if (or (null? args) (null? (cdr args))) "" (car (cdr args))))
+          (nonce (if (or (null? args) (null? (cdr args)) (null? (cdr (cdr args)))) "" (car (cdr (cdr args))))))
+      (ma-send! (canonical-actor (msg-from msg))
+                (list :parent-report (canonical-actor (self)) (parent) tick nonce)))))
+
 (set-method! :owner
   (lambda (args msg)
     (reply-ok msg (if (owner) (owner) "(none)"))))

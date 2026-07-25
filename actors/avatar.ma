@@ -223,6 +223,14 @@
       (lambda ()
         (ma-reply! msg (list :ok (room)))))))
 
+(set-method! :report-parent
+  (lambda (args msg)
+    (let ((tick (if (or (null? args) (null? (cdr args))) "" (car (cdr args))))
+          (nonce (if (or (null? args) (null? (cdr args)) (null? (cdr (cdr args)))) "" (car (cdr (cdr args)))))
+          (current-room (room)))
+      (ma-send! (canonical-actor (msg-from msg))
+                (list :parent-report (local-self) (if current-room (canonical-actor current-room) "") tick nonce)))))
+
 (set-method! :help
   (lambda (args msg)
     (require-did msg
