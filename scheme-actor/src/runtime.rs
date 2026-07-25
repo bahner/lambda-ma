@@ -108,6 +108,11 @@ fn b_ma_send(args: &[Value]) -> EvalResult<Value> {
     Ok(Value::Nil)
 }
 
+pub(crate) fn send_term(target: &str, term: &Value) -> EvalResult<()> {
+    let input = encode_send_envelope(target, term)?;
+    host::send(&input).map_err(|e| EvalError::new(format!("ma-send!: {e}")))
+}
+
 fn b_ma_reply(args: &[Value]) -> EvalResult<Value> {
     let [msg, term] = args else {
         return Err(EvalError::new(format!(

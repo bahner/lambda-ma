@@ -223,6 +223,51 @@ fn handle_init(payload: &str) -> EvalResult<()> {
     Ok(())
 }
 
+fn canonical_actor(actor: &str) -> Option<String> {
+    if actor.is_empty() {
+        None
+    } else if actor.starts_with("did:ma:") {
+        Some(actor.to_string())
+    } else {
+        crate::state::config_value("runtime").map(|runtime| {
+            if actor.starts_with('#') {
+                format!("{runtime}{actor}")
+            } else {
+                format!("{runtime}#{actor}")
+            }
+        })
+    }
+}
+
+fn optional_prop_text(key: &str) -> String {
+    match crate::state::prop_value(key) {
+        Some(Value::Str(value)) => value.to_string(),
+        _ => String::new(),
+    }
+}
+
+fn actor_born_notification() -> Option<(String, Value)> {
+    let parent = canonical_actor(&crate::state::config_value("parent")?)?;
+    let actor = canonical_actor(&crate::state::config_value("self")?)?;
+    let kind = crate::state::config_value("kind").unwrap_or_default();
+    Some((
+        parent,
+        Value::list(vec![
+            Value::symbol(":actor-born"),
+            Value::str(actor),
+            Value::str(kind),
+            Value::str(optional_prop_text("birth-nonce")),
+            Value::str(optional_prop_text("birth-direction")),
+        ]),
+    ))
+}
+
+fn notify_actor_born() {
+    if let Some((parent, term)) = actor_born_notification() {
+        let _ = crate::runtime::send_term(&parent, &term);
+    }
+}
+
 /// `on_signal` — the single Wasm export (besides `on_message`) for every
 /// runtime-originated lifecycle event (ma-scheme-v1.md §3). Decodes the
 /// incoming CBOR term (a bare atom, or a two-element `[atom, data]`
@@ -276,7 +321,11 @@ pub fn on_signal(input: &[u8]) -> EvalResult<()> {
     match verb.as_str() {
         ":set-state" => handle_set_state(&bytes_data(":set-state")?),
         ":set-behaviour" => handle_set_behaviour(&utf8_data(":set-behaviour")?),
-        ":init" => handle_init(&utf8_data(":init")?),
+        ":init" => {
+            handle_init(&utf8_data(":init")?)?;
+            notify_actor_born();
+            Ok(())
+        }
         _ => {
             let term = match data {
                 None => Value::symbol(verb),
@@ -434,6 +483,43 @@ mod tests {
         let mut out = Vec::new();
         ciborium::ser::into_writer(&term, &mut out).unwrap();
         out
+    }
+
+    #[test]
+    fn actor_born_notification_uses_parent_config_and_birth_props() {
+        reset();
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#child".to_string());
+        config.insert("parent".to_string(), "did:ma:runtime#parent".to_string());
+        config.insert("kind".to_string(), "/ma/room/0.0.1".to_string());
+        crate::state::set_config(config);
+        let mut empty_state = Vec::new();
+        ciborium::ser::into_writer(&Cbor::Map(Vec::new()), &mut empty_state).unwrap();
+        crate::state::load_from_cbor(&empty_state).unwrap();
+
+        let env = new_full_env();
+        crate::eval_all(
+            r#"
+            (set-prop! "birth-nonce" "nonce-1")
+            (set-prop! "birth-direction" "north")
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        let (parent, term) = actor_born_notification().unwrap();
+        assert_eq!(parent, "did:ma:runtime#parent");
+        assert_eq!(
+            term,
+            Value::list(vec![
+                Value::symbol(":actor-born"),
+                Value::str("did:ma:runtime#child"),
+                Value::str("/ma/room/0.0.1"),
+                Value::str("nonce-1"),
+                Value::str("north"),
+            ])
+        );
     }
 
     #[test]

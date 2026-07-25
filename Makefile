@@ -13,19 +13,14 @@ ACTORS := root avatar room exit agent rms duck thing
 CID_FILES := $(ACTORS:%=$(CID_DIR)/%.cid)
 BOOTSTRAP_KIND_FILES := \
 	kinds/ma-scheme-actor.yaml \
+	kinds/ma-scheme-state.yaml \
 	kinds/ma-scheme-root.yaml \
 	kinds/ma-scheme-avatar.yaml \
 	kinds/ma-scheme-room.yaml \
 	kinds/ma-scheme-exit.yaml \
 	kinds/ma-scheme-agent.yaml \
 	kinds/ma-scheme-thing.yaml \
-	kinds/ma-scheduler.yaml \
-	kinds/ma-python-actor.yaml \
-	kinds/ma-root.yaml \
-	kinds/ma-room.yaml \
-	kinds/ma-counter.yaml \
-	kinds/ma-register.yaml \
-	kinds/ma-set.yaml
+	kinds/ma-scheduler.yaml
 
 .PHONY: all publish root-cid bootstrap check clean show-cids FORCE
 

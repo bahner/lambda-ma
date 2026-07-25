@@ -170,6 +170,14 @@ target throughout the handshake. Full `did:ma:...#room` targets may point at
 another runtime; the same room-to-room ownership handshake must still succeed
 before the exit is created.
 
+New-room digs use the generic lambda-ma actor birth callback because
+`ma-create-actor` is queued until the current dispatch completes. The source
+room stores a pending room request with a nonce, passes birth metadata in the
+new room's init payload, and creates the exit only after the new room sends
+`:actor-born <actor> <kind> <nonce> <direction>` back from the expected actor
+DID-URL. This prevents exits from pointing at a local recipient before the actor
+has loaded.
+
 ## Context flow
 
 Zion enters by sending `:enter ctx` to the target room. The room creates or finds

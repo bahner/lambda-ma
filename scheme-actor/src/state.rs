@@ -37,6 +37,10 @@ pub fn config_value(key: &str) -> Option<String> {
     CONFIG.with(|c| c.borrow().get(key).cloned())
 }
 
+pub fn prop_value(key: &str) -> Option<Value> {
+    PROPS.with(|p| p.borrow().get(key).cloned())
+}
+
 /// Replace the entire in-memory props table — used by `set_state` (§3.1)
 /// to restore persisted state at load time.
 pub fn load_from_cbor(bytes: &[u8]) -> EvalResult<()> {

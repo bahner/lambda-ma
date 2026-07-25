@@ -794,11 +794,25 @@
 (define (pending-link-user-key direction) (string-append "pending-link-user:" direction))
 (define (pending-link-requester-key direction) (string-append "pending-link-requester:" direction))
 
+(define (pending-new-room-key direction) (string-append "pending-new-room:" direction))
+(define (pending-new-room-user-key direction) (string-append "pending-new-room-user:" direction))
+(define (pending-new-room-requester-key direction) (string-append "pending-new-room-requester:" direction))
+(define (pending-new-room-target-name-key direction) (string-append "pending-new-room-target-name:" direction))
+(define (pending-new-room-nonce-key direction) (string-append "pending-new-room-nonce:" direction))
+
 (define (clear-pending-link! direction)
   (begin
     (del-prop! (pending-link-key direction))
     (del-prop! (pending-link-user-key direction))
     (del-prop! (pending-link-requester-key direction))))
+
+(define (clear-pending-new-room! direction)
+  (begin
+    (del-prop! (pending-new-room-key direction))
+    (del-prop! (pending-new-room-user-key direction))
+    (del-prop! (pending-new-room-requester-key direction))
+    (del-prop! (pending-new-room-target-name-key direction))
+    (del-prop! (pending-new-room-nonce-key direction))))
 
 (define (remember-exit-target! direction target-room target-name)
   (begin
@@ -820,13 +834,20 @@
     (remember-exit-target! direction target-room target-name)
     exit))
 
-(define (room-init name owner-did custom-init)
+(define (room-init name owner-did custom-init ready-init)
   (string-append
     "(set-prop! \"root\" \"" (root) "\")\n"
     (if name (string-append "(set-prop! \"name\" \"" name "\")\n") "")
     "(set-prop! \"owner\" \"" owner-did "\")\n"
     "(ma-save-state!)\n"
-    (if custom-init custom-init "")))
+    (if custom-init custom-init "")
+    (if ready-init ready-init "")))
+
+(define (actor-birth-init nonce direction)
+  (string-append
+    "(set-prop! \"birth-nonce\" \"" nonce "\")\n"
+    "(set-prop! \"birth-direction\" \"" direction "\")\n"
+    "(ma-save-state!)\n"))
 
 (define (exit-init direction target-room)
   (string-append
@@ -893,6 +914,55 @@
        (equal? (get-prop (pending-link-user-key direction)) user)
        (same-actor? (get-prop (pending-link-requester-key direction)) requester)))
 
+(define (pending-new-room-nonce direction requester user target-name)
+  (blake3 (string-append "lambda-ma pending room v1\n"
+                         (canonical-actor (self)) "\n"
+                         direction "\n"
+                         (canonical-actor requester) "\n"
+                         user "\n"
+                         (if target-name target-name "")) 16))
+
+(define (remember-pending-new-room! direction target-room requester user target-name nonce)
+  (begin
+    (set-prop! (pending-new-room-key direction) (canonical-actor target-room))
+    (set-prop! (pending-new-room-user-key direction) user)
+    (set-prop! (pending-new-room-requester-key direction) (canonical-actor requester))
+    (if target-name
+        (set-prop! (pending-new-room-target-name-key direction) target-name)
+        (del-prop! (pending-new-room-target-name-key direction)))
+    (set-prop! (pending-new-room-nonce-key direction) nonce)
+    (ma-save-state!)))
+
+(define (pending-new-room-matches? direction nonce target-room)
+  (and (same-actor? (get-prop (pending-new-room-key direction)) target-room)
+       (equal? (get-prop (pending-new-room-nonce-key direction)) nonce)))
+
+(define (handle-actor-born! msg args)
+  (if (or (null? args)
+          (null? (cdr args))
+          (null? (cdr (cdr args)))
+          (null? (cdr (cdr (cdr args)))))
+      #f
+      (let* ((actor (car args))
+             (kind (car (cdr args)))
+             (nonce (car (cdr (cdr args))))
+             (direction (car (cdr (cdr (cdr args)))))
+             (target-room (msg-from msg)))
+        (if (and (equal? kind ROOM_KIND)
+                 (same-actor? actor target-room)
+                 (pending-new-room-matches? direction nonce target-room))
+            (let ((requester (get-prop (pending-new-room-requester-key direction)))
+                  (user (get-prop (pending-new-room-user-key direction)))
+                  (target-name (get-prop (pending-new-room-target-name-key direction))))
+              (begin
+                (create-exit! direction target-room target-name)
+                (clear-pending-new-room! direction)
+                (ma-save-state!)
+                (broadcast (string-append user " digs " direction "."))
+                (ma-send! (canonical-actor requester) (list :print (string-append "You dig " direction " and open a new exit.")))
+                (enter-dig-target! requester user target-room)))
+            #f))))
+
 (define (delivery-failed-ping? term)
   (and (pair? term)
        (equal? (car term) :ping)
@@ -908,6 +978,19 @@
   (if (member-actor? requester (occupants))
   (ma-send! (canonical-actor target-room) (list :enter user (canonical-actor requester) (canonical-actor (self)) (speaker-name requester)))
       #f))
+
+(define (request-new-room! msg user direction target custom-init custom-behaviour)
+  (let* ((target-fragment (if (and target (not custom-init) (not custom-behaviour))
+                              (named-room-fragment direction target)
+                              #f))
+         (requester (canonical-actor (msg-from msg)))
+         (nonce (pending-new-room-nonce direction requester user target))
+         (target-room (entity-url (ma-create-actor ROOM_KIND
+                                                   custom-behaviour
+                                                   (room-init target user custom-init (actor-birth-init nonce direction))
+                                                   target-fragment))))
+    (remember-pending-new-room! direction target-room requester user target nonce)
+    (reply-to-sender msg (string-append "Digging " direction "..."))))
 
 (set-method! :leave-avatar
   (lambda (args msg)
@@ -1189,6 +1272,10 @@
                           (list :print (string-append "Could not reach " target-room ": " reason))))
               #f)))))
 
+(set-method! :actor-born
+  (lambda (args msg)
+    (handle-actor-born! msg args)))
+
 (set-method! :dig
   (lambda (args msg)
     (let* ((user (caller-user args msg))
@@ -1214,15 +1301,7 @@
                          (reply-to-sender msg (string-append "Exit " direction " already leads to " target "."))
                          (enter-dig-target! (msg-from msg) user remembered-room)))
                       (else
-                       (let* ((target-fragment (if (and target (not custom-init) (not custom-behaviour))
-                                                   (named-room-fragment direction target)
-                                                   #f))
-                              (target-room (entity-url (ma-create-actor ROOM_KIND custom-behaviour (room-init target user custom-init) target-fragment))))
-                         (create-exit! direction target-room target)
-                         (ma-save-state!)
-                         (broadcast (string-append user " digs " direction "."))
-                         (reply-to-sender msg (string-append "You dig " direction " and open a new exit."))
-                         (enter-dig-target! (msg-from msg) user target-room))))))))))))
+                       (request-new-room! msg user direction target custom-init custom-behaviour)))))))))))
 
 (set-method! :fill
   (lambda (args msg)

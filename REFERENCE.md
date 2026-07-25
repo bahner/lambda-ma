@@ -193,6 +193,12 @@ by source room, direction, and target name, so repeating the same command in the
 same room reuses the same target room and exit instead of creating fresh actors.
 Unnamed exploratory digs remain non-deterministic.
 
+New-room digs are two-phase. The source room stores the pending target and a
+nonce, creates the room with birth metadata in the init payload, and only
+creates the exit after receiving `:actor-born <actor> <kind> <nonce> <direction>`
+from the expected room. This is required because `ma-create-actor` queues
+creation until the current actor dispatch returns.
+
 For existing-room link targets:
 
 1. Source room stores pending link request.
@@ -258,6 +264,7 @@ Key verbs:
 | `:dig` | delegated or direct shape | Owner-gated exit creation/linking. |
 | `:fill` | delegated or direct shape | Owner-gated exit removal. Removes the direction from the room and asks the exit actor to terminate itself; target rooms are not deleted. |
 | `:behaviour` | `[ /ipfs/<cid> ]` | Owner-gated behaviour update. |
+| `:actor-born` | `<actor> <kind> <nonce> <direction>` | Generic actor birth callback; rooms use it for pending new-room dig targets when actor, kind, nonce, and direction match. |
 | `:ping` / `:pong` / `:authorise-link` / `:link-authorised` / `:link-denied` | link handshake args | Existing-room link handshake. |
 | `:presence-tick` | none | Scheduled room-local occupant sweep. Asks occupants to report their parent and removes occupants that have not reported within the room timeout. |
 | `:parent-report` | `<child> <parent> <tick> <nonce>` | Machine reply from a child to the room's `:report-parent` request. A parent different from the room removes the child immediately. |
@@ -289,7 +296,7 @@ Purpose: traversal handoff.
 
 ### 5.5 Scheme agent parent kind
 
-Kind: `/ma/scheme/agent/0.0.1`, extending `/ma/scheme/actor/0.0.1`.
+Kind: `/ma/scheme/agent/0.0.1`, extending `/ma/scheme/state/0.0.1`.
 
 Purpose: reusable autonomous Scheme-agent base behaviour. Concrete agents extend
 this kind and inherit owner, parent, recovery, and transfer helpers.

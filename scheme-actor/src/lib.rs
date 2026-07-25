@@ -573,7 +573,8 @@ mod tests {
             r#"
             (set-prop! "exit-target:north" "did:ma:runtime#kitchen")
             (put-exit! "north" "did:ma:runtime#dead-exit")
-            (define (ma-entity-exists? actor) #f)
+                        (define (ma-entity-exists? actor)
+                            (equal? actor "did:ma:runtime#avatar"))
             (define (ma-create-actor kind behaviour init fragment)
               (set-prop! "created-fragment" fragment)
               fragment)
@@ -624,6 +625,94 @@ mod tests {
             "(not (remembered-new-room-target \"dør\" \"stue\"))",
             &env
         ));
+    }
+
+    #[test]
+    fn room_dig_waits_for_new_room_actor_born_callback() {
+        let env = room_env();
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#source".to_string());
+        crate::state::set_config(config);
+
+        eval_all(
+            r#"
+            (set-prop! "owner" "did:ma:user")
+            (set-label! "did:ma:runtime#avatar" "me")
+            (add-avatar-presence! "did:ma:runtime#avatar")
+            (define (ma-entity-exists? actor) #f)
+            (define (ma-create-actor kind behaviour init fragment)
+              (inc-prop! "created-count" 1)
+              (set-prop! (string-append "created-kind:" (number->string (get-prop "created-count"))) kind)
+              (set-prop! (string-append "created-init:" (number->string (get-prop "created-count"))) init)
+              (if fragment fragment "random-room"))
+            (define (ma-send! target term)
+              (inc-prop! "sent-count" 1)
+              (set-prop! (string-append "sent-target:" (number->string (get-prop "sent-count"))) target)
+              (set-prop! (string-append "sent-term:" (number->string (get-prop "sent-count"))) term))
+            "#,
+            &env,
+        )
+        .unwrap();
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:runtime#avatar",
+                "did:ma:runtime#source",
+                Value::list(vec![
+                    Value::symbol(":dig"),
+                    Value::str("did:ma:user"),
+                    Value::str("dør"),
+                    Value::str("to"),
+                    Value::str("køkken"),
+                ]),
+            )),
+        );
+        eval_all("(on-message msg)", &env).unwrap();
+
+        assert_eq!(eval_int("(get-prop \"created-count\")", &env), 1);
+        assert!(eval_bool(
+            "(member-actor? \"did:ma:runtime#avatar\" (occupants))",
+            &env
+        ));
+        assert!(eval_bool("(not (exit-target \"dør\"))", &env));
+        assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 1);
+        assert_eq!(
+            eval_str("(get-prop \"sent-target:1\")", &env),
+            "did:ma:runtime#avatar"
+        );
+        let target_room = eval_str("(get-prop \"pending-new-room:dør\")", &env);
+        assert!(target_room.starts_with("did:ma:runtime#"));
+        assert!(eval_str("(get-prop \"created-init:1\")", &env).contains("birth-nonce"));
+
+        let nonce = eval_str("(get-prop \"pending-new-room-nonce:dør\")", &env);
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_term_msg(
+                &target_room,
+                "did:ma:runtime#source",
+                Value::list(vec![
+                    Value::symbol(":actor-born"),
+                    Value::str(target_room.clone()),
+                    Value::str("/ma/room/0.0.1"),
+                    Value::str(nonce),
+                    Value::str("dør"),
+                ]),
+            )),
+        );
+        eval_all("(on-message msg)", &env).unwrap();
+
+        assert_eq!(eval_int("(get-prop \"created-count\")", &env), 2);
+        assert_eq!(
+            eval_str("(exit-target \"dør\")", &env),
+            eval_str("(entity-url (exit-fragment \"dør\"))", &env)
+        );
+        assert_eq!(
+            eval_str("(get-prop \"exit-target:dør\")", &env),
+            target_room
+        );
+        assert!(eval_bool("(not (get-prop \"pending-new-room:dør\"))", &env));
+        assert!(eval_int("(get-prop \"sent-count\")", &env) >= 2);
     }
 
     #[test]
