@@ -6,10 +6,8 @@ behaviour:
   "/": __SCHEME_STDLIB_CID__
 attributes:
   wasi: false
-  stateful: true
 host_functions:
   - ma_reply
-  - ma_set_state
   - ma_send
   - ma_ipfs_include
   - ma_create_entity

@@ -1,5 +1,5 @@
 protocol: /ma/root/0.0.1
-extends: /ma/scheme/actor/0.0.1
+extends: /ma/scheme/state/0.0.1
 attributes:
   genesis: true
 behaviour:

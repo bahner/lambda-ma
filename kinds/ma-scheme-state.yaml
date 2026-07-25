@@ -1,0 +1,6 @@
+protocol: /ma/scheme/state/0.0.1
+extends: /ma/scheme/actor/0.0.1
+attributes:
+  stateful: true
+host_functions:
+  - ma_set_state
