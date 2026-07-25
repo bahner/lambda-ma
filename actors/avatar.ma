@@ -4,7 +4,6 @@
 (define (self) (ma-get-config-key "self"))
 (define (runtime) (ma-get-config-key "runtime"))
 (define LAMBDA_CTX_PROTOCOL "/ma/lambda/ctx/0.0.1")
-(define ENTITY_FRAGMENT_CONTEXT "ma entity-fragment v1")
 (define (entity-url fragment) (string-append (runtime) "#" fragment))
 (define (did) (get-prop "did"))
 (define (root)
@@ -12,6 +11,7 @@
     (if configured configured (entity-url "root"))))
 (define (canonical-actor actor)
   (if (and actor (string-prefix? "#" actor)) (string-append (runtime) actor) actor))
+(define (local-self) (canonical-actor (self)))
 (define (local-fragment? actor)
   (and actor (string-prefix? "#" actor)))
 (define (qualified-actor actor)
@@ -23,7 +23,7 @@
   (equal? (canonical-actor a) (canonical-actor b)))
 (define (entity-id) (ma-get-config-key "id"))
 (define (avatar-fragment did)
-  (ma-derived-id ENTITY_FRAGMENT_CONTEXT did 8))
+  (blake3 (string-append "lambda-ma avatar v1\n" (runtime) "\n" did) 8))
 (define (valid-did? value)
   (and (string? value) (string-prefix? "did:ma:" value)))
 (define (ensure-did! expected-did expected-id)
@@ -61,7 +61,7 @@
     (list (list :protocol LAMBDA_CTX_PROTOCOL)
           (list :kind "avatar")
           (list :root (qualified-actor (root)))
-          (list :avatar (qualified-actor (self)))
+          (list :avatar (qualified-actor (local-self)))
           (list :nick (nick))
           (list :room (qualified-actor (room)))
           (list :text text))))
@@ -71,7 +71,7 @@
     (list (list :protocol LAMBDA_CTX_PROTOCOL)
           (list :kind "avatar")
           (list :root (qualified-actor (root)))
-          (list :avatar (qualified-actor (self)))
+          (list :avatar (qualified-actor (local-self)))
           (list :nick (nick))
           (list :room (qualified-actor r))
           (list :text text))))
@@ -130,7 +130,7 @@
 (define (send-room verb args)
   (let ((target (room)))
     (if target
-        (ma-send! target (cons verb args))
+        (ma-send! (canonical-actor target) (cons verb args))
         (let ((start (start-room)))
           (if start
               (ma-send! (did) (ctx-term-room start #f))
@@ -191,7 +191,7 @@
                 (set-prop! "nick" requested-nick)
                 (ma-save-state!))
               #f)
-          (ma-send! target-room (list :enter (self) old-room (nick))))
+          (ma-send! (canonical-actor target-room) (list :enter (local-self) (canonical-actor old-room) (nick))))
         #f)))
 
 (set-method! :ctx
@@ -201,7 +201,7 @@
         (let ((payload (car args)))
           (if (avatar-ctx-valid? payload msg)
               (begin
-                (set-prop! "room" (ctx-value payload :room))
+                (set-prop! "room" (canonical-actor (ctx-value payload :room)))
                 (set-prop! "nick" (ctx-value payload :nick))
                 (ma-save-state!)
                 (ma-send! (did) (cons :ctx args)))
@@ -333,8 +333,8 @@
           (target-parent (car (cdr (cdr args))))
           (ctx (if (or (null? (cdr (cdr (cdr args)))) (not (map? (car (cdr (cdr (cdr args))))))) #f (car (cdr (cdr (cdr args)))))))
         (if ctx
-          (ma-send! thing (list :drop did target-parent ctx))
-          (ma-send! thing (list :drop did target-parent)))))
+          (ma-send! (canonical-actor thing) (list :drop did (canonical-actor target-parent) ctx))
+          (ma-send! (canonical-actor thing) (list :drop did (canonical-actor target-parent))))))
         #f)))
 
 (set-default-method!

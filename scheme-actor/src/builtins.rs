@@ -52,9 +52,22 @@ pub fn install(env: &Rc<Env>) {
 
     // Strings
     def!("string-append", b_string_append);
+    def!("string-length", b_string_length);
+    def!("string-empty?", b_string_empty_p);
     def!("string-prefix?", b_string_prefix_p);
+    def!("string-suffix?", b_string_suffix_p);
+    def!("string-contains?", b_string_contains_p);
+    def!("substring", b_substring);
+    def!("string-trim", b_string_trim);
+    def!("string-trim-left", b_string_trim_left);
+    def!("string-trim-right", b_string_trim_right);
+    def!("string-split", b_string_split);
+    def!("string-join", b_string_join);
+    def!("string-upcase", b_string_upcase);
+    def!("string-downcase", b_string_downcase);
     def!("number->string", b_number_to_string);
     def!("string->number", b_string_to_number);
+    def!("blake3", b_blake3);
 
     // Maps
     def!("make-map", b_make_map);
@@ -394,6 +407,18 @@ fn b_string_append(args: &[Value]) -> EvalResult<Value> {
     Ok(Value::str(out))
 }
 
+fn b_string_length(args: &[Value]) -> EvalResult<Value> {
+    let text = as_string("string-length", one_arg("string-length", args)?)?;
+    i64::try_from(text.chars().count())
+        .map(Value::Int)
+        .map_err(|_| EvalError::new("string-length: length overflow"))
+}
+
+fn b_string_empty_p(args: &[Value]) -> EvalResult<Value> {
+    let text = as_string("string-empty?", one_arg("string-empty?", args)?)?;
+    Ok(Value::Bool(text.is_empty()))
+}
+
 fn b_string_prefix_p(args: &[Value]) -> EvalResult<Value> {
     let [prefix, text] = args else {
         return Err(EvalError::new(format!(
@@ -404,6 +429,129 @@ fn b_string_prefix_p(args: &[Value]) -> EvalResult<Value> {
     let prefix = as_string("string-prefix?", prefix)?;
     let text = as_string("string-prefix?", text)?;
     Ok(Value::Bool(text.starts_with(&prefix)))
+}
+
+fn b_string_suffix_p(args: &[Value]) -> EvalResult<Value> {
+    let [suffix, text] = args else {
+        return Err(EvalError::new(format!(
+            "string-suffix?: expected exactly 2 arguments, got {}",
+            args.len()
+        )));
+    };
+    let suffix = as_string("string-suffix?", suffix)?;
+    let text = as_string("string-suffix?", text)?;
+    Ok(Value::Bool(text.ends_with(&suffix)))
+}
+
+fn b_string_contains_p(args: &[Value]) -> EvalResult<Value> {
+    let [needle, text] = args else {
+        return Err(EvalError::new(format!(
+            "string-contains?: expected exactly 2 arguments, got {}",
+            args.len()
+        )));
+    };
+    let needle = as_string("string-contains?", needle)?;
+    let text = as_string("string-contains?", text)?;
+    Ok(Value::Bool(text.contains(&needle)))
+}
+
+fn as_char_index(name: &str, value: &Value, len: usize) -> EvalResult<usize> {
+    let Value::Int(index) = value else {
+        return Err(EvalError::new(format!(
+            "{name}: expected an integer index, found {}",
+            value.type_name()
+        )));
+    };
+    let index = usize::try_from(*index)
+        .map_err(|_| EvalError::new(format!("{name}: index must be non-negative")))?;
+    if index > len {
+        return Err(EvalError::new(format!("{name}: index out of bounds")));
+    }
+    Ok(index)
+}
+
+fn byte_index_at(text: &str, char_index: usize) -> usize {
+    if char_index == text.chars().count() {
+        text.len()
+    } else {
+        text.char_indices()
+            .nth(char_index)
+            .map(|(index, _)| index)
+            .unwrap_or(text.len())
+    }
+}
+
+fn b_substring(args: &[Value]) -> EvalResult<Value> {
+    if args.len() != 2 && args.len() != 3 {
+        return Err(EvalError::new(format!(
+            "substring: expected 2 or 3 arguments, got {}",
+            args.len()
+        )));
+    }
+    let text = as_string("substring", &args[0])?;
+    let len = text.chars().count();
+    let start = as_char_index("substring", &args[1], len)?;
+    let end = if let Some(value) = args.get(2) {
+        as_char_index("substring", value, len)?
+    } else {
+        len
+    };
+    if start > end {
+        return Err(EvalError::new(
+            "substring: start index must be <= end index",
+        ));
+    }
+    let start_byte = byte_index_at(&text, start);
+    let end_byte = byte_index_at(&text, end);
+    Ok(Value::str(&text[start_byte..end_byte]))
+}
+
+fn b_string_trim(args: &[Value]) -> EvalResult<Value> {
+    let text = as_string("string-trim", one_arg("string-trim", args)?)?;
+    Ok(Value::str(text.trim()))
+}
+
+fn b_string_trim_left(args: &[Value]) -> EvalResult<Value> {
+    let text = as_string("string-trim-left", one_arg("string-trim-left", args)?)?;
+    Ok(Value::str(text.trim_start()))
+}
+
+fn b_string_trim_right(args: &[Value]) -> EvalResult<Value> {
+    let text = as_string("string-trim-right", one_arg("string-trim-right", args)?)?;
+    Ok(Value::str(text.trim_end()))
+}
+
+fn b_string_split(args: &[Value]) -> EvalResult<Value> {
+    let (text, separator) = two_args("string-split", args)?;
+    let text = as_string("string-split", text)?;
+    let separator = as_string("string-split", separator)?;
+    if separator.is_empty() {
+        return Err(EvalError::new("string-split: separator must be non-empty"));
+    }
+    Ok(Value::list(
+        text.split(&separator).map(Value::str).collect(),
+    ))
+}
+
+fn b_string_join(args: &[Value]) -> EvalResult<Value> {
+    let (strings, separator) = two_args("string-join", args)?;
+    let separator = as_string("string-join", separator)?;
+    let strings = strings.to_vec()?;
+    let mut parts = Vec::with_capacity(strings.len());
+    for value in &strings {
+        parts.push(as_string("string-join", value)?);
+    }
+    Ok(Value::str(parts.join(&separator)))
+}
+
+fn b_string_upcase(args: &[Value]) -> EvalResult<Value> {
+    let text = as_string("string-upcase", one_arg("string-upcase", args)?)?;
+    Ok(Value::str(text.to_uppercase()))
+}
+
+fn b_string_downcase(args: &[Value]) -> EvalResult<Value> {
+    let text = as_string("string-downcase", one_arg("string-downcase", args)?)?;
+    Ok(Value::str(text.to_lowercase()))
 }
 
 fn as_string(name: &str, v: &Value) -> EvalResult<String> {
@@ -557,6 +705,43 @@ fn b_string_to_number(args: &[Value]) -> EvalResult<Value> {
             other.type_name()
         ))),
     }
+}
+
+fn hash_bytes_arg(name: &str, value: &Value) -> EvalResult<usize> {
+    let Value::Int(bytes) = value else {
+        return Err(EvalError::new(format!(
+            "{name}: bytes must be an integer, found {}",
+            value.type_name()
+        )));
+    };
+    let bytes = usize::try_from(*bytes)
+        .map_err(|_| EvalError::new(format!("{name}: bytes must be in 1..=32")))?;
+    if !(1..=32).contains(&bytes) {
+        return Err(EvalError::new(format!("{name}: bytes must be in 1..=32")));
+    }
+    Ok(bytes)
+}
+
+fn b_blake3(args: &[Value]) -> EvalResult<Value> {
+    if args.is_empty() || args.len() > 2 {
+        return Err(EvalError::new(format!(
+            "blake3: expected 1 or 2 arguments, got {}",
+            args.len()
+        )));
+    }
+    let text = as_string("blake3", &args[0])?;
+    let bytes = if let Some(value) = args.get(1) {
+        hash_bytes_arg("blake3", value)?
+    } else {
+        32
+    };
+    let hash = blake3::hash(text.as_bytes());
+    let mut out = String::with_capacity(bytes * 2);
+    for byte in &hash.as_bytes()[..bytes] {
+        out.push(b"0123456789abcdef"[(byte >> 4) as usize] as char);
+        out.push(b"0123456789abcdef"[(byte & 0x0f) as usize] as char);
+    }
+    Ok(Value::str(out))
 }
 
 fn b_equal_p(args: &[Value]) -> EvalResult<Value> {

@@ -61,8 +61,8 @@ When a concrete room target is available, enter is room-first.
 
 - Request goes to room actor `:enter`.
 - Room validates request context and ensures the deterministic local avatar.
-- If the avatar does not exist yet, room creates it with the user DID as
-   `fragment_hint`; avatar init sends room `:enter` after the avatar is live.
+- If the avatar does not exist yet, room creates it with an explicit
+   deterministic fragment; avatar init sends room `:enter` after the avatar is live.
 - If the avatar exists, room sends only `:enter-room` to the avatar; the avatar
    sends room `:enter`.
 - Room registers avatar entry in room state and sends committed
@@ -168,8 +168,8 @@ Rules:
 1. Caller sends `:enter <ctx>` to the target room.
 2. Room derives the deterministic avatar fragment from the caller DID.
 3. If the avatar already exists, room asks it to enter this room.
-4. If the avatar does not exist, room creates it with the caller DID as
-   `fragment_hint`; avatar init sends room `:enter` from the live avatar.
+4. If the avatar does not exist, room creates it with an explicit deterministic
+   fragment; avatar init sends room `:enter` from the live avatar.
 5. Room registers entry and sends committed `:ctx` to avatar; avatar persists
    room state and forwards the ctx to user.
 
@@ -186,6 +186,12 @@ Rules:
    `:leave-avatar` when needed.
 
 ### 4.3 Dig/link to existing room
+
+For named new-room digs such as `dig dør to kjøkken`, the source room derives
+deterministic room and exit fragments with `blake3`. The derivation is scoped
+by source room, direction, and target name, so repeating the same command in the
+same room reuses the same target room and exit instead of creating fresh actors.
+Unnamed exploratory digs remain non-deterministic.
 
 For existing-room link targets:
 
@@ -320,8 +326,9 @@ Purpose: movable passive object with owner/parent authority.
 ### 6.1 root keys
 
 Root stores no avatar registry. Avatar DID-URLs are derived from the caller DID
-using the runtime-scoped `ma-derived-id` primitive and the same entity-fragment
-context used by `ma_create_entity` fragment hints.
+by the root/room/avatar actor code with `blake3`, scoped by runtime DID and
+caller DID. Runtime validates requested fragments but does not derive these
+world-level actor names.
 
 ### 6.2 room keys
 

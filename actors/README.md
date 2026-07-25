@@ -121,6 +121,12 @@ Digging an existing direction replaces that exit instead of failing. This lets
 room owners rewire mistakes or rebuild a topology without deleting the old exit
 first.
 
+Named new-room digs are idempotent per source room, direction, and target name.
+For example, repeating `dig dør to kjøkken` in the same source room resolves to
+the same deterministic target room fragment and the same room-owned exit
+fragment. The room derives those fragments with `blake3`; runtime only
+validates and creates the requested fragments.
+
 Colon-prefixed methods are not avatar-mediated. Room metadata is a direct room
 RPC:
 

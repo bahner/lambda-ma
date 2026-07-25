@@ -9,3 +9,4 @@ crate-type = ["cdylib"]
 [dependencies]
 extism-pdk = "1"
 ciborium = "0.2"
+blake3 = "1"

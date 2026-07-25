@@ -22,7 +22,6 @@ BOOTSTRAP_KIND_FILES := \
 	kinds/ma-scheduler.yaml \
 	kinds/ma-python-actor.yaml \
 	kinds/ma-root.yaml \
-	kinds/ma-avatar.yaml \
 	kinds/ma-room.yaml \
 	kinds/ma-counter.yaml \
 	kinds/ma-register.yaml \

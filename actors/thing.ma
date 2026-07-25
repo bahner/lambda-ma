@@ -7,6 +7,16 @@
 (define (canonical-actor actor)
   (if (and actor (string-prefix? "#" actor)) (string-append (runtime) actor) actor))
 
+(define (local-actor-ref? actor)
+  (and (string? actor)
+       (or (string-prefix? "#" actor)
+           (string-prefix? (string-append (runtime) "#") actor))))
+
+(define (did-url? actor)
+  (and (string? actor)
+       (string-prefix? "did:ma:" actor)
+       (string-contains? "#" actor)))
+
 (define (join-words words)
   (cond ((null? words) "")
         ((null? (cdr words)) (car words))
@@ -32,7 +42,7 @@
   (ma-save-state!))
 
 (define (set-parent! did)
-  (set-prop! "parent" did)
+  (set-prop! "parent" (canonical-actor did))
   (ma-save-state!))
 
 (define (claim-key actor)
@@ -65,7 +75,7 @@
   (and (not (null? args)) (string-prefix? "did:ma:" (car args))))
 
 (define (local-actor-caller? msg)
-  (string-prefix? "#" (msg-from msg)))
+  (local-actor-ref? (msg-from msg)))
 
 (define (effective-user args msg)
   (if (and (delegated-user-arg? args) (local-actor-caller? msg))
@@ -90,8 +100,8 @@
 
 (define (valid-parent-ref? ref)
   (and (non-empty-string? ref)
-       (or (string-prefix? "did:ma:" ref)
-           (string-prefix? "#" ref))))
+       (or (did-url? ref)
+           (local-actor-ref? ref))))
 
 (define (valid-transfer-kind? kind)
   (or (equal? kind "avatar")
@@ -169,7 +179,7 @@
             ((null? rest)
              (reply-error msg "usage: :take <user-did> <carrier-parent-did-url> [ctx-map]"))
             ((not (valid-parent-ref? (car rest)))
-             (reply-error msg "take requires carrier parent as did:ma:... or #fragment"))
+             (reply-error msg "take requires carrier parent as did:ma:...#fragment"))
             ((and (not (null? (cdr rest))) (not (null? (cdr (cdr rest)))))
              (reply-error msg "take accepts at most one optional ctx-map"))
             ((and (not (null? (cdr rest))) (not (valid-transfer-ctx? (car (cdr rest)))))
@@ -196,7 +206,7 @@
             ((null? rest)
              (reply-error msg "usage: :drop <target-parent-did-url> [ctx-map]"))
             ((not (valid-parent-ref? (car rest)))
-             (reply-error msg "drop requires target parent as did:ma:... or #fragment"))
+             (reply-error msg "drop requires target parent as did:ma:...#fragment"))
             ((and (not (null? (cdr rest))) (not (null? (cdr (cdr rest)))))
              (reply-error msg "drop accepts at most one optional ctx-map"))
             ((and (not (null? (cdr rest))) (not (valid-transfer-ctx? (car (cdr rest)))))

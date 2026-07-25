@@ -5,7 +5,6 @@
 (define ROOM_KIND "/ma/room/0.0.1")
 (define EXIT_KIND "/ma/exit/0.0.1")
 (define LAMBDA_CTX_PROTOCOL "/ma/lambda/ctx/0.0.1")
-(define ENTITY_FRAGMENT_CONTEXT "ma entity-fragment v1")
 
 (define (self) (ma-get-config-key "self"))
 (define (runtime) (ma-get-config-key "runtime"))
@@ -23,6 +22,10 @@
   (and (string? actor)
        (or (string-prefix? "#" actor)
            (string-prefix? (string-append (runtime) "#") actor))))
+(define (did-url? actor)
+  (and (string? actor)
+       (string-prefix? "did:ma:" actor)
+       (string-contains? "#" actor)))
 (define (dead-local-actor? actor)
   (and (local-actor-ref? actor) (not (ma-entity-exists? actor))))
 (define (entity-live? actor)
@@ -58,7 +61,7 @@
 
 (define (notify-old-room! old-room avatar)
   (if (and old-room (not (same-actor? old-room (self))))
-      (ma-send! old-room (list :leave-avatar avatar (self)))
+  (ma-send! (canonical-actor old-room) (list :leave-avatar (canonical-actor avatar) (canonical-actor (self))))
       #f))
 
 (define (label-key actor) (string-append "label:" (canonical-actor actor)))
@@ -142,21 +145,29 @@
 (define (nick-or-default nick)
   (if (non-empty-string? nick) nick (default-nick)))
 
+(define (named-room-fragment direction target-name)
+  (blake3 (string-append "lambda-ma room v1\n" (canonical-actor (self)) "\n" direction "\n" target-name) 8))
+
+(define (exit-fragment direction)
+  (blake3 (string-append "lambda-ma exit v1\n" (canonical-actor (self)) "\n" direction) 8))
+
 (define (avatar-fragment user)
-  (ma-derived-id ENTITY_FRAGMENT_CONTEXT user 8))
+  (blake3 (string-append "lambda-ma avatar v1\n" (runtime) "\n" user) 8))
 
 (define (avatar-for-user user)
   (entity-url (avatar-fragment user)))
 
 (define (avatar-init user nick room)
   (let ((n (nick-or-default nick))
-        (r (root)))
+        (r (root))
+        (avatar (avatar-for-user user))
+        (target-room (canonical-actor room)))
     (string-append
       "(set-prop! \"did\" \"" user "\")\n"
       "(set-prop! \"root\" \"" r "\")\n"
       "(set-prop! \"nick\" \"" n "\")\n"
       "(ma-save-state!)\n"
-      "(ma-send! \"" room "\" (list :enter (ma-get-config-key \"self\") #f \"" n "\"))\n")))
+      "(ma-send! \"" target-room "\" (list :enter \"" avatar "\" #f \"" n "\"))\n")))
 
 (define (ensure-avatar! user nick)
   (let* ((avatar (avatar-for-user user))
@@ -168,7 +179,7 @@
     (ma-save-state!)
     (if (entity-live? avatar)
         avatar
-        (entity-url (ma-create-actor AVATAR_KIND #f (avatar-init user n (self)) user)))))
+      (entity-url (ma-create-actor AVATAR_KIND #f (avatar-init user n (canonical-actor (self))) (avatar-fragment user))))))
 
 (define (enter-ctx-valid? ctx)
   (and (map? ctx)
@@ -205,8 +216,8 @@
   (let* ((avatar (avatar-for-user user))
          (n (nick-or-default nick)))
     (if (entity-live? avatar)
-        (ma-send! avatar (list :enter-room (self) user (avatar-fragment user) n))
-        (ma-create-actor AVATAR_KIND #f (avatar-init user n (self)) user))
+      (ma-send! (canonical-actor avatar) (list :enter-room (canonical-actor (self)) user (avatar-fragment user) n))
+      (ma-create-actor AVATAR_KIND #f (avatar-init user n (canonical-actor (self))) (avatar-fragment user)))
     avatar))
 
 (define (expected-avatar? user avatar)
@@ -216,7 +227,7 @@
   (if (and (local-actor-ref? avatar)
            (entity-live? avatar)
            (expected-avatar? user avatar))
-      (ma-send! avatar (list :enter-room (self) user (avatar-fragment user) (nick-or-default nick)))
+      (ma-send! (canonical-actor avatar) (list :enter-room (canonical-actor (self)) user (avatar-fragment user) (nick-or-default nick)))
       (begin
         (notify-old-room! old-room avatar)
         (request-avatar-entry! user nick))))
@@ -230,7 +241,7 @@
       (broadcast (string-append (speaker-name actor) " arrives."))
       #f)
     (ma-save-state!)
-    (ma-send! actor (direct-room-ctx "agent" nick "You arrive."))
+    (ma-send! (canonical-actor actor) (direct-room-ctx "agent" nick "You arrive."))
     (ma-reply! msg (list :ok "entered"))))
 
 (define (handle-thing-enter! msg user ctx name)
@@ -325,8 +336,8 @@
 
 (define (traverse-exit! actor user direction exit)
   (if (movable-occupant? actor)
-      (ma-send! exit (list :traverse-agent actor (self) (speaker-name actor)))
-      (ma-send! exit (list :traverse actor (self) user (speaker-name actor)))))
+  (ma-send! (canonical-actor exit) (list :traverse-agent (canonical-actor actor) (canonical-actor (self)) (speaker-name actor)))
+  (ma-send! (canonical-actor exit) (list :traverse (canonical-actor actor) (canonical-actor (self)) user (speaker-name actor)))))
 
 (define (exits-text)
   (let ((directions (exit-directions)))
@@ -399,7 +410,7 @@
   (ma-save-state!))
 
 (define (reply-to-sender msg text)
-  (ma-send! (msg-from msg) (list :print text)))
+  (ma-send! (canonical-actor (msg-from msg)) (list :print text)))
 
 (define (print-and-reply-ok msg text)
   (begin
@@ -470,7 +481,7 @@
   (and (not (null? args)) (string-prefix? "did:ma:" (car args))))
 
 (define (local-actor-caller? msg)
-  (string-prefix? "#" (msg-from msg)))
+  (local-actor-ref? (msg-from msg)))
 
 (define (delegated-call? args msg)
   (and (delegated-user-arg? args)
@@ -530,7 +541,7 @@
              (loop (cdr xs) #t)))
           (else
            (begin
-             (ma-send! (car xs) (list :print text))
+             (ma-send! (canonical-actor (car xs)) (list :print text))
              (loop (cdr xs) changed))))))
 
 (define (exit-key direction) (string-append "exit:" direction))
@@ -549,7 +560,7 @@
 
 (define (remember-exit-target! direction target-room target-name)
   (begin
-    (set-prop! (exit-target-key direction) target-room)
+    (set-prop! (exit-target-key direction) (canonical-actor target-room))
     (if target-name
         (set-prop! (exit-target-name-key direction) target-name)
         (del-prop! (exit-target-name-key direction)))))
@@ -560,7 +571,7 @@
       #f))
 
 (define (create-exit! direction target-room target-name)
-  (let* ((exit-fragment (ma-create-actor EXIT_KIND #f (exit-init direction target-room)))
+  (let* ((exit-fragment (ma-create-actor EXIT_KIND #f (exit-init direction target-room) (exit-fragment direction)))
          (exit (entity-url exit-fragment)))
     (set-prop! (exit-key direction) exit)
     (put-exit! direction exit)
@@ -578,7 +589,7 @@
 (define (exit-init direction target-room)
   (string-append
     "(set-prop! \"direction\" \"" direction "\")\n"
-    "(set-prop! \"target-room\" \"" target-room "\")\n"
+    "(set-prop! \"target-room\" \"" (canonical-actor target-room) "\")\n"
     "(ma-save-state!)\n"))
 
 (define (dig-target-args args)
@@ -614,24 +625,24 @@
         #f)))
 
 (define (existing-room-target target)
-  (cond ((and target (string-prefix? "#" target) (ma-entity-exists? target))
-         target)
-        ((and target (string-prefix? "did:ma:" target)) target)
+  (cond ((and target (local-actor-ref? target) (ma-entity-exists? (canonical-actor target)))
+         (canonical-actor target))
+        ((and target (did-url? target)) target)
         ((and target (ma-entity-exists? target)) target)
         (else #f)))
 
 (define (request-link-authorisation! requester user direction target-room)
   (begin
-    (ma-send! target-room (list :authorise-link user direction requester))
-    (ma-send! requester (list :print (string-append "Checking ownership of " target-room ".")))))
+    (ma-send! (canonical-actor target-room) (list :authorise-link user direction (canonical-actor requester)))
+    (ma-send! (canonical-actor requester) (list :print (string-append "Checking ownership of " target-room ".")))))
 
 (define (request-existing-link! msg user direction target-room)
   (let ((requester (canonical-actor (msg-from msg))))
-    (set-prop! (pending-link-key direction) target-room)
+    (set-prop! (pending-link-key direction) (canonical-actor target-room))
     (set-prop! (pending-link-user-key direction) user)
     (set-prop! (pending-link-requester-key direction) requester)
     (ma-save-state!)
-    (ma-send! target-room (list :ping user direction requester))
+    (ma-send! (canonical-actor target-room) (list :ping user direction requester))
     (reply-to-sender msg (string-append "Checking reachability of " target-room "."))))
 
 (define (pending-link-matches? direction user target-room requester)
@@ -641,7 +652,7 @@
 
 (define (enter-dig-target! requester user target-room)
   (if (member-actor? requester (occupants))
-  (ma-send! target-room (list :enter user (canonical-actor requester) (self) (speaker-name requester)))
+  (ma-send! (canonical-actor target-room) (list :enter user (canonical-actor requester) (canonical-actor (self)) (speaker-name requester)))
       #f))
 
 (set-method! :leave-avatar
@@ -720,7 +731,7 @@
              (reply-to-sender msg "Usage: take <agent-or-thing>"))
             (actor
              (begin
-               (ma-send! actor (list :take user avatar (claim-ctx actor)))
+               (ma-send! (canonical-actor actor) (list :take user (canonical-actor avatar) (claim-ctx actor)))
                (reply-to-sender msg (string-append "You take " token "."))))
             (else
              (reply-to-sender msg (string-append "Unknown agent or thing: " token)))))))
@@ -736,7 +747,7 @@
              (reply-to-sender msg "Usage: drop <agent-or-thing>"))
             (actor
              (begin
-               (ma-send! avatar (list :drop-thing user actor (self) token (claim-ctx actor)))
+               (ma-send! (canonical-actor avatar) (list :drop-thing user (canonical-actor actor) (canonical-actor (self)) token (claim-ctx actor)))
                (reply-to-sender msg (string-append "You drop " token "."))))
             (else
              (reply-to-sender msg (string-append "Unknown agent or thing: " token)))))))
@@ -749,7 +760,7 @@
       (cond ((not token)
              (reply-to-sender msg "Usage: where <agent-or-thing>"))
             (actor
-             (ma-send! actor (list :where)))
+             (ma-send! (canonical-actor actor) (list :where)))
             (else
              (reply-to-sender msg (string-append "Unknown agent or thing: " token)))))))
 
@@ -757,7 +768,7 @@
   (lambda (args msg)
     (let ((text (room-help-text)))
       (if (avatar-caller? msg)
-          (ma-send! (msg-from msg) (list :print text))
+          (ma-send! (canonical-actor (msg-from msg)) (list :print text))
           #f)
       (reply-ok msg text))))
 
@@ -814,7 +825,7 @@
 
 (set-method! :ping
   (lambda (args msg)
-    (ma-send! (msg-from msg) (cons :pong args))))
+    (ma-send! (canonical-actor (msg-from msg)) (cons :pong args))))
 
 (set-method! :pong
   (lambda (args msg)
@@ -837,8 +848,8 @@
               (requester (car (cdr (cdr args))))
               (source-room (msg-from msg)))
           (if (owner? user)
-              (ma-send! source-room (list :link-authorised user direction requester))
-              (ma-send! source-room (list :link-denied user direction requester "You must own both rooms to link them.")))))))
+              (ma-send! (canonical-actor source-room) (list :link-authorised user direction (canonical-actor requester)))
+              (ma-send! (canonical-actor source-room) (list :link-denied user direction (canonical-actor requester) "You must own both rooms to link them.")))))))
 
 (set-method! :link-denied
   (lambda (args msg)
@@ -853,7 +864,7 @@
               (begin
                 (clear-pending-link! direction)
                 (ma-save-state!)
-                (ma-send! requester (list :print reason)))
+                (ma-send! (canonical-actor requester) (list :print reason)))
               #f)))))
 
 (set-method! :link-authorised
@@ -869,14 +880,14 @@
                      (begin
                        (clear-pending-link! direction)
                        (ma-save-state!)
-                       (ma-send! requester (list :print "You no longer own this room."))))
+                       (ma-send! (canonical-actor requester) (list :print "You no longer own this room."))))
                     (else
                      (begin
                        (create-exit! direction target-room #f)
                        (clear-pending-link! direction)
                        (ma-save-state!)
                        (broadcast (string-append user " digs " direction "."))
-                       (ma-send! requester (list :print (string-append "You dig " direction " and link to an existing room.")))
+                       (ma-send! (canonical-actor requester) (list :print (string-append "You dig " direction " and link to an existing room.")))
                        (enter-dig-target! requester user target-room))))
               #f)))))
 
@@ -905,7 +916,10 @@
                          (reply-to-sender msg (string-append "Exit " direction " already leads to " target "."))
                          (enter-dig-target! (msg-from msg) user remembered-room)))
                       (else
-                       (let ((target-room (entity-url (ma-create-actor ROOM_KIND custom-behaviour (room-init target user custom-init)))))
+                       (let* ((target-fragment (if (and target (not custom-init) (not custom-behaviour))
+                                                   (named-room-fragment direction target)
+                                                   #f))
+                              (target-room (entity-url (ma-create-actor ROOM_KIND custom-behaviour (room-init target user custom-init) target-fragment))))
                          (create-exit! direction target-room target)
                          (ma-save-state!)
                          (broadcast (string-append user " digs " direction "."))
@@ -921,7 +935,7 @@
       (let ((exit (exit-target direction)))
         (if exit
             (traverse-exit! actor user direction exit)
-            (ma-send! actor (list :print (string-append "No exit " direction "."))))))))
+            (ma-send! (canonical-actor actor) (list :print (string-append "No exit " direction "."))))))))
 
 (set-method! :move
   (lambda (args msg)
@@ -930,7 +944,7 @@
            (direction (random-exit-direction)))
       (if direction
           (traverse-exit! actor user direction (exit-target direction))
-          (ma-send! actor (list :print "No exits."))))))
+          (ma-send! (canonical-actor actor) (list :print "No exits."))))))
 
 (set-method! :nick
   (lambda (args msg)
@@ -981,7 +995,7 @@
              (broadcast (string-append (speaker-name avatar) " arrives."))
              #f)
          (ma-save-state!)
-         (ma-send! avatar (avatar-room-ctx avatar nick "You arrive."))))
+         (ma-send! (canonical-actor avatar) (avatar-room-ctx avatar nick "You arrive."))))
       ((and (string? (car args))
             (string-prefix? "did:ma:" (car args))
             (not (null? (cdr args))))

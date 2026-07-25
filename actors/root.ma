@@ -3,11 +3,13 @@
 
 (define AVATAR_KIND "/ma/avatar/0.0.1")
 (define LAMBDA_CTX_PROTOCOL "/ma/lambda/ctx/0.0.1")
-(define ENTITY_FRAGMENT_CONTEXT "ma entity-fragment v1")
 
 (define (self) (ma-get-config-key "self"))
 (define (runtime) (ma-get-config-key "runtime"))
 (define (entity-url fragment) (string-append (runtime) "#" fragment))
+(define (canonical-actor actor)
+  (if (and actor (string-prefix? "#" actor)) (string-append (runtime) actor) actor))
+(define (local-self) (canonical-actor (self)))
 (define (default-nick) "avatar")
 
 (define (nick-or-default nick)
@@ -18,7 +20,7 @@
     (if configured configured (get-prop "start"))))
 
 (define (entity-live? actor)
-  (and actor (ma-entity-exists? actor)))
+  (and actor (ma-entity-exists? (canonical-actor actor))))
 
 (define (ensure-start-room)
   (let ((start (configured-start-room)))
@@ -39,7 +41,7 @@
         (else (car args))))
 
 (define (entry-room requested)
-  (if (entity-live? requested) requested (ensure-start-room)))
+  (if (entity-live? requested) (canonical-actor requested) (ensure-start-room)))
 
 (define (requested-nick args)
   (cond ((null? args) #f)
@@ -56,28 +58,30 @@
   (if (delegated-enter? args) (car args) (msg-from msg)))
 
 (define (avatar-fragment user)
-  (ma-derived-id ENTITY_FRAGMENT_CONTEXT user 8))
+  (blake3 (string-append "lambda-ma avatar v1\n" (runtime) "\n" user) 8))
 
 (define (avatar-for-user user)
   (entity-url (avatar-fragment user)))
 
 (define (avatar-init user nick room)
   (let ((n (nick-or-default nick))
-        (r (self)))
+        (r (local-self))
+        (avatar (avatar-for-user user))
+        (target-room (canonical-actor room)))
     (string-append
       "(set-prop! \"did\" \"" user "\")\n"
       "(set-prop! \"root\" \"" r "\")\n"
       "(set-prop! \"nick\" \"" n "\")\n"
       "(ma-save-state!)\n"
-      "(ma-send! \"" room "\" (list :enter (ma-get-config-key \"self\") #f \"" n "\"))\n")))
+      "(ma-send! \"" target-room "\" (list :enter \"" avatar "\" #f \"" n "\"))\n")))
 
 (define (ensure-avatar user nick room)
   (let ((avatar (avatar-for-user user)))
     (if (entity-live? avatar)
         (begin
-          (ma-send! avatar (list :enter-room room user (avatar-fragment user) (nick-or-default nick)))
+          (ma-send! (canonical-actor avatar) (list :enter-room (canonical-actor room) user (avatar-fragment user) (nick-or-default nick)))
           avatar)
-        (entity-url (ma-create-actor AVATAR_KIND #f (avatar-init user nick room) user)))))
+        (entity-url (ma-create-actor AVATAR_KIND #f (avatar-init user nick room) (avatar-fragment user))))))
 
 (set-method! :enter
   (lambda (args msg)

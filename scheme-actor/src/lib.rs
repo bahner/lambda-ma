@@ -213,7 +213,7 @@ mod tests {
         crate::state::set_config(config);
         env.define(
             Rc::from("msg"),
-            Value::Msg(sample_msg("#rms", "did:ma:runtime#old-room")),
+            Value::Msg(sample_msg("did:ma:runtime#rms", "did:ma:runtime#old-room")),
         );
 
         eval_all(
@@ -249,10 +249,7 @@ mod tests {
 
         env.define(
             Rc::from("msg"),
-            Value::Msg(sample_msg(
-                "did:ma:runtime#room-a",
-                "did:ma:runtime#rms",
-            )),
+            Value::Msg(sample_msg("did:ma:runtime#room-a", "did:ma:runtime#rms")),
         );
         eval_all(
             r#"
@@ -293,6 +290,33 @@ mod tests {
     }
 
     #[test]
+    fn agent_treats_same_runtime_did_url_as_local_actor_caller() {
+        let env = agent_env();
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        crate::state::set_config(config);
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_msg("did:ma:runtime#room", "did:ma:runtime#rms")),
+        );
+
+        assert_eq!(
+            eval_str(
+                "(effective-user (list \"did:ma:user\" \"north\") msg)",
+                &env
+            ),
+            "did:ma:user"
+        );
+        assert_eq!(
+            eval_str(
+                "(car (effective-args (list \"did:ma:user\" \"north\") msg))",
+                &env
+            ),
+            "north"
+        );
+    }
+
+    #[test]
     fn room_move_selects_an_available_exit() {
         let env = room_env();
         assert!(eval_bool("(not (random-exit-direction))", &env));
@@ -306,7 +330,10 @@ mod tests {
         eval_all("(put-exit! \"dør\" \"did:ma:runtime#door-exit\")", &env).unwrap();
 
         assert_eq!(eval_str("(exits-text)", &env), "Exits: dør");
-        assert_eq!(eval_str("(exit-target \"dør\")", &env), "did:ma:runtime#door-exit");
+        assert_eq!(
+            eval_str("(exit-target \"dør\")", &env),
+            "did:ma:runtime#door-exit"
+        );
     }
 
     #[test]
@@ -322,14 +349,50 @@ mod tests {
     #[test]
     fn room_remembers_named_dig_target_for_idempotency() {
         let env = room_env();
-        eval_all("(remember-exit-target! \"dør\" \"did:ma:runtime#kitchen\" \"køkken\")", &env)
-            .unwrap();
+        eval_all(
+            "(remember-exit-target! \"dør\" \"did:ma:runtime#kitchen\" \"køkken\")",
+            &env,
+        )
+        .unwrap();
 
         assert_eq!(
             eval_str("(remembered-new-room-target \"dør\" \"køkken\")", &env),
             "did:ma:runtime#kitchen"
         );
-        assert!(eval_bool("(not (remembered-new-room-target \"dør\" \"stue\"))", &env));
+        assert!(eval_bool(
+            "(not (remembered-new-room-target \"dør\" \"stue\"))",
+            &env
+        ));
+    }
+
+    #[test]
+    fn room_named_dig_fragments_are_deterministic() {
+        let env = room_env();
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:k51runtime".to_string());
+        config.insert("self".to_string(), "#source".to_string());
+        crate::state::set_config(config);
+
+        let kitchen = eval_str("(named-room-fragment \"dør\" \"køkken\")", &env);
+        assert_eq!(kitchen.len(), 16);
+        assert!(kitchen.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(
+            kitchen,
+            eval_str("(named-room-fragment \"dør\" \"køkken\")", &env)
+        );
+        assert_ne!(
+            kitchen,
+            eval_str("(named-room-fragment \"vindu\" \"køkken\")", &env)
+        );
+        assert_ne!(
+            kitchen,
+            eval_str("(named-room-fragment \"dør\" \"stue\")", &env)
+        );
+
+        let exit = eval_str("(exit-fragment \"dør\")", &env);
+        assert_eq!(exit.len(), 16);
+        assert_eq!(exit, eval_str("(exit-fragment \"dør\")", &env));
+        assert_ne!(exit, kitchen);
     }
 
     #[test]
@@ -340,15 +403,15 @@ mod tests {
         config.insert("self".to_string(), "#construct".to_string());
         config.insert("root".to_string(), "#root".to_string());
         crate::state::set_config(config);
-                eval_all(
-                        r##"(define (ctx-term-value term key)
+        eval_all(
+            r##"(define (ctx-term-value term key)
     (let loop ((pairs (car (cdr term))))
         (cond ((null? pairs) #f)
                     ((equal? (car (car pairs)) key) (car (cdr (car pairs))))
                     (else (loop (cdr pairs))))))
 (define avatar-ctx (avatar-room-ctx "#alice" "Alice" "You arrive."))"##,
-                        &env,
-                )
+            &env,
+        )
         .unwrap();
 
         assert_eq!(
@@ -372,6 +435,20 @@ mod tests {
         assert!((0..3).contains(&value));
         assert!(eval_all("(random 0)", &env).is_err());
         assert!(eval_all("(random \"3\")", &env).is_err());
+    }
+
+    #[test]
+    fn blake3_hashes_strings_as_lower_hex() {
+        let env = new_root_env();
+
+        assert_eq!(
+            eval_str("(blake3 \"abc\")", &env),
+            "6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85"
+        );
+        assert_eq!(eval_str("(blake3 \"abc\" 8)", &env), "6437b3ac38465133");
+        assert!(eval_all("(blake3 42)", &env).is_err());
+        assert!(eval_all("(blake3 \"abc\" 0)", &env).is_err());
+        assert!(eval_all("(blake3 \"abc\" 33)", &env).is_err());
     }
 
     #[test]
@@ -552,11 +629,33 @@ mod tests {
     #[test]
     fn string_and_type_builtins() {
         assert_eq!(run(r#"(string-append "foo" "bar")"#), Value::str("foobar"));
+        assert_eq!(run(r#"(string-length "føø")"#), Value::Int(3));
+        assert_eq!(run(r#"(string-empty? "")"#), Value::Bool(true));
         assert_eq!(run(r##"(string-prefix? "#" "#room")"##), Value::Bool(true));
         assert_eq!(
             run(r##"(string-prefix? "#" "did:ma:abc#room")"##),
             Value::Bool(false)
         );
+        assert_eq!(
+            run(r#"(string-suffix? "room" "did:ma:abc#room")"#),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            run(r##"(string-contains? "#" "did:ma:abc#room")"##),
+            Value::Bool(true)
+        );
+        assert_eq!(run(r#"(substring "føøbar" 1 4)"#), Value::str("øøb"));
+        assert_eq!(run(r#"(string-trim "  hi\n")"#), Value::str("hi"));
+        assert_eq!(
+            run(r#"(string-split "a,b,c" ",")"#),
+            Value::list(vec![Value::str("a"), Value::str("b"), Value::str("c")])
+        );
+        assert_eq!(
+            run(r#"(string-join (list "a" "b" "c") "/")"#),
+            Value::str("a/b/c")
+        );
+        assert_eq!(run(r#"(string-upcase "abcæ")"#), Value::str("ABCÆ"));
+        assert_eq!(run(r#"(string-downcase "ABCÆ")"#), Value::str("abcæ"));
         assert_eq!(run("(number->string 42)"), Value::str("42"));
         assert_eq!(run(r#"(string->number "42")"#), Value::Int(42));
         assert_eq!(run("(string? \"x\")"), Value::Bool(true));
