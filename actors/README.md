@@ -119,7 +119,8 @@ and assigns the digger's user DID to any newly-created target room.
 
 Digging an existing direction replaces that exit instead of failing. This lets
 room owners rewire mistakes or rebuild a topology without deleting the old exit
-first.
+first. `fill <direction>` removes the exit from the room and asks the exit actor
+to terminate itself; it does not delete the target room.
 
 Named new-room digs are idempotent per source room, direction, and target name.
 For example, repeating `dig dør to kjøkken` in the same source room resolves to

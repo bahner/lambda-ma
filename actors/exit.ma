@@ -2,10 +2,19 @@
 ; Exits are traversal entities owned by rooms or by root for world entry.
 
 (define (target-room) (get-prop "target-room"))
+(define (source-room) (get-prop "source-room"))
 (define (direction) (get-prop "direction"))
 (define (runtime) (ma-get-config-key "runtime"))
 (define (canonical-actor actor)
   (if (and actor (string-prefix? "#" actor)) (string-append (runtime) actor) actor))
+(define (same-actor? a b)
+  (equal? (canonical-actor a) (canonical-actor b)))
+
+(set-method! :fill
+  (lambda (args msg)
+    (if (same-actor? (msg-from msg) (source-room))
+        (ma-end)
+        #f)))
 
 (set-method! :traverse
   (lambda (args msg)

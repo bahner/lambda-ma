@@ -115,6 +115,21 @@ mod tests {
         env
     }
 
+    fn exit_env() -> Rc<Env> {
+        crate::state::load_from_cbor(&empty_state_cbor()).unwrap();
+        let env = new_root_env();
+        crate::state::install(&env);
+        crate::msg::install(&env);
+        eval_all(include_str!("../stdlib.ma"), &env).unwrap();
+        eval_all(include_str!("../../actors/exit.ma"), &env).unwrap();
+        eval_all(
+            "(define (ma-send! target term) #f) (define (ma-end) (set-prop! \"ended\" \"yes\"))",
+            &env,
+        )
+        .unwrap();
+        env
+    }
+
     fn sample_term_msg(from: &str, to: &str, content: Value) -> Rc<crate::msg::MsgRecord> {
         Rc::new(crate::msg::MsgRecord {
             id: "msg-1".to_string(),
@@ -214,11 +229,7 @@ mod tests {
 
         assert!(eval_str("(room-text)", &env).ends_with("\nExits: none."));
 
-        eval_all(
-            "(put-exit! \"north\" \"did:ma:runtime#north-exit\")",
-            &env,
-        )
-        .unwrap();
+        eval_all("(put-exit! \"north\" \"did:ma:runtime#north-exit\")", &env).unwrap();
 
         assert!(eval_str("(room-text)", &env).ends_with("\nExits: north"));
     }
@@ -345,7 +356,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 2);
-        assert_eq!(eval_str("(get-prop \"sent-target:1\")", &env), "did:ma:runtime#scheduler");
+        assert_eq!(
+            eval_str("(get-prop \"sent-target:1\")", &env),
+            "did:ma:runtime#scheduler"
+        );
         assert_eq!(
             eval_all("(get-prop \"sent-term:1\")", &env).unwrap(),
             Value::list(vec![
@@ -355,7 +369,10 @@ mod tests {
                 Value::symbol(":presence-tick"),
             ])
         );
-        assert_eq!(eval_str("(get-prop \"sent-target:2\")", &env), "did:ma:runtime#scheduler");
+        assert_eq!(
+            eval_str("(get-prop \"sent-target:2\")", &env),
+            "did:ma:runtime#scheduler"
+        );
         assert_eq!(
             eval_all("(get-prop \"sent-term:2\")", &env).unwrap(),
             Value::list(vec![
@@ -477,11 +494,71 @@ mod tests {
     #[test]
     fn room_exit_init_persists_exit_state() {
         let env = room_env();
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#source".to_string());
+        crate::state::set_config(config);
 
         assert_eq!(
             eval_str("(exit-init \"dør\" \"did:ma:runtime#kitchen\")", &env),
-            "(set-prop! \"direction\" \"dør\")\n(set-prop! \"target-room\" \"did:ma:runtime#kitchen\")\n(ma-save-state!)\n"
+            "(set-prop! \"direction\" \"dør\")\n(set-prop! \"source-room\" \"did:ma:runtime#source\")\n(set-prop! \"target-room\" \"did:ma:runtime#kitchen\")\n(ma-save-state!)\n"
         );
+    }
+
+    #[test]
+    fn room_remove_exit_clears_exit_state() {
+        let env = room_env();
+        eval_all(
+            r#"
+            (put-exit! "north" "did:ma:runtime#north-exit")
+            (set-prop! "exit:north" "did:ma:runtime#north-exit")
+            (set-prop! "exit-target:north" "did:ma:runtime#kitchen")
+            (set-prop! "exit-target-name:north" "Kitchen")
+            (remove-exit! "north")
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        assert_eq!(eval_str("(exits-text)", &env), "Exits: none.");
+        assert!(eval_bool("(not (exit-target \"north\"))", &env));
+        assert!(eval_bool("(not (get-prop \"exit-target:north\"))", &env));
+        assert!(eval_bool(
+            "(not (get-prop \"exit-target-name:north\"))",
+            &env
+        ));
+    }
+
+    #[test]
+    fn exit_fill_only_allows_source_room_to_end_it() {
+        let env = exit_env();
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#north-exit".to_string());
+        crate::state::set_config(config);
+        eval_all("(set-prop! \"source-room\" \"did:ma:runtime#room\")", &env).unwrap();
+
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:runtime#intruder",
+                "did:ma:runtime#north-exit",
+                Value::symbol(":fill"),
+            )),
+        );
+        eval_all("(on-message msg)", &env).unwrap();
+        assert!(eval_bool("(not (get-prop \"ended\"))", &env));
+
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:runtime#room",
+                "did:ma:runtime#north-exit",
+                Value::symbol(":fill"),
+            )),
+        );
+        eval_all("(on-message msg)", &env).unwrap();
+        assert_eq!(eval_str("(get-prop \"ended\")", &env), "yes");
     }
 
     #[test]
@@ -511,11 +588,23 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(eval_str("(get-prop \"created-fragment\")", &env), eval_str("(exit-fragment \"north\")", &env));
+        assert_eq!(
+            eval_str("(get-prop \"created-fragment\")", &env),
+            eval_str("(exit-fragment \"north\")", &env)
+        );
         assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 2);
-        assert_eq!(eval_str("(get-prop \"sent-1\")", &env), "did:ma:runtime#avatar");
-        assert_eq!(eval_str("(get-prop \"sent-2\")", &env), "did:ma:runtime#kitchen");
-        assert_ne!(eval_str("(exit-target \"north\")", &env), "did:ma:runtime#dead-exit");
+        assert_eq!(
+            eval_str("(get-prop \"sent-1\")", &env),
+            "did:ma:runtime#avatar"
+        );
+        assert_eq!(
+            eval_str("(get-prop \"sent-2\")", &env),
+            "did:ma:runtime#kitchen"
+        );
+        assert_ne!(
+            eval_str("(exit-target \"north\")", &env),
+            "did:ma:runtime#dead-exit"
+        );
     }
 
     #[test]

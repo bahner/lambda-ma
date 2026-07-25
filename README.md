@@ -133,10 +133,12 @@ Colon-prefixed methods bypass the avatar and target the focused room directly:
 
 The last form resets `description` to the default.
 
-Only the current owner may create exits from a room. Newly dug rooms are owned
-by the digger automatically, so a builder can give someone a room with `owner`
-and that user can then build outward from there. Linking to an already-existing
-room is allowed when the target room confirms that the same user owns it too.
+Only the current owner may create or remove exits from a room. Newly dug rooms
+are owned by the digger automatically, so a builder can give someone a room
+with `owner` and that user can then build outward from there. Linking to an
+already-existing room is allowed when the target room confirms that the same
+user owns it too. `fill <direction>` removes the exit link and terminates the
+exit actor, but leaves the target room intact.
 
 ## Develop
 

@@ -163,6 +163,7 @@
     "  claim             claim an unowned room\n"
     "  owner [did]       show or transfer room ownership\n"
     "  dig <dir> [to name] [with code] create an exit\n"
+    "  fill <dir>        remove an exit\n"
     "  prop <key> [value] set or reset room text\n"
     "  nick [name]       show or set your display name\n"
     "Use :help for the focused actor directly."))
@@ -315,6 +316,13 @@
     (require-did msg
       (lambda ()
         (send-room-as-did :dig args)
+        (reply-ok-silent msg)))))
+
+(set-method! :fill
+  (lambda (args msg)
+    (require-did msg
+      (lambda ()
+        (send-room-as-did :fill args)
         (reply-ok-silent msg)))))
 
 (set-method! :prop

@@ -232,7 +232,7 @@ Key verbs:
 | `:help` | `[topic]` | user only | `help here` asks room `:help`. |
 | `:nick` | `[nick]` | user only | No args returns current nick; with args forwards to room. |
 | `:look` `:exits?` `:who?` `:say` `:emote` `:go` | varies | user only | Delegates to room. |
-| `:claim` `:owner` `:dig` `:prop` | varies | user only | Delegated with prepended user DID. |
+| `:claim` `:owner` `:dig` `:fill` `:prop` | varies | user only | Delegated with prepended user DID. |
 | `:drop-thing` | `<user> <thing> <target-parent> [token] [ctx]` | room caller only | Parent-mediated drop helper; forwards optional user ctx map. |
 | `:report-parent` | `<room> <tick> <nonce>` | room caller | Machine presence request; replies with `:parent-report <self> <room> <tick> <nonce>` using the avatar's persisted room. |
 
@@ -256,6 +256,7 @@ Key verbs:
 | `:take` / `:drop` / `:where` | `[user?] [token]` | Uses movable actor parent-authority contract. |
 | `:claim` / `:owner` / `:prop` | delegated or direct shapes | Room ownership controls write operations. |
 | `:dig` | delegated or direct shape | Owner-gated exit creation/linking. |
+| `:fill` | delegated or direct shape | Owner-gated exit removal. Removes the direction from the room and asks the exit actor to terminate itself; target rooms are not deleted. |
 | `:behaviour` | `[ /ipfs/<cid> ]` | Owner-gated behaviour update. |
 | `:ping` / `:pong` / `:authorise-link` / `:link-authorised` / `:link-denied` | link handshake args | Existing-room link handshake. |
 | `:presence-tick` | none | Scheduled room-local occupant sweep. Asks occupants to report their parent and removes occupants that have not reported within the room timeout. |
@@ -357,7 +358,7 @@ world-level actor names.
 | --- | --- | --- |
 | `owner` | user DID | authoritative room ownership |
 | `name`, `description` | string | authoritative room metadata |
-| `exits` map and `exit:<direction>` | map/string | authoritative exit registry |
+| `exits` map and `exit:<direction>` | map/string | authoritative exit registry; removed by `:fill <direction>` |
 | `things` map | map | room-local alias map to non-avatar occupant DID-URLs |
 | `claim:<actor>` | map | stored enter claim/context |
 | `occupants` | list | derived cache (presentation/broadcast), root-fed |

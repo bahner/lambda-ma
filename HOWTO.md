@@ -249,15 +249,17 @@ claim                  claim an unowned room
 owner                  show the current room owner
 owner did:ma:<target>  transfer the room to another user DID
 dig north to Name      create an exit and a new room
+fill north             remove the north exit
 :prop name Name        set the focused room name
 :prop description ...  set the focused room description
 :prop description      reset the focused room description
 prop name Name         shorthand for setting the focused room name
 ```
 
-Digging an existing direction replaces that exit. To link to an existing room
-instead of creating a new one, use a room DID-URL or a local fragment from the
-same runtime:
+Digging an existing direction replaces that exit. Filling a direction removes
+the exit from the current room and asks the exit actor to terminate itself; it
+does not delete the target room. To link to an existing room instead of creating
+a new one, use a room DID-URL or a local fragment from the same runtime:
 
 ```text
 dig mirror to @sky#FQWJA5V3

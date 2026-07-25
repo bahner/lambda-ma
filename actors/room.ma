@@ -506,6 +506,13 @@
 (define (put-exit! direction exit)
   (set-prop! "exits" (map-set (exits) direction exit)))
 
+(define (remove-exit! direction)
+  (begin
+    (set-prop! "exits" (map-delete (exits) direction))
+    (del-prop! (exit-key direction))
+    (del-prop! (exit-target-key direction))
+    (del-prop! (exit-target-name-key direction))))
+
 (define (exit-target direction)
   (let ((exit (map-ref (exits) direction #f)))
     (if exit exit (get-prop (exit-key direction)))))
@@ -603,6 +610,7 @@
     "  claim             claim this room if it is unowned\n"
     "  owner [did]       show or transfer ownership\n"
     "  dig <dir> [to name] [with code] create an exit\n"
+    "  fill <dir>        remove an exit\n"
     "  :thing <name> [did] set/list local occupant alias\n"
     "  :behaviour /ipfs/<cid> add or replace this room's own code\n"
     "  :prop <key> [value] set or reset room text\n"
@@ -823,6 +831,7 @@
 (define (exit-init direction target-room)
   (string-append
     "(set-prop! \"direction\" \"" direction "\")\n"
+    "(set-prop! \"source-room\" \"" (canonical-actor (self)) "\")\n"
     "(set-prop! \"target-room\" \"" (canonical-actor target-room) "\")\n"
     "(ma-save-state!)\n"))
 
@@ -1214,6 +1223,27 @@
                          (broadcast (string-append user " digs " direction "."))
                          (reply-to-sender msg (string-append "You dig " direction " and open a new exit."))
                          (enter-dig-target! (msg-from msg) user target-room))))))))))))
+
+(set-method! :fill
+  (lambda (args msg)
+    (let* ((user (caller-user args msg))
+           (fill-args (command-args args msg)))
+      (if (null? fill-args)
+          (reply-to-sender msg "Usage: fill <direction>")
+          (require-valid-owner user msg
+            (lambda ()
+              (require-owner user msg
+                (lambda ()
+                  (let* ((direction (car fill-args))
+                         (exit (exit-target direction)))
+                    (if exit
+                        (begin
+                          (ma-send! (canonical-actor exit) (list :fill))
+                          (remove-exit! direction)
+                          (ma-save-state!)
+                          (broadcast (string-append user " fills " direction "."))
+                          (reply-to-sender msg (string-append "You fill " direction ".")))
+                        (reply-to-sender msg (string-append "No exit " direction "."))))))))))))
 
 (set-method! :go
   (lambda (args msg)

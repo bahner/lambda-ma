@@ -1,5 +1,5 @@
 //! Entity-management primitives that cross to the runtime host — currently
-//! just `ma-create-actor`, wired to the `ma_create_entity` host function
+//! `ma-create-actor`, `ma-entity-exists?`, and `ma-end`, wired to runtime host functions
 //! (ma-runtime-v1.md §14.4). Phase 5 territory, same category as
 //! `ma_send`/`ma_reply` (not yet wired) — this one lands first as a
 //! temporary, pragmatic path to parameterised entity creation (a reusable
@@ -16,6 +16,7 @@ mod host {
     extern "ExtismHost" {
         fn ma_create_entity(input: Vec<u8>) -> Vec<u8>;
         fn ma_entity_exists(input: Vec<u8>) -> Vec<u8>;
+        fn ma_end(input: Vec<u8>) -> Vec<u8>;
     }
 
     /// `input` is CBOR-encoded `{"kind": text, "behaviour": text/null,
@@ -39,6 +40,11 @@ mod host {
             Err(e) => Err(format!("ma_entity_exists returned invalid UTF-8: {e}")),
         }
     }
+
+    /// Requests self-termination after the current dispatch returns.
+    pub fn end_self() -> Result<Vec<u8>, String> {
+        unsafe { ma_end(Vec::new()) }.map_err(|e| e.to_string())
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -55,6 +61,10 @@ mod host {
             "ma_entity_exists is only available compiled to wasm32 (no host to call natively)"
                 .to_string(),
         )
+    }
+
+    pub fn end_self() -> Result<Vec<u8>, String> {
+        Err("ma_end is only available compiled to wasm32 (no host to call natively)".to_string())
     }
 }
 
@@ -73,6 +83,20 @@ pub fn install(env: &Rc<Env>) {
         Rc::from("ma-entity-exists?"),
         Value::Builtin("ma-entity-exists?", b_ma_entity_exists),
     );
+    env.define(Rc::from("ma-end"), Value::Builtin("ma-end", b_ma_end));
+}
+
+/// `(ma-end)` — request self-termination after the current dispatch returns.
+fn b_ma_end(args: &[Value]) -> EvalResult<Value> {
+    if !args.is_empty() {
+        return Err(EvalError::new(format!(
+            "ma-end: expected exactly 0 arguments, got {}",
+            args.len()
+        )));
+    }
+    host::end_self()
+        .map(|_| Value::symbol(":ok"))
+        .map_err(|e| EvalError::new(format!("ma-end: {e}")))
 }
 
 /// `(ma-entity-exists? actor)` — true if `actor` names a live local entity.
@@ -260,6 +284,24 @@ mod tests {
         let err = crate::eval_all(r#"(ma-create-actor "/ma/scheme/actor/0.0.1" #f #f)"#, &env)
             .unwrap_err();
         // Still hits the (stubbed) host boundary, not an argument error.
+        assert!(
+            err.0.contains("only available compiled to wasm32"),
+            "{}",
+            err.0
+        );
+    }
+
+    #[test]
+    fn ma_end_requires_no_arguments() {
+        let env = env_with_actor();
+        let err = crate::eval_all("(ma-end 1)", &env).unwrap_err();
+        assert!(err.0.contains("expected exactly 0 arguments"), "{}", err.0);
+    }
+
+    #[test]
+    fn ma_end_reaches_the_host_boundary() {
+        let env = env_with_actor();
+        let err = crate::eval_all("(ma-end)", &env).unwrap_err();
         assert!(
             err.0.contains("only available compiled to wasm32"),
             "{}",
