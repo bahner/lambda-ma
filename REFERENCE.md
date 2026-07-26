@@ -194,10 +194,11 @@ same room reuses the same target room and exit instead of creating fresh actors.
 Unnamed exploratory digs remain non-deterministic.
 
 New-room digs are two-phase. The source room stores the pending target and a
-nonce, creates the room with birth metadata in the init payload, and only
-creates the exit after receiving `:actor-born <actor> <kind> <nonce> <direction>`
-from the expected room. This is required because `ma-create-actor` queues
-creation until the current actor dispatch returns.
+nonce, creates the room with child-alive metadata in the init payload, and only
+creates the exit after receiving `:child-alive <actor> <kind> <nonce> <direction>`
+from the expected room. The child-alive metadata is part of the new room's init
+payload; after storing it, the room sends the callback to its parent. Actors
+without a parent, such as genesis actors, emit no child-alive callback.
 
 For existing-room link targets:
 
@@ -254,6 +255,7 @@ Key verbs:
 | `:enter` | `<user> <avatar-did-url> <old-room-did-url> [nick]` | Movement arrival shape. Same-runtime avatars are admitted directly; foreign/source-runtime avatars trigger target-runtime local avatar entry for `user` and old-room cleanup for the source avatar. |
 | `:enter` | `<avatar-did-url> [old-room-did-url]` | Admit known avatar flow. |
 | `:enter` | `<user> <avatar-did-url> <old-room-did-url> [nick]` | Cross-room/cross-runtime-friendly arrival shape. |
+| `:leave` | none | Caller-origin live-presence departure. Removes the caller's local deterministic avatar from this room, but does not change avatar state or client ctx; the saved room remains the next-login return point. |
 | `:leave-avatar` | `<avatar-did-url> <to-room-did-url>` | Target-room-origin cache removal during movement. |
 | `:leave-occupant` | none | Sender-origin cache removal for non-avatar occupants such as agents after actor-owned parent changes. |
 | `:look` `:exits?` `:who?` `:occupants?` `:things?` | none | Local presentation; `:look` prints room text plus `Occupants:`, `Things:`, and `Exits:`. `who?` is people/avatar-oriented; `occupants?` includes avatars plus room-local agents/occupants. |
@@ -264,7 +266,7 @@ Key verbs:
 | `:dig` | delegated or direct shape | Owner-gated exit creation/linking. |
 | `:fill` | delegated or direct shape | Owner-gated exit removal. Removes the direction from the room and asks the exit actor to terminate itself; target rooms are not deleted. |
 | `:behaviour` | `[ /ipfs/<cid> ]` | Owner-gated behaviour update. |
-| `:actor-born` | `<actor> <kind> <nonce> <direction>` | Generic actor birth callback; rooms use it for pending new-room dig targets when actor, kind, nonce, and direction match. |
+| `:child-alive` | `<actor> <kind> <nonce> <direction>` | Child readiness callback; rooms use it for pending new-room dig targets when actor, kind, nonce, and direction match. |
 | `:ping` / `:pong` / `:authorise-link` / `:link-authorised` / `:link-denied` | link handshake args | Existing-room link handshake. |
 | `:presence-tick` | none | Scheduled room-local occupant sweep. Asks occupants to report their parent and removes occupants that have not reported within the room timeout. |
 | `:parent-report` | `<child> <parent> <tick> <nonce>` | Machine reply from a child to the room's `:report-parent` request. A parent different from the room removes the child immediately. |
@@ -272,16 +274,19 @@ Key verbs:
 Room presence cache rules:
 
 1. `occupants` and `avatar-occupants` are room-local derived caches.
-2. On lifecycle `:start`, a room registers a `#scheduler` interval for
+2. User-facing `:leave` removes only live room presence. It deliberately leaves
+   avatar state and zion `.my.ctx.*` unchanged so the remembered room remains the
+   return point on a later login.
+3. On lifecycle `:start`, a room registers a `#scheduler` interval for
    `:presence-tick`.
-3. `#scheduler` later sends `:presence-tick` to the room as an ordinary
+4. `#scheduler` later sends `:presence-tick` to the room as an ordinary
    message. On each tick, the room sends `:report-parent <room> <tick> <nonce>` to
    current occupants.
-4. Avatars report their current `room`; agents and things report their current
+5. Avatars report their current `room`; agents and things report their current
    `parent`.
-5. If a child reports a parent other than the room, the room removes that child
+6. If a child reports a parent other than the room, the room removes that child
    from local occupant caches immediately.
-6. If a child does not report for the configured timeout, the room removes it
+7. If a child does not report for the configured timeout, the room removes it
    from local occupant caches. The child may re-enter later through normal
    `:enter` flow.
 

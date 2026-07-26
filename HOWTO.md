@@ -470,6 +470,26 @@ make root-cid
 ma --root-cid <printed-cid>
 ```
 
+If you are only updating kinds or behaviours for an existing runtime, generate
+and apply a kinds CID instead. This patches the runtime's kind registry without
+replacing existing entities or their state:
+
+```sh
+make kinds-cid
+```
+
+Apply it live from zion or another CRUD client:
+
+```text
+@runtime/kinds: /ipfs/<printed-kinds-cid>
+```
+
+or apply it on the next daemon start:
+
+```sh
+ma --kinds-cid <printed-kinds-cid>
+```
+
 ## Publish and share your variant
 
 The source files are the important artefacts:

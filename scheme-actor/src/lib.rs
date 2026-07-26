@@ -385,6 +385,48 @@ mod tests {
     }
 
     #[test]
+    fn room_child_alive_init_notifies_parent() {
+        let env = room_env();
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#child".to_string());
+        config.insert("parent".to_string(), "parent".to_string());
+        config.insert("started_at".to_string(), "123".to_string());
+        crate::state::set_config(config);
+
+        eval_all(
+            r#"
+            (define (ma-send! target term)
+              (inc-prop! "sent-count" 1)
+              (set-prop! (string-append "sent-target:" (number->string (get-prop "sent-count"))) target)
+              (set-prop! (string-append "sent-term:" (number->string (get-prop "sent-count"))) term))
+            (set-prop! "schedule:presence:started-at" "123")
+            (set-prop! "child-alive-nonce" "nonce-1")
+            (set-prop! "child-alive-direction" "dør")
+            (notify-child-alive!)
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 1);
+        assert_eq!(
+            eval_str("(get-prop \"sent-target:1\")", &env),
+            "did:ma:runtime#parent"
+        );
+        assert_eq!(
+            eval_all("(get-prop \"sent-term:1\")", &env).unwrap(),
+            Value::list(vec![
+                Value::symbol(":child-alive"),
+                Value::str("did:ma:runtime#child"),
+                Value::str("/ma/room/0.0.1"),
+                Value::str("nonce-1"),
+                Value::str("dør"),
+            ])
+        );
+    }
+
+    #[test]
     fn agent_commits_parent_from_pending_room_ctx() {
         let env = agent_env();
         let mut config = std::collections::HashMap::new();
@@ -628,7 +670,7 @@ mod tests {
     }
 
     #[test]
-    fn room_dig_waits_for_new_room_actor_born_callback() {
+    fn room_dig_waits_for_new_room_child_alive_callback() {
         let env = room_env();
         let mut config = std::collections::HashMap::new();
         config.insert("runtime".to_string(), "did:ma:runtime".to_string());
@@ -683,7 +725,8 @@ mod tests {
         );
         let target_room = eval_str("(get-prop \"pending-new-room:dør\")", &env);
         assert!(target_room.starts_with("did:ma:runtime#"));
-        assert!(eval_str("(get-prop \"created-init:1\")", &env).contains("birth-nonce"));
+        assert!(eval_str("(get-prop \"created-init:1\")", &env).contains("child-alive-nonce"));
+        assert!(eval_str("(get-prop \"created-init:1\")", &env).contains("notify-child-alive!"));
 
         let nonce = eval_str("(get-prop \"pending-new-room-nonce:dør\")", &env);
         env.define(
@@ -692,7 +735,7 @@ mod tests {
                 &target_room,
                 "did:ma:runtime#source",
                 Value::list(vec![
-                    Value::symbol(":actor-born"),
+                    Value::symbol(":child-alive"),
                     Value::str(target_room.clone()),
                     Value::str("/ma/room/0.0.1"),
                     Value::str(nonce),

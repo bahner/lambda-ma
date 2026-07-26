@@ -8,6 +8,7 @@ SCHEME_ACTOR_WASM := $(SCHEME_ACTOR_DIR)/actor.wasm
 SCHEME_STDLIB := $(SCHEME_ACTOR_DIR)/stdlib.ma
 SCHEME_ACTOR_CID_FILE := $(CID_DIR)/scheme-actor.cid
 SCHEME_STDLIB_CID_FILE := $(CID_DIR)/scheme-stdlib.cid
+KINDS_CID_FILE := $(CID_DIR)/kinds.cid
 
 ACTORS := root avatar room exit agent rms duck thing
 CID_FILES := $(ACTORS:%=$(CID_DIR)/%.cid)
@@ -22,7 +23,7 @@ BOOTSTRAP_KIND_FILES := \
 	kinds/ma-scheme-thing.yaml \
 	kinds/ma-scheduler.yaml
 
-.PHONY: all publish root-cid bootstrap check clean show-cids FORCE
+.PHONY: all publish root-cid kinds-cid bootstrap check clean show-cids FORCE
 
 all: $(OUT)
 
@@ -81,6 +82,19 @@ $(OUT): lambda-ma.template.yaml Makefile $(BOOTSTRAP_KIND_FILES) $(SCHEME_ACTOR_
 root-cid: $(OUT)
 	$(MA) --gen-root-cid "$(OUT)"
 
+$(KINDS_CID_FILE): $(OUT) | $(CID_DIR)
+	tmp="$@.tmp"; \
+	$(MA) --gen-kinds-cid "$(OUT)" > "$$tmp"; \
+	test -s "$$tmp"; \
+	mv "$$tmp" "$@"
+
+kinds-cid: FORCE $(OUT) | $(CID_DIR)
+	@tmp="$(KINDS_CID_FILE).tmp"; \
+	$(MA) --gen-kinds-cid "$(OUT)" > "$$tmp"; \
+	test -s "$$tmp"; \
+	mv "$$tmp" "$(KINDS_CID_FILE)"; \
+	printf '%s\n' "$$(cat "$(KINDS_CID_FILE)")"
+
 bootstrap: root-cid
 
 check: $(OUT)
@@ -90,6 +104,7 @@ show-cids: $(SCHEME_ACTOR_CID_FILE) $(SCHEME_STDLIB_CID_FILE) $(CID_FILES)
 	@printf '%-14s %s\n' "scheme-actor" "$$(cat "$(SCHEME_ACTOR_CID_FILE)")"
 	@printf '%-14s %s\n' "scheme-stdlib" "$$(cat "$(SCHEME_STDLIB_CID_FILE)")"
 	@for name in $(ACTORS); do printf '%-8s %s\n' "$$name" "$$(cat "$(CID_DIR)/$$name.cid")"; done
+	@if test -f "$(KINDS_CID_FILE)"; then printf '%-14s %s\n' "kinds" "$$(cat "$(KINDS_CID_FILE)")"; fi
 
 clean:
 	rm -rf dist

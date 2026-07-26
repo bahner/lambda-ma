@@ -71,6 +71,13 @@ To see the scheme actor, stdlib, and world behaviour CIDs:
 make show-cids
 ```
 
+To publish just the reusable kind/behaviour registry for applying to an
+existing runtime without replacing entity state:
+
+```sh
+make kinds-cid
+```
+
 To verify that the generated YAML has no unresolved placeholders:
 
 ```sh
@@ -86,6 +93,25 @@ make root-cid
 The command prints a runtime root CID. Start `ma` with that CID or save it in the daemon config according to your usual runtime workflow.
 
 `make bootstrap` is kept as an alias for `make root-cid`.
+
+For an existing runtime, prefer the kinds-only upgrade path after changing
+`kinds/*.yaml`, `actors/*.ma`, or the scheme actor shared runtime:
+
+```sh
+make kinds-cid
+```
+
+Then apply the printed CID live with CRUD:
+
+```text
+@runtime/kinds: /ipfs/<printed-kinds-cid>
+```
+
+or pass it at the next daemon start:
+
+```sh
+ma --kinds-cid <printed-kinds-cid>
+```
 
 ## Wire zion to the world root
 
