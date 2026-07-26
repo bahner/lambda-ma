@@ -170,13 +170,15 @@ target throughout the handshake. Full `did:ma:...#room` targets may point at
 another runtime; the same room-to-room ownership handshake must still succeed
 before the exit is created.
 
-New-room digs use the generic lambda-ma actor birth callback because
+New-room digs use the lambda-ma child-alive callback because
 `ma-create-actor` is queued until the current dispatch completes. The source
-room stores a pending room request with a nonce, passes birth metadata in the
+room stores a pending room request with a nonce, passes child-alive metadata in the
 new room's init payload, and creates the exit only after the new room sends
-`:actor-born <actor> <kind> <nonce> <direction>` back from the expected actor
-DID-URL. This prevents exits from pointing at a local recipient before the actor
-has loaded.
+`:child-alive <actor> <kind> <nonce> <direction>` back from the expected actor
+DID-URL. The child-alive metadata is part of the new room's init payload; after
+storing it, the room sends the callback to its parent. This prevents exits from
+being created without a nonce-bound acknowledgement from the expected child.
+Genesis actors or other actors with no parent do not emit a child-alive message.
 
 ## Context flow
 
@@ -196,11 +198,15 @@ root must not send messages to rooms.
 Leave event:
 
 ```scheme
+(:leave)
 (:leave-avatar <avatar-did-url> <to-room-did-url>)
 ```
 
-Rooms accept ordinary avatar `:enter` and target-room-origin `:leave-avatar` for
-movement cleanup. User-facing context is sent by avatar.
+Rooms accept ordinary avatar `:enter`, user-facing `:leave` for deliberate
+live-presence departure, and target-room-origin `:leave-avatar` for movement
+cleanup. `:leave` removes the avatar from room presentation without changing the
+avatar's stored room or zion's cached context; the same room remains the user's
+return point on the next login. User-facing context is sent by avatar.
 
 ## Movement flow
 

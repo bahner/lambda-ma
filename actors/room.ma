@@ -16,8 +16,14 @@
     (if configured configured (entity-url "root"))))
 (define (canonical-actor actor)
   (if (and actor (string-prefix? "#" actor)) (string-append (runtime) actor) actor))
+(define (config-actor actor)
+  (cond ((not actor) #f)
+        ((string-prefix? "did:ma:" actor) actor)
+        ((string-prefix? "#" actor) (string-append (runtime) actor))
+        (else (string-append (runtime) "#" actor))))
 (define (canonical-entry entry)
   (canonical-actor entry))
+
 (define (same-actor? a b)
   (equal? (canonical-actor a) (canonical-actor b)))
 (define (local-actor-ref? actor)
@@ -605,6 +611,7 @@
     "  where <thing>     ask where an occupant says it is\n"
     "  say <text>        speak here\n"
     "  emote <text>      act here\n"
+    "  :leave           stop being shown here until you return\n"
     "  go <direction>    move through an exit\n"
     "  move              move through one available exit\n"
     "  claim             claim this room if it is unowned\n"
@@ -755,6 +762,27 @@
            (broadcast (string-append (speaker-name actor) " leaves."))))
         (else #f)))
 
+(define (user-did? actor)
+  (and (string? actor)
+       (string-prefix? "did:ma:" actor)
+       (not (string-contains? actor "#"))))
+
+(define (leave-candidate msg)
+  (let ((caller (canonical-actor (msg-from msg))))
+    (cond ((member-actor? caller (occupants)) caller)
+          ((user-did? caller) (avatar-for-user caller))
+          (else caller))))
+
+(define (handle-leave! msg)
+  (let ((actor (leave-candidate msg)))
+    (if (member-actor? actor (occupants))
+        (begin
+          (presence-remove! actor)
+          (ma-save-state!)
+          (broadcast (string-append (speaker-name actor) " leaves."))
+          (reply-ok msg "You leave."))
+        (reply-ok msg "You are not here."))))
+
 (define (presence-sweep! tick)
   (let loop ((xs (occupants))
              (changed #f))
@@ -843,11 +871,22 @@
     (if custom-init custom-init "")
     (if ready-init ready-init "")))
 
-(define (actor-birth-init nonce direction)
+(define (child-alive-init nonce direction)
   (string-append
-    "(set-prop! \"birth-nonce\" \"" nonce "\")\n"
-    "(set-prop! \"birth-direction\" \"" direction "\")\n"
-    "(ma-save-state!)\n"))
+    "(set-prop! \"child-alive-nonce\" \"" nonce "\")\n"
+    "(set-prop! \"child-alive-direction\" \"" direction "\")\n"
+    "(ma-save-state!)\n"
+    "(notify-child-alive!)\n"))
+
+(define (notify-child-alive!)
+  (let ((parent (config-actor (ma-get-config-key "parent")))
+        (nonce (get-prop "child-alive-nonce"))
+        (direction (get-prop "child-alive-direction")))
+    (if (and parent
+             (non-empty-string? nonce)
+             (non-empty-string? direction))
+        (ma-send! parent (list :child-alive (config-actor (self)) ROOM_KIND nonce direction))
+        #f)))
 
 (define (exit-init direction target-room)
   (string-append
@@ -937,7 +976,7 @@
   (and (same-actor? (get-prop (pending-new-room-key direction)) target-room)
        (equal? (get-prop (pending-new-room-nonce-key direction)) nonce)))
 
-(define (handle-actor-born! msg args)
+(define (handle-child-alive! msg args)
   (if (or (null? args)
           (null? (cdr args))
           (null? (cdr (cdr args)))
@@ -987,7 +1026,7 @@
          (nonce (pending-new-room-nonce direction requester user target))
          (target-room (entity-url (ma-create-actor ROOM_KIND
                                                    custom-behaviour
-                                                   (room-init target user custom-init (actor-birth-init nonce direction))
+                                                   (room-init target user custom-init (child-alive-init nonce direction))
                                                    target-fragment))))
     (remember-pending-new-room! direction target-room requester user target nonce)
     (reply-to-sender msg (string-append "Digging " direction "..."))))
@@ -1005,6 +1044,10 @@
     (if (member-actor? (msg-from msg) (occupants))
         (on-event :leave-occupant args msg)
         #f)))
+
+(set-method! :leave
+  (lambda (args msg)
+    (handle-leave! msg)))
 
 (set-method! :look
   (lambda (args msg)
@@ -1272,9 +1315,9 @@
                           (list :print (string-append "Could not reach " target-room ": " reason))))
               #f)))))
 
-(set-method! :actor-born
+(set-method! :child-alive
   (lambda (args msg)
-    (handle-actor-born! msg args)))
+    (handle-child-alive! msg args)))
 
 (set-method! :dig
   (lambda (args msg)

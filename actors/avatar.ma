@@ -159,6 +159,7 @@
     "  where <thing>     ask where a local occupant says it is\n"
     "  say <text>        speak here\n"
     "  emote <text>      act here\n"
+    "  leave             stop being shown here until you return\n"
     "  go <direction>    move through an exit\n"
     "  claim             claim an unowned room\n"
     "  owner [did]       show or transfer room ownership\n"
