@@ -63,10 +63,14 @@ pub fn install(env: &Rc<Env>) {
     def!("string-trim-right", b_string_trim_right);
     def!("string-split", b_string_split);
     def!("string-join", b_string_join);
+    def!("char-upcase", b_char_upcase);
+    def!("char-downcase", b_char_downcase);
     def!("string-upcase", b_string_upcase);
     def!("string-downcase", b_string_downcase);
     def!("number->string", b_number_to_string);
     def!("string->number", b_string_to_number);
+    def!("symbol->string", b_symbol_to_string);
+    def!("string->symbol", b_string_to_symbol);
     def!("blake3", b_blake3);
 
     // Maps
@@ -544,6 +548,16 @@ fn b_string_join(args: &[Value]) -> EvalResult<Value> {
     Ok(Value::str(parts.join(&separator)))
 }
 
+fn b_char_upcase(args: &[Value]) -> EvalResult<Value> {
+    let ch = as_char("char-upcase", one_arg("char-upcase", args)?)?;
+    Ok(Value::str(ch.to_uppercase().collect::<String>()))
+}
+
+fn b_char_downcase(args: &[Value]) -> EvalResult<Value> {
+    let ch = as_char("char-downcase", one_arg("char-downcase", args)?)?;
+    Ok(Value::str(ch.to_lowercase().collect::<String>()))
+}
+
 fn b_string_upcase(args: &[Value]) -> EvalResult<Value> {
     let text = as_string("string-upcase", one_arg("string-upcase", args)?)?;
     Ok(Value::str(text.to_uppercase()))
@@ -562,6 +576,18 @@ fn as_string(name: &str, v: &Value) -> EvalResult<String> {
             other.type_name()
         ))),
     }
+}
+
+fn as_char(name: &str, v: &Value) -> EvalResult<char> {
+    let text = as_string(name, v)?;
+    let mut chars = text.chars();
+    let Some(ch) = chars.next() else {
+        return Err(EvalError::new(format!("{name}: expected one character")));
+    };
+    if chars.next().is_some() {
+        return Err(EvalError::new(format!("{name}: expected one character")));
+    }
+    Ok(ch)
 }
 
 fn as_map<'a>(name: &str, v: &'a Value) -> EvalResult<&'a BTreeMap<String, Value>> {
@@ -705,6 +731,22 @@ fn b_string_to_number(args: &[Value]) -> EvalResult<Value> {
             other.type_name()
         ))),
     }
+}
+
+fn b_symbol_to_string(args: &[Value]) -> EvalResult<Value> {
+    let v = one_arg("symbol->string", args)?;
+    match v {
+        Value::Symbol(s) => Ok(Value::str(s.to_string())),
+        other => Err(EvalError::new(format!(
+            "symbol->string: expected a symbol, found {}",
+            other.type_name()
+        ))),
+    }
+}
+
+fn b_string_to_symbol(args: &[Value]) -> EvalResult<Value> {
+    let text = as_string("string->symbol", one_arg("string->symbol", args)?)?;
+    Ok(Value::symbol(text))
 }
 
 fn hash_bytes_arg(name: &str, value: &Value) -> EvalResult<usize> {

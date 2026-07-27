@@ -360,3 +360,19 @@
       (lambda ()
         (send-room verb args)
         (reply-ok-silent msg)))))
+
+(define (normalise-command-verb verb)
+  (if (symbol? verb)
+      (string->symbol (string-downcase (symbol->string verb)))
+      verb))
+
+(define (on-message msg)
+  (let* ((term (msg-content msg))
+         (verb (normalise-command-verb (if (pair? term) (car term) term)))
+         (args (if (pair? term) (cdr term) '()))
+         (fn (find-method verb)))
+    (if fn
+        (fn args msg)
+        (if *default-method*
+            (*default-method* verb args msg)
+            (ma-reply! msg (list :error "unknown verb"))))))

@@ -115,6 +115,30 @@ mod tests {
         env
     }
 
+    fn avatar_env() -> Rc<Env> {
+        crate::state::load_from_cbor(&empty_state_cbor()).unwrap();
+        let env = new_root_env();
+        crate::state::install(&env);
+        crate::msg::install(&env);
+        eval_all(include_str!("../stdlib.ma"), &env).unwrap();
+        eval_all(include_str!("../../actors/avatar.ma"), &env).unwrap();
+        eval_all(
+                        r#"
+                        (define (ma-send! target term)
+                            (inc-prop! "sent-count" 1)
+                            (set-prop! (string-append "sent-target:" (number->string (get-prop "sent-count"))) target)
+                            (set-prop! (string-append "sent-term:" (number->string (get-prop "sent-count"))) term))
+                        (define (ma-reply! msg term)
+                            (inc-prop! "reply-count" 1)
+                            (set-prop! (string-append "reply-term:" (number->string (get-prop "reply-count"))) term))
+                        (define (ma-save-state!) #f)
+                        "#,
+                        &env,
+                )
+                .unwrap();
+        env
+    }
+
     fn exit_env() -> Rc<Env> {
         crate::state::load_from_cbor(&empty_state_cbor()).unwrap();
         let env = new_root_env();
@@ -484,6 +508,57 @@ mod tests {
         .unwrap();
 
         assert!(eval_bool("(not (has-prop? \"sent-count\"))", &env));
+    }
+
+    #[test]
+    fn avatar_normalises_incoming_command_verb_only() {
+        let env = avatar_env();
+        let user = "did:ma:user";
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        crate::state::set_config(config.clone());
+
+        let avatar_id = eval_str(&format!(r#"(avatar-fragment "{user}")"#), &env);
+        config.insert("self".to_string(), format!("did:ma:runtime#{avatar_id}"));
+        config.insert("id".to_string(), avatar_id);
+        crate::state::set_config(config);
+
+        eval_all(
+            r#"
+            (set-prop! "did" "did:ma:user")
+            (set-prop! "room" "did:ma:runtime#room")
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_term_msg(
+                user,
+                "did:ma:runtime#avatar",
+                Value::list(vec![Value::symbol(":Look")]),
+            )),
+        );
+        eval_all("(on-message msg)", &env).unwrap();
+        assert!(eval_bool(
+            r#"(equal? (get-prop "sent-term:1") (list :look))"#,
+            &env
+        ));
+
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_term_msg(
+                user,
+                "did:ma:runtime#avatar",
+                Value::list(vec![Value::symbol(":Say"), Value::str("Hello THERE")]),
+            )),
+        );
+        eval_all("(on-message msg)", &env).unwrap();
+        assert!(eval_bool(
+            r#"(equal? (get-prop "sent-term:2") (list :say "Hello THERE"))"#,
+            &env
+        ));
     }
 
     #[test]
@@ -1049,8 +1124,12 @@ mod tests {
         );
         assert_eq!(run(r#"(string-upcase "abcæ")"#), Value::str("ABCÆ"));
         assert_eq!(run(r#"(string-downcase "ABCÆ")"#), Value::str("abcæ"));
+        assert_eq!(run(r#"(char-upcase "æ")"#), Value::str("Æ"));
+        assert_eq!(run(r#"(char-downcase "Æ")"#), Value::str("æ"));
         assert_eq!(run("(number->string 42)"), Value::str("42"));
         assert_eq!(run(r#"(string->number "42")"#), Value::Int(42));
+        assert_eq!(run("(symbol->string ':Look)"), Value::str(":Look"));
+        assert_eq!(run(r#"(string->symbol ":look")"#), Value::symbol(":look"));
         assert_eq!(run("(string? \"x\")"), Value::Bool(true));
         assert_eq!(run("(number? 1)"), Value::Bool(true));
         assert_eq!(run("(symbol? 'x)"), Value::Bool(true));
