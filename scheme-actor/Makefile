@@ -11,7 +11,10 @@ $(WASM_TARGET): FORCE
 $(WASM): $(WASM_TARGET)
 	cp $< $@
 
-test:
+fmt:
+	$(CARGO) fmt
+
+test: fmt
 	$(CARGO) test
 
 ipfs: $(WASM)
@@ -26,4 +29,4 @@ clean:
 
 FORCE:
 
-.PHONY: test ipfs stdlib clean FORCE
+.PHONY: test fmt ipfs stdlib clean FORCE

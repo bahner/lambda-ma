@@ -259,6 +259,49 @@ mod tests {
     }
 
     #[test]
+    fn room_owner_transfer_uses_ownership_errors() {
+        let env = room_env();
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#room".to_string());
+        crate::state::set_config(config);
+        eval_all(
+            r#"
+            (set-prop! "owner" "did:ma:owner")
+            (define (ma-send! target term)
+              (inc-prop! "sent-count" 1)
+              (set-prop! (string-append "sent-target:" (number->string (get-prop "sent-count"))) target)
+              (set-prop! (string-append "sent-term:" (number->string (get-prop "sent-count"))) term))
+            "#,
+            &env,
+        )
+        .unwrap();
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:other",
+                "did:ma:runtime#room",
+                Value::symbol(":owner"),
+            )),
+        );
+
+        eval_all("((find-method :owner) (list \"did:ma:new\") msg)", &env).unwrap();
+
+        assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 1);
+        assert_eq!(
+            eval_str("(get-prop \"sent-target:1\")", &env),
+            "did:ma:other"
+        );
+        assert_eq!(
+            eval_all("(get-prop \"sent-term:1\")", &env).unwrap(),
+            Value::list(vec![
+                Value::symbol(":print"),
+                Value::str("Only this room's owner can transfer ownership."),
+            ])
+        );
+    }
+
+    #[test]
     fn room_leave_occupant_canonicalises_sender() {
         let env = room_env();
         let mut config = std::collections::HashMap::new();

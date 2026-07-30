@@ -27,6 +27,9 @@ BOOTSTRAP_KIND_FILES := \
 
 all: $(OUT)
 
+fmt:
+	$(MAKE) -C scheme-actor
+
 publish: $(SCHEME_ACTOR_CID_FILE) $(SCHEME_STDLIB_CID_FILE) $(CID_FILES)
 
 $(CID_DIR):
