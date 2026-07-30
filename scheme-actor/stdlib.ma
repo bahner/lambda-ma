@@ -46,3 +46,14 @@
     (cond ((null? rest) acc)
           ((string? (car rest)) (loop (cdr rest) (cons (car rest) acc)))
           (else (loop (cdr rest) acc)))))
+
+(define (member-string? entry xs)
+  (cond ((null? xs) #f)
+        ((equal? entry (car xs)) #t)
+        (else (member-string? entry (cdr xs)))))
+
+(define (unique-string-entries xs)
+  (let loop ((rest (string-entries xs)) (acc '()))
+    (cond ((null? rest) acc)
+          ((member-string? (car rest) acc) (loop (cdr rest) acc))
+          (else (loop (cdr rest) (list-append acc (list (car rest))))))))
