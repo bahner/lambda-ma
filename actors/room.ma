@@ -1,6 +1,7 @@
 ; Locked room actor.
 ; Rooms own exits and local room policy. Avatars act through their current room.
 
+; Kinds and timing constants.
 (define AVATAR_KIND "/ma/avatar/0.0.1")
 (define ROOM_KIND "/ma/room/0.0.1")
 (define EXIT_KIND "/ma/exit/0.0.1")
@@ -8,6 +9,7 @@
 (define PRESENCE_INTERVAL "30s")
 (define PRESENCE_TIMEOUT_TICKS 10)
 
+; Runtime identity and address helpers.
 (define (self) (ma-get-config-key "self"))
 (define (runtime) (ma-get-config-key "runtime"))
 (define (entity-url fragment) (string-append (runtime) "#" fragment))
@@ -39,6 +41,8 @@
 (define (entity-live? actor)
   (and actor (ma-entity-exists? actor)))
 
+; Presence caches. `occupants` contains every visible local actor, while
+; `avatar-occupants` is the person/avatar subset used by who?.
 (define (member-actor? actor xs)
   (member-entry? actor xs))
 
@@ -97,6 +101,8 @@
 (define (remove-avatar-occupant! avatar)
   (set-prop! "avatar-occupants" (without-actors (avatar-occupants) (list avatar))))
 
+; Presence liveness. Rooms periodically challenge occupants; stale local actors
+; are removed before they produce repeated delivery failures.
 (define (presence-tick)
   (let ((value (get-prop "presence:tick")))
     (if (number? value) value 0)))
@@ -176,6 +182,7 @@
           (mark-scheduled! key)
           (ma-send! (entity-url "scheduler") (list "presence" :interval PRESENCE_INTERVAL :presence-tick))))))
 
+; Presentation helpers.
 (define (without-actors xs drop)
   (cond ((null? xs) '())
         ((member-actor? (car xs) drop)
@@ -217,6 +224,7 @@
 
 (define (set-things-map! m) (set-prop-map! "things" m))
 
+; Claim ctx records agent/thing room-local metadata after direct :enter ctx.
 (define (claim-key actor)
   (string-append "claim:" (canonical-actor actor)))
 
@@ -233,6 +241,8 @@
 (define (nick-or-default nick)
   (if (non-empty-string? nick) nick (default-nick)))
 
+; Entry argument helpers. Historical avatar entry forms are still accepted, but
+; new direct entry uses the ctx map path below.
 (define (arg-at-or-false args index)
   (cond ((null? args) #f)
         ((= index 0) (car args))
@@ -271,6 +281,8 @@
 (define (avatar-for-user user)
   (entity-url (avatar-fragment user)))
 
+; Avatar creation is asynchronous: init asks this room to admit the avatar, and
+; the room later sends committed ctx back to the avatar.
 (define (avatar-init user nick room)
   (let ((n (nick-or-default nick))
         (r (root))
@@ -297,6 +309,8 @@
         avatar
       (entity-url (ma-create-actor AVATAR_KIND #f (avatar-init user n (canonical-actor (self))) (avatar-fragment user))))))
 
+; Entry ctx builders and validators. Committed ctx actor refs must be full
+; DID-URLs, never runtime-local #fragment shorthand.
 (define (enter-ctx-valid? ctx)
   (and (map? ctx)
        (non-empty-string? (ctx-text ctx "kind"))
@@ -339,6 +353,9 @@
 (define (expected-avatar? user avatar)
   (same-actor? avatar (avatar-for-user user)))
 
+; Avatar entry flows. Same-runtime expected avatars can be admitted directly;
+; foreign or stale source avatars cause the target room to create/reuse its
+; deterministic local avatar for the user.
 (define (handle-avatar-arrival! user avatar old-room nick)
   (if (and (local-actor-ref? avatar)
            (entity-live? avatar)
@@ -390,6 +407,8 @@
 (define (enter-avatar-kind? kind)
   (or (not kind) (equal? kind "") (equal? kind "avatar")))
 
+; Direct non-avatar entry is kind-driven. Agents are visible occupants; things
+; are token-bound room locals whose own parent state remains authoritative.
 (define (handle-enter-ctx! msg ctx)
   (let* ((user (msg-from msg))
          (kind (ctx-text ctx "kind"))
@@ -464,6 +483,7 @@
 (define (movable-kind? kind)
   (or (agent-kind? kind) (thing-kind? kind)))
 
+; Movable occupant lookup: local token aliases first, then visible agent labels.
 (define (movable-occupant? actor)
   (let ((ctx (claim-ctx actor)))
     (and ctx (movable-kind? (ctx-text ctx "kind")))))
@@ -505,6 +525,7 @@
            (presence-touch! actor (presence-tick))
            (ma-save-state!)))))
 
+; Exit state and traversal helpers.
 (define (exits)
   (let ((xs (get-prop "exits")))
     (if (map? xs) xs (make-map))))
@@ -555,6 +576,8 @@
         #f
         (list-ref-at directions (random (list-length directions))))))
 
+      ; Traversal keeps avatar/user/source-room context intact so target rooms can
+      ; clean old presence and choose the correct deterministic avatar.
 (define (traverse-target-room! actor user direction target-room)
   (if (movable-occupant? actor)
       (ma-send! (canonical-actor actor) (list :enter-room (canonical-actor target-room) (canonical-actor (self))))
@@ -583,6 +606,7 @@
         "Who: none."
         (string-append "Who: " (names-of avatars)))))
 
+      ; Room-facing text surfaces.
 (define (thing-token-names)
   (map-keys (things-map)))
 
@@ -627,6 +651,7 @@
 (define (avatar-caller? msg)
   (member-actor? (msg-from msg) (occupants)))
 
+; Ownership and room text mutation.
 (define (owner) (get-prop "owner"))
 (define (owned?) (if (owner) #t #f))
 (define (owner? user)
@@ -711,6 +736,8 @@
           (else
            (reply-error msg "Usage: behaviour /ipfs/<cid>")))))
 
+; Delegation helpers. Avatar-mediated calls prepend the user's DID; direct
+; colon-prefixed room methods use msg-from as the caller.
 (define (delegated-user-arg? args)
   (and (not (null? args)) (string-prefix? "did:ma:" (car args))))
 
@@ -742,6 +769,8 @@
       (thunk)
       (reply-to-sender msg "Owner must be a non-empty user DID.")))
 
+; Exit building keeps its historical messages; ownership transfer uses the
+; narrower helper below so :owner does not mention building exits.
 (define (require-owner user msg thunk)
   (cond ((not (owned?))
          (reply-to-sender msg "This room is unowned. Claim it before building here."))
@@ -749,6 +778,14 @@
         (else
          (reply-to-sender msg "Only this room's owner can build exits here."))))
 
+(define (require-owner-transfer user msg thunk)
+  (cond ((not (owned?))
+         (reply-to-sender msg "This room is unowned. Claim it before transferring ownership."))
+        ((owner? user) (thunk))
+        (else
+         (reply-to-sender msg "Only this room's owner can transfer ownership."))))
+
+; Presence and room event handlers.
 (define (on-event event args msg)
   (cond ((equal? event :leave-avatar)
          (let ((avatar (car args)))
@@ -814,6 +851,8 @@
              (ma-send! (canonical-actor (car xs)) (list :print text))
              (loop (cdr xs) changed))))))
 
+; Exit build/link state. Existing-room links handshake across both rooms;
+; new-room digs wait for a child-alive callback before installing the exit.
 (define (exit-key direction) (string-append "exit:" direction))
 (define (exit-target-key direction) (string-append "exit-target:" direction))
 (define (exit-target-name-key direction) (string-append "exit-target-name:" direction))
@@ -976,6 +1015,8 @@
   (and (same-actor? (get-prop (pending-new-room-key direction)) target-room)
        (equal? (get-prop (pending-new-room-nonce-key direction)) nonce)))
 
+; New-room readiness callback. The child room proves it is the expected actor
+; before the source room installs an exit to it.
 (define (handle-child-alive! msg args)
   (if (or (null? args)
           (null? (cdr args))
@@ -1013,11 +1054,15 @@
 (define (ping-direction term) (car (cdr (cdr term))))
 (define (ping-requester term) (car (cdr (cdr (cdr term)))))
 
+; After a successful dig, the avatar that requested it may immediately enter
+; the newly linked target if it is still present in the source room.
 (define (enter-dig-target! requester user target-room)
   (if (member-actor? requester (occupants))
   (ma-send! (canonical-actor target-room) (list :enter user (canonical-actor requester) (canonical-actor (self)) (speaker-name requester)))
       #f))
 
+; Start a new-room dig and persist pending state until the child-alive callback
+; arrives from the freshly created room.
 (define (request-new-room! msg user direction target custom-init custom-behaviour)
   (let* ((target-fragment (if (and target (not custom-init) (not custom-behaviour))
                               (named-room-fragment direction target)
@@ -1030,6 +1075,8 @@
                                                    target-fragment))))
     (remember-pending-new-room! direction target-room requester user target nonce)
     (reply-to-sender msg (string-append "Digging " direction "..."))))
+
+; ── Presence and presentation methods ─────────────────────────────────────
 
 (set-method! :leave-avatar
   (lambda (args msg)
@@ -1076,6 +1123,8 @@
   (lambda (args msg)
     (let ((avatar (msg-from msg)))
       (print-and-reply-ok msg (things-text)))))
+
+; ── Room-local occupant commands ──────────────────────────────────────────
 
 (set-method! :thing
   (lambda (args msg)
@@ -1164,6 +1213,8 @@
           (text (join-words args)))
       (broadcast (string-append (speaker-name speaker) " " text)))))
 
+; ── Ownership and room mutation methods ───────────────────────────────────
+
 (set-method! :claim
   (lambda (args msg)
     (let ((user (caller-user args msg)))
@@ -1186,7 +1237,7 @@
                 (reply-to-sender msg "This room is unowned.")))
           (require-valid-owner user msg
             (lambda ()
-              (require-owner user msg
+              (require-owner-transfer user msg
                 (lambda ()
                   (let ((new-owner (car owner-args)))
                     (if (valid-owner? new-owner)
@@ -1202,6 +1253,8 @@
 (set-method! :behaviour
   (lambda (args msg)
     (handle-room-behaviour! msg args)))
+
+; ── Link handshake and scheduled presence callbacks ───────────────────────
 
 (set-method! :ping
   (lambda (args msg)
@@ -1319,6 +1372,8 @@
   (lambda (args msg)
     (handle-child-alive! msg args)))
 
+; ── Building, movement, and direct entry methods ──────────────────────────
+
 (set-method! :dig
   (lambda (args msg)
     (let* ((user (caller-user args msg))
@@ -1414,6 +1469,7 @@
       (else
        (handle-legacy-avatar-entry! args)))))
 
+; Lifecycle signals from the runtime.
 (define (on-signal term)
   (cond ((or (equal? (verb-of term) :init)
              (equal? (verb-of term) :start))
