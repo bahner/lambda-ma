@@ -1,29 +1,6 @@
 ; Generic free movable Scheme agent.
 ; Concrete agents extend this behaviour and keep their own parent state.
 
-; Runtime identity and address helpers.
-(define (self) (ma-get-config-key "self"))
-(define (runtime) (ma-get-config-key "runtime"))
-(define LAMBDA_CTX_PROTOCOL "/ma/lambda/ctx/0.0.1")
-(define (entity-url fragment) (string-append (runtime) "#" fragment))
-(define (canonical-actor actor)
-  (if (and actor (string-prefix? "#" actor)) (string-append (runtime) actor) actor))
-
-(define (local-actor-ref? actor)
-  (and (string? actor)
-       (or (string-prefix? "#" actor)
-           (string-prefix? (string-append (runtime) "#") actor))))
-
-(define (did-url? actor)
-  (and (string? actor)
-       (string-prefix? "did:ma:" actor)
-       (string-contains? "#" actor)))
-
-(define (join-words words)
-  (cond ((null? words) "")
-        ((null? (cdr words)) (car words))
-        (else (string-append (car words) " " (join-words (cdr words))))))
-
 ; Persistent state accessors.
 (define (owner) (get-prop "owner"))
 (define (parent)
@@ -105,12 +82,6 @@
   (not (owner))
   (owner-caller? msg)))
 
-(define (reply-ok msg text)
-  (ma-reply! msg (list :ok text)))
-
-(define (reply-error msg text)
-  (ma-reply! msg (list :error text)))
-
 (define (delegated-user-arg? args)
   (and (not (null? args)) (string-prefix? "did:ma:" (car args))))
 
@@ -131,13 +102,6 @@
   (let ((o (owner)))
     (or (not o) (equal? o user))))
 
-(define (non-empty-string? v)
-  (and (string? v) (not (equal? v ""))))
-
-(define (ctx-text ctx key)
-  (let ((v (map-ref ctx key #f)))
-    (if (string? v) v #f)))
-
 (define (ctx-alist-ref ctx key)
   (cond ((null? ctx) #f)
         ((and (pair? (car ctx))
@@ -157,10 +121,6 @@
   (or (same-actor? room (pending-room))
       (same-actor? room (parent))))
 
-(define (valid-user-did? did)
-  (and (string? did)
-       (string-prefix? "did:ma:" did)))
-
 (define (valid-parent-ref? ref)
   (and (non-empty-string? ref)
        (or (did-url? ref)
@@ -178,9 +138,6 @@
        (non-empty-string? (ctx-text ctx "nick"))
        (non-empty-string? (ctx-text ctx "description"))
        (valid-transfer-kind? (ctx-text ctx "kind"))))
-
-(define (same-actor? a b)
-  (equal? (canonical-actor a) (canonical-actor b)))
 
 (define (caller-is-parent? msg)
   (let ((p (parent)))

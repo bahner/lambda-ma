@@ -1,29 +1,13 @@
 ; Locked world root / avatar factory actor.
 ; Root is a known factory only; avatars own ctx, nick, and room state.
 
-; Runtime identity and kind constants.
-(define AVATAR_KIND "/ma/avatar/0.0.1")
-(define LAMBDA_CTX_PROTOCOL "/ma/lambda/ctx/0.0.1")
-
-(define (self) (ma-get-config-key "self"))
-(define (runtime) (ma-get-config-key "runtime"))
-(define (entity-url fragment) (string-append (runtime) "#" fragment))
-(define (canonical-actor actor)
-  (if (and actor (string-prefix? "#" actor)) (string-append (runtime) actor) actor))
 (define (local-self) (canonical-actor (self)))
-(define (default-nick) "avatar")
-
-(define (nick-or-default nick)
-  (if nick nick (default-nick)))
 
 ; Entry target resolution. Root only chooses a configured start room; it does
 ; not infer or create fallback rooms.
 (define (configured-start-room)
   (let ((configured (ma-get-config-key "start")))
     (if configured configured (get-prop "start"))))
-
-(define (entity-live? actor)
-  (and actor (ma-entity-exists? (canonical-actor actor))))
 
 (define (ensure-start-room)
   (let ((start (configured-start-room)))
@@ -59,12 +43,6 @@
 
 (define (entry-user args msg)
   (if (delegated-enter? args) (car args) (msg-from msg)))
-
-(define (avatar-fragment user)
-  (blake3 (string-append "lambda-ma avatar v1\n" (runtime) "\n" user) 8))
-
-(define (avatar-for-user user)
-  (entity-url (avatar-fragment user)))
 
 ; Avatar creation is asynchronous. The init code asks the room to admit the
 ; avatar; the room later sends committed ctx back to the avatar.

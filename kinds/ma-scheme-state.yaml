@@ -1,5 +1,7 @@
 protocol: /ma/scheme/state/0.0.1
 extends: /ma/scheme/actor/0.0.1
+behaviour:
+  "/": __SCHEME_STATE_CID__
 attributes:
   stateful: true
 host_functions:

@@ -11,20 +11,6 @@
         (set-prop! "description" "A curious rubber duck that waddles around and quacks because one is never alone with a rubber duck"))
     (ma-save-state!)))
 
-; Per-runtime scheduling guard. A restarted runtime schedules again; duplicate
-; init/start events in one process do not create duplicate scheduler jobs.
-(define (runtime-started-at)
-  (let ((value (ma-get-config-key "started_at")))
-    (if value value "")))
-
-(define (scheduled-this-runtime? key)
-  (equal? (get-prop key) (runtime-started-at)))
-
-(define (mark-scheduled! key)
-  (begin
-    (set-prop! key (runtime-started-at))
-    (ma-save-state!)))
-
 (define (duck-schedule-quack!)
   (let ((key "schedule:quack:started-at"))
     (if (scheduled-this-runtime? key)

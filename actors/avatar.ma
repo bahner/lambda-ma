@@ -1,17 +1,8 @@
 ; Locked avatar actor.
 ; Root owns protected state. The controlling DID may call exposed command methods only.
 
-; Runtime identity and address helpers.
-(define (self) (ma-get-config-key "self"))
-(define (runtime) (ma-get-config-key "runtime"))
-(define LAMBDA_CTX_PROTOCOL "/ma/lambda/ctx/0.0.1")
-(define (entity-url fragment) (string-append (runtime) "#" fragment))
+; Avatar identity and address helpers.
 (define (did) (get-prop "did"))
-(define (root)
-  (let ((configured (ma-get-config-key "root")))
-    (if configured configured (entity-url "root"))))
-(define (canonical-actor actor)
-  (if (and actor (string-prefix? "#" actor)) (string-append (runtime) actor) actor))
 (define (local-self) (canonical-actor (self)))
 (define (local-fragment? actor)
   (and actor (string-prefix? "#" actor)))
@@ -20,11 +11,7 @@
 (define (qualified-ctx-actor? actor)
   (and (non-empty-string? actor)
        (not (local-fragment? actor))))
-(define (same-actor? a b)
-  (equal? (canonical-actor a) (canonical-actor b)))
 (define (entity-id) (ma-get-config-key "id"))
-(define (avatar-fragment did)
-  (blake3 (string-append "lambda-ma avatar v1\n" (runtime) "\n" did) 8))
 (define (valid-did? value)
   (and (string? value) (string-prefix? "did:ma:" value)))
 
@@ -123,11 +110,6 @@
        (ensure-did! (car (cdr args)) (car (cdr (cdr args))))
        (or (root? msg)
            (same-actor? (msg-from msg) (car args)))))
-
-(define (join-words words)
-  (cond ((null? words) "")
-        ((null? (cdr words)) (car words))
-        (else (string-append (car words) " " (join-words (cdr words))))))
 
 ; User-command forwarding helpers. Plain avatar commands are translated into
 ; room RPCs. Only commands whose payload needs the user DID prepend it; room

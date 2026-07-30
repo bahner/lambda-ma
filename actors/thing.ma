@@ -1,28 +1,6 @@
 ; Free movable thing actor.
 ; Authority lives in thing state: owner + parent.
 
-; Runtime identity and address helpers.
-(define (self) (ma-get-config-key "self"))
-(define (runtime) (ma-get-config-key "runtime"))
-(define (entity-url fragment) (string-append (runtime) "#" fragment))
-(define (canonical-actor actor)
-  (if (and actor (string-prefix? "#" actor)) (string-append (runtime) actor) actor))
-
-(define (local-actor-ref? actor)
-  (and (string? actor)
-       (or (string-prefix? "#" actor)
-           (string-prefix? (string-append (runtime) "#") actor))))
-
-(define (did-url? actor)
-  (and (string? actor)
-       (string-prefix? "did:ma:" actor)
-       (string-contains? "#" actor)))
-
-(define (join-words words)
-  (cond ((null? words) "")
-        ((null? (cdr words)) (car words))
-        (else (string-append (car words) " " (join-words (cdr words))))))
-
 ; Persistent state accessors.
 (define (owner) (get-prop "owner"))
 (define (parent)
@@ -68,12 +46,6 @@
   (let ((o (owner)))
     (and o (equal? (msg-from msg) o))))
 
-(define (reply-ok msg text)
-  (ma-reply! msg (list :ok text)))
-
-(define (reply-error msg text)
-  (ma-reply! msg (list :error text)))
-
 (define (delegated-user-arg? args)
   (and (not (null? args)) (string-prefix? "did:ma:" (car args))))
 
@@ -89,17 +61,6 @@
   (if (and (delegated-user-arg? args) (local-actor-caller? msg))
       (cdr args)
       args))
-
-(define (non-empty-string? v)
-  (and (string? v) (not (equal? v ""))))
-
-(define (ctx-text ctx key)
-  (let ((v (map-ref ctx key #f)))
-    (if (string? v) v #f)))
-
-(define (valid-user-did? did)
-  (and (string? did)
-       (string-prefix? "did:ma:" did)))
 
 (define (valid-parent-ref? ref)
   (and (non-empty-string? ref)
@@ -124,9 +85,6 @@
 (define (owner-or-unowned? user)
   (let ((o (owner)))
     (or (not o) (equal? o user))))
-
-(define (same-actor? a b)
-  (equal? (canonical-actor a) (canonical-actor b)))
 
 (define (caller-is-parent? msg)
   (let ((p (parent)))

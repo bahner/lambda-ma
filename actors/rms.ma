@@ -75,20 +75,6 @@
         (set-prop! "description" "A roaming free software sage dispensing random fortunes."))
     (ma-save-state!)))
 
-; Per-runtime scheduling guard. A restarted runtime schedules again; duplicate
-; init/start events in one process do not create duplicate scheduler jobs.
-(define (runtime-started-at)
-  (let ((value (ma-get-config-key "started_at")))
-    (if value value "")))
-
-(define (scheduled-this-runtime? key)
-  (equal? (get-prop key) (runtime-started-at)))
-
-(define (mark-scheduled! key)
-  (begin
-    (set-prop! key (runtime-started-at))
-    (ma-save-state!)))
-
 (define (rms-schedule-fortune!)
   (let ((key "schedule:fortune:started-at"))
     (if (scheduled-this-runtime? key)
@@ -96,15 +82,6 @@
         (begin
           (mark-scheduled! key)
           (ma-send! (entity-url "scheduler") (list "fortune" :random 60 :fortune))))))
-
-; Small list helpers kept local to avoid growing the generic stdlib contract.
-(define (list-length xs)
-  (if (null? xs) 0 (+ 1 (list-length (cdr xs)))))
-
-(define (list-ref-at xs idx)
-  (cond ((null? xs) #f)
-        ((= idx 0) (car xs))
-        (else (list-ref-at (cdr xs) (- idx 1)))))
 
 (define (next-fortune)
   (let ((count (list-length FORTUNES)))

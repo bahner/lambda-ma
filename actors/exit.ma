@@ -5,11 +5,6 @@
 (define (target-room) (get-prop "target-room"))
 (define (source-room) (get-prop "source-room"))
 (define (direction) (get-prop "direction"))
-(define (runtime) (ma-get-config-key "runtime"))
-(define (canonical-actor actor)
-  (if (and actor (string-prefix? "#" actor)) (string-append (runtime) actor) actor))
-(define (same-actor? a b)
-  (equal? (canonical-actor a) (canonical-actor b)))
 
 ; Only the source room that created the exit may ask it to end.
 (set-method! :fill

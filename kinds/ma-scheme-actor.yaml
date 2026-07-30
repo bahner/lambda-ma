@@ -3,7 +3,7 @@ cid:
   "/": __SCHEME_ACTOR_CID__
 type: extism
 behaviour:
-  "/": __SCHEME_STDLIB_CID__
+  "/": __SCHEME_ACTOR_LIB_CID__
 attributes:
   wasi: false
 host_functions:

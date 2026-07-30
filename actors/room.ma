@@ -2,69 +2,26 @@
 ; Rooms own exits and local room policy. Avatars act through their current room.
 
 ; Kinds and timing constants.
-(define AVATAR_KIND "/ma/avatar/0.0.1")
 (define ROOM_KIND "/ma/room/0.0.1")
 (define EXIT_KIND "/ma/exit/0.0.1")
-(define LAMBDA_CTX_PROTOCOL "/ma/lambda/ctx/0.0.1")
 (define PRESENCE_INTERVAL "30s")
 (define PRESENCE_TIMEOUT_TICKS 10)
 
-; Runtime identity and address helpers.
-(define (self) (ma-get-config-key "self"))
-(define (runtime) (ma-get-config-key "runtime"))
-(define (entity-url fragment) (string-append (runtime) "#" fragment))
-(define (root)
-  (let ((configured (ma-get-config-key "root")))
-    (if configured configured (entity-url "root"))))
-(define (canonical-actor actor)
-  (if (and actor (string-prefix? "#" actor)) (string-append (runtime) actor) actor))
-(define (config-actor actor)
-  (cond ((not actor) #f)
-        ((string-prefix? "did:ma:" actor) actor)
-        ((string-prefix? "#" actor) (string-append (runtime) actor))
-        (else (string-append (runtime) "#" actor))))
-(define (canonical-entry entry)
-  (canonical-actor entry))
-
-(define (same-actor? a b)
-  (equal? (canonical-actor a) (canonical-actor b)))
-(define (local-actor-ref? actor)
-  (and (string? actor)
-       (or (string-prefix? "#" actor)
-           (string-prefix? (string-append (runtime) "#") actor))))
-(define (did-url? actor)
-  (and (string? actor)
-       (string-prefix? "did:ma:" actor)
-       (string-contains? "#" actor)))
-(define (dead-local-actor? actor)
-  (and (local-actor-ref? actor) (not (ma-entity-exists? actor))))
-(define (entity-live? actor)
-  (and actor (ma-entity-exists? actor)))
-
 ; Presence caches. `occupants` contains every visible local actor, while
 ; `avatar-occupants` is the person/avatar subset used by who?.
-(define (member-actor? actor xs)
-  (member-entry? actor xs))
-
-(define (unique-actor-entries xs)
-  (let loop ((rest xs) (strings '()))
-    (cond ((null? rest) (unique-entries strings))
-          ((string? (car rest)) (loop (cdr rest) (cons (car rest) strings)))
-          (else (loop (cdr rest) strings)))))
-
 (define (occupants)
   (let ((xs (get-prop "occupants")))
-    (if xs (unique-actor-entries xs) '())))
+    (if xs (unique-string-entries xs) '())))
 
 (define (add-occupant! actor)
-  (if (member-actor? actor (occupants))
+  (if (member-entry? actor (occupants))
       #f
       (begin
         (set-prop! "occupants" (cons (canonical-actor actor) (occupants)))
         #t)))
 
 (define (remove-occupant! actor)
-  (set-prop! "occupants" (without-actors (occupants) (list actor))))
+  (set-prop! "occupants" (without-entries (occupants) (list actor))))
 
 (define (add-avatar-presence! avatar)
   (let ((occupant-added (add-occupant! avatar))
@@ -89,17 +46,17 @@
 
 (define (avatar-occupants)
   (let ((xs (get-prop "avatar-occupants")))
-    (if xs (unique-actor-entries xs) '())))
+    (if xs (unique-string-entries xs) '())))
 
 (define (add-avatar-occupant! avatar)
-  (if (member-actor? avatar (avatar-occupants))
+  (if (member-entry? avatar (avatar-occupants))
       #f
       (begin
         (set-prop! "avatar-occupants" (cons (canonical-actor avatar) (avatar-occupants)))
         #t)))
 
 (define (remove-avatar-occupant! avatar)
-  (set-prop! "avatar-occupants" (without-actors (avatar-occupants) (list avatar))))
+  (set-prop! "avatar-occupants" (without-entries (avatar-occupants) (list avatar))))
 
 ; Presence liveness. Rooms periodically challenge occupants; stale local actors
 ; are removed before they produce repeated delivery failures.
@@ -154,25 +111,13 @@
     (if value value "")))
 
 (define (presence-report-valid? actor tick nonce)
-  (and (member-actor? actor (occupants))
+  (and (member-entry? actor (occupants))
        (equal? nonce (presence-nonce actor))))
 
 (define (next-presence-tick!)
   (let ((tick (+ 1 (presence-tick))))
     (set-prop! "presence:tick" tick)
     tick))
-
-(define (runtime-started-at)
-  (let ((value (ma-get-config-key "started_at")))
-    (if value value "")))
-
-(define (scheduled-this-runtime? key)
-  (equal? (get-prop key) (runtime-started-at)))
-
-(define (mark-scheduled! key)
-  (begin
-    (set-prop! key (runtime-started-at))
-    (ma-save-state!)))
 
 (define (schedule-presence!)
   (let ((key "schedule:presence:started-at"))
@@ -183,13 +128,6 @@
           (ma-send! (entity-url "scheduler") (list "presence" :interval PRESENCE_INTERVAL :presence-tick))))))
 
 ; Presentation helpers.
-(define (without-actors xs drop)
-  (cond ((null? xs) '())
-        ((member-actor? (car xs) drop)
-         (without-actors (cdr xs) drop))
-        (else
-         (cons (car xs) (without-actors (cdr xs) drop)))))
-
 (define (speaker-name actor)
   (let ((label (get-prop (label-key actor))))
     (if (non-empty-string? label) label actor)))
@@ -215,11 +153,6 @@
   (cond ((null? xs) "")
         ((null? (cdr xs)) (car xs))
         (else (string-append (car xs) "\n" (entry-lines (cdr xs))))))
-
-(define (list-append left right)
-  (if (null? left)
-      right
-      (cons (car left) (list-append (cdr left) right))))
 
 (define (occupant-did-lines)
   (let loop ((xs (occupants)))
@@ -277,21 +210,8 @@
   (let ((ctx (get-prop (claim-key actor))))
     (if (map? ctx) ctx #f)))
 
-(define (default-nick) "avatar")
-
-(define (nick-or-default nick)
-  (if (non-empty-string? nick) nick (default-nick)))
-
 ; Entry argument helpers. Historical avatar entry forms are still accepted, but
 ; new direct entry uses the ctx map path below.
-(define (arg-at-or-false args index)
-  (cond ((null? args) #f)
-        ((= index 0) (car args))
-        (else (arg-at-or-false (cdr args) (- index 1)))))
-
-(define (empty-string->false value)
-  (if (equal? value "") #f value))
-
 (define (entry-old-room args)
   (empty-string->false (arg-at-or-false args 1)))
 
@@ -315,12 +235,6 @@
 
 (define (exit-fragment direction)
   (blake3 (string-append "lambda-ma exit v1\n" (canonical-actor (self)) "\n" direction) 8))
-
-(define (avatar-fragment user)
-  (blake3 (string-append "lambda-ma avatar v1\n" (runtime) "\n" user) 8))
-
-(define (avatar-for-user user)
-  (entity-url (avatar-fragment user)))
 
 ; Avatar creation is asynchronous: init asks this room to admit the avatar, and
 ; the room later sends committed ctx back to the avatar.
@@ -589,7 +503,7 @@
                  (reply-command-error msg mediated (string-append "No visible occupant or thing: " token))))))))
 
 (define (reconcile-caller-occupant! actor)
-  (cond ((member-actor? actor (occupants)) #f)
+  (cond ((member-entry? actor (occupants)) #f)
         ((not (has-label? actor)) #f)
         (else
          (begin
@@ -633,14 +547,6 @@
 
 (define (exit-directions)
   (map-keys (exits)))
-
-(define (list-length xs)
-  (if (null? xs) 0 (+ 1 (list-length (cdr xs)))))
-
-(define (list-ref-at xs idx)
-  (cond ((null? xs) #f)
-        ((= idx 0) (car xs))
-        (else (list-ref-at (cdr xs) (- idx 1)))))
 
 (define (random-exit-direction)
   (let ((directions (exit-directions)))
@@ -724,7 +630,7 @@
     "Commands with : hit this place directly; commands without : go through your avatar."))
 
 (define (avatar-caller? msg)
-  (member-actor? (msg-from msg) (occupants)))
+  (member-entry? (msg-from msg) (occupants)))
 
 ; Ownership and room text mutation.
 (define (owner) (get-prop "owner"))
@@ -733,7 +639,7 @@
   (equal? user (owner)))
 
 (define (valid-owner? value)
-  (ma-user-did? value))
+  (user-did? value))
 
 (define (owner-message? msg)
   (msg-from-owner? (owner) msg))
@@ -832,7 +738,7 @@
 
 (define (delegated-call? args msg)
   (and (delegated-user-arg? args)
-       (or (member-actor? (msg-from msg) (occupants))
+      (or (member-entry? (msg-from msg) (occupants))
            (local-actor-caller? msg))))
 
 (define (caller-user args msg)
@@ -889,20 +795,15 @@
            (broadcast (string-append (speaker-name actor) " leaves."))))
         (else #f)))
 
-(define (user-did? actor)
-  (and (string? actor)
-       (string-prefix? "did:ma:" actor)
-       (not (string-contains? actor "#"))))
-
 (define (leave-candidate msg)
   (let ((caller (canonical-actor (msg-from msg))))
-    (cond ((member-actor? caller (occupants)) caller)
+    (cond ((member-entry? caller (occupants)) caller)
           ((user-did? caller) (avatar-for-user caller))
           (else caller))))
 
 (define (handle-leave! msg)
   (let ((actor (leave-candidate msg)))
-    (if (member-actor? actor (occupants))
+    (if (member-entry? actor (occupants))
         (begin
           (presence-remove! actor)
           (ma-save-state!)
@@ -912,9 +813,9 @@
 
 (define (remove-candidate token)
   (cond ((not (string? token)) #f)
-        ((and (user-did? token) (member-actor? (avatar-for-user token) (occupants)))
+        ((and (user-did? token) (member-entry? (avatar-for-user token) (occupants)))
          (avatar-for-user token))
-        ((member-actor? token (occupants)) (canonical-actor token))
+        ((member-entry? token (occupants)) (canonical-actor token))
     (else (unique-visible-occupant-ref token))))
 
 (define (handle-remove! msg args)
@@ -1178,7 +1079,7 @@
 ; After a successful dig, the avatar that requested it may immediately enter
 ; the newly linked target if it is still present in the source room.
 (define (enter-dig-target! requester user target-room)
-  (if (member-actor? requester (occupants))
+  (if (member-entry? requester (occupants))
   (ma-send! (canonical-actor target-room) (list :enter user (canonical-actor requester) (canonical-actor (self)) (speaker-name requester)))
       #f))
 
@@ -1209,7 +1110,7 @@
 
 (set-method! :leave-occupant
   (lambda (args msg)
-    (if (member-actor? (msg-from msg) (occupants))
+    (if (member-entry? (msg-from msg) (occupants))
         (on-event :leave-occupant args msg)
         #f)))
 

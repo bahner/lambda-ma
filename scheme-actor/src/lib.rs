@@ -91,6 +91,8 @@ mod tests {
         crate::state::install(&env);
         crate::msg::install(&env);
         eval_all(include_str!("../stdlib.ma"), &env).unwrap();
+        eval_all(include_str!("../actor.ma"), &env).unwrap();
+        eval_all(include_str!("../state.ma"), &env).unwrap();
         eval_all(include_str!("../../actors/room.ma"), &env).unwrap();
         eval_all(
             "(define (ma-send! target term) #f) (define (ma-reply! msg term) #f) (define (ma-save-state!) #f)",
@@ -106,6 +108,8 @@ mod tests {
         crate::state::install(&env);
         crate::msg::install(&env);
         eval_all(include_str!("../stdlib.ma"), &env).unwrap();
+        eval_all(include_str!("../actor.ma"), &env).unwrap();
+        eval_all(include_str!("../state.ma"), &env).unwrap();
         eval_all(include_str!("../../actors/agent.ma"), &env).unwrap();
         eval_all(
             "(define (ma-send! target term) #f) (define (ma-reply! msg term) #f) (define (ma-save-state!) #f)",
@@ -121,6 +125,8 @@ mod tests {
         crate::state::install(&env);
         crate::msg::install(&env);
         eval_all(include_str!("../stdlib.ma"), &env).unwrap();
+        eval_all(include_str!("../actor.ma"), &env).unwrap();
+        eval_all(include_str!("../state.ma"), &env).unwrap();
         eval_all(include_str!("../../actors/avatar.ma"), &env).unwrap();
         eval_all(
                         r#"
@@ -145,6 +151,8 @@ mod tests {
         crate::state::install(&env);
         crate::msg::install(&env);
         eval_all(include_str!("../stdlib.ma"), &env).unwrap();
+        eval_all(include_str!("../actor.ma"), &env).unwrap();
+        eval_all(include_str!("../state.ma"), &env).unwrap();
         eval_all(include_str!("../../actors/exit.ma"), &env).unwrap();
         eval_all(
             "(define (ma-send! target term) #f) (define (ma-end) (set-prop! \"ended\" \"yes\"))",
@@ -264,14 +272,16 @@ mod tests {
         crate::state::install(&env);
         crate::msg::install(&env);
         eval_all(include_str!("../stdlib.ma"), &env).unwrap();
+        eval_all(include_str!("../actor.ma"), &env).unwrap();
 
         let owner = "did:ma:owner";
         let runtime = "did:ma:runtime";
+        eval_all(&format!(r#"(define (runtime) "{runtime}")"#), &env).unwrap();
         let mut config = std::collections::HashMap::new();
         config.insert("runtime".to_string(), runtime.to_string());
         crate::state::set_config(config);
 
-        let avatar = eval_str(&format!(r#"(ma-avatar-for-user "{owner}")"#), &env);
+        let avatar = eval_str(&format!(r#"(avatar-for-user "{owner}")"#), &env);
 
         env.define(
             Rc::from("direct_msg"),
@@ -298,6 +308,43 @@ mod tests {
             r#"(msg-from-owner? "did:ma:owner" other_msg)"#,
             &env
         ));
+    }
+
+    #[test]
+    fn stdlib_canonicalises_actor_refs() {
+        let env = new_root_env();
+        crate::state::install(&env);
+        eval_all(include_str!("../stdlib.ma"), &env).unwrap();
+        eval_all(include_str!("../actor.ma"), &env).unwrap();
+        eval_all(r#"(define (runtime) "did:ma:runtime")"#, &env).unwrap();
+
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        crate::state::set_config(config);
+
+        assert_eq!(
+            eval_str(r#"(entity-url "room")"#, &env),
+            "did:ma:runtime#room"
+        );
+        assert_eq!(
+            eval_str(r##"(canonical-actor "#room")"##, &env),
+            "did:ma:runtime#room"
+        );
+        assert!(eval_bool(
+            r##"(same-actor? "#room" "did:ma:runtime#room")"##,
+            &env
+        ));
+        assert!(eval_bool(r##"(local-actor-ref? "#room")"##, &env));
+        assert!(eval_bool(
+            r##"(local-actor-ref? "did:ma:runtime#room")"##,
+            &env
+        ));
+        assert!(!eval_bool(
+            r##"(local-actor-ref? "did:ma:other#room")"##,
+            &env
+        ));
+        assert!(eval_bool(r##"(did-url? "did:ma:runtime#room")"##, &env));
+        assert!(!eval_bool(r##"(did-url? "did:ma:runtime")"##, &env));
     }
 
     #[test]
@@ -1119,12 +1166,12 @@ mod tests {
         config.insert("self".to_string(), "did:ma:runtime#source".to_string());
         crate::state::set_config(config);
 
-        let owner_avatar = eval_str(r#"(ma-avatar-for-user "did:ma:user")"#, &env);
+        let owner_avatar = eval_str(r#"(avatar-for-user "did:ma:user")"#, &env);
 
         eval_all(
             r#"
             (set-prop! "owner" "did:ma:user")
-            (define owner-avatar (ma-avatar-for-user "did:ma:user"))
+            (define owner-avatar (avatar-for-user "did:ma:user"))
             (set-label! owner-avatar "me")
             (add-avatar-presence! owner-avatar)
             (define (ma-entity-exists? actor) #f)
@@ -1158,7 +1205,7 @@ mod tests {
 
         assert_eq!(eval_int("(get-prop \"created-count\")", &env), 1);
         assert!(eval_bool(
-            &format!(r#"(member-actor? "{owner_avatar}" (occupants))"#),
+            &format!(r#"(member-entry? "{owner_avatar}" (occupants))"#),
             &env
         ));
         assert!(eval_bool("(not (exit-target \"dør\"))", &env));
