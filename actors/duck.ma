@@ -1,6 +1,7 @@
 ; Duck agent.
 ; This behaviour extends /ma/scheme/agent/0.0.1.
 
+; Defaults fill in only missing inherited agent state.
 (define (duck-defaults!)
   (begin
     (if (get-prop "name") #f (set-prop! "name" "Rubber Duckie™"))
@@ -10,6 +11,8 @@
         (set-prop! "description" "A curious rubber duck that waddles around and quacks because one is never alone with a rubber duck"))
     (ma-save-state!)))
 
+; Per-runtime scheduling guard. A restarted runtime schedules again; duplicate
+; init/start events in one process do not create duplicate scheduler jobs.
 (define (runtime-started-at)
   (let ((value (ma-get-config-key "started_at")))
     (if value value "")))
@@ -30,6 +33,7 @@
           (mark-scheduled! key)
           (ma-send! (entity-url "scheduler") (list "quack" :random 600 :quack))))))
 
+; Duck-specific room speech.
 (define (duck-say msg text)
   (let ((p (parent)))
     (if (equal? p "")
@@ -38,6 +42,7 @@
           (ma-send! p (list :say text))
           (reply-ok msg text)))))
 
+; Public methods added on top of the generic agent behaviour.
 (set-method! :help
   (lambda (args msg)
     (reply-ok msg

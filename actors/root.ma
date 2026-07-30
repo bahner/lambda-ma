@@ -1,6 +1,7 @@
 ; Locked world root / avatar factory actor.
 ; Root is a known factory only; avatars own ctx, nick, and room state.
 
+; Runtime identity and kind constants.
 (define AVATAR_KIND "/ma/avatar/0.0.1")
 (define LAMBDA_CTX_PROTOCOL "/ma/lambda/ctx/0.0.1")
 
@@ -15,6 +16,8 @@
 (define (nick-or-default nick)
   (if nick nick (default-nick)))
 
+; Entry target resolution. Root only chooses a configured start room; it does
+; not infer or create fallback rooms.
 (define (configured-start-room)
   (let ((configured (ma-get-config-key "start")))
     (if configured configured (get-prop "start"))))
@@ -63,6 +66,8 @@
 (define (avatar-for-user user)
   (entity-url (avatar-fragment user)))
 
+; Avatar creation is asynchronous. The init code asks the room to admit the
+; avatar; the room later sends committed ctx back to the avatar.
 (define (avatar-init user nick room)
   (let ((n (nick-or-default nick))
         (r (local-self))
@@ -83,6 +88,7 @@
           avatar)
         (entity-url (ma-create-actor AVATAR_KIND #f (avatar-init user nick room) (avatar-fragment user))))))
 
+; Public entry methods.
 (set-method! :enter
   (lambda (args msg)
     (let* ((user (entry-user args msg))

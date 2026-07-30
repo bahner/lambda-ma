@@ -1,6 +1,7 @@
 ; Generic free movable Scheme agent.
 ; Concrete agents extend this behaviour and keep their own parent state.
 
+; Runtime identity and address helpers.
 (define (self) (ma-get-config-key "self"))
 (define (runtime) (ma-get-config-key "runtime"))
 (define LAMBDA_CTX_PROTOCOL "/ma/lambda/ctx/0.0.1")
@@ -23,6 +24,7 @@
         ((null? (cdr words)) (car words))
         (else (string-append (car words) " " (join-words (cdr words))))))
 
+; Persistent state accessors.
 (define (owner) (get-prop "owner"))
 (define (parent)
   (let ((p (get-prop "parent")))
@@ -93,6 +95,7 @@
       (set-prop! "recovery-secret" secret))
   (ma-save-state!))
 
+; Caller and reply helpers.
 (define (owner-caller? msg)
   (let ((o (owner)))
     (and o (equal? (msg-from msg) o))))
@@ -143,6 +146,7 @@
          (car (cdr (car ctx))))
         (else (ctx-alist-ref (cdr ctx) key))))
 
+      ; Transfer validation keeps take/drop strict at the room boundary.
 (define (valid-room-ctx? ctx)
   (and (pair? ctx)
        (equal? (ctx-alist-ref ctx :protocol) LAMBDA_CTX_PROTOCOL)
@@ -182,6 +186,7 @@
   (let ((p (parent)))
     (and (not (equal? p "")) (same-actor? (msg-from msg) p))))
 
+; Room context and movement helpers.
 (define (agent-ctx)
   (map-set
     (map-set
@@ -215,6 +220,7 @@
         (else
          (reply-error msg "only a free agent or owner may move this agent"))))
 
+; Public methods.
 (set-method! :about
   (lambda (args msg)
     (reply-ok msg
@@ -300,6 +306,8 @@
                 (reply-ok msg "claimed"))
               (reply-error msg "claim failed"))))))
 
+; Parent-mediated transfer. The parent room asks the agent to bind to a user
+; or re-enter another parent; direct user calls are deliberately rejected.
 (set-method! :take
   (lambda (args msg)
     (let ((user (effective-user args msg))

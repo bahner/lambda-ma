@@ -1,6 +1,7 @@
 ; Free movable thing actor.
 ; Authority lives in thing state: owner + parent.
 
+; Runtime identity and address helpers.
 (define (self) (ma-get-config-key "self"))
 (define (runtime) (ma-get-config-key "runtime"))
 (define (entity-url fragment) (string-append (runtime) "#" fragment))
@@ -22,6 +23,7 @@
         ((null? (cdr words)) (car words))
         (else (string-append (car words) " " (join-words (cdr words))))))
 
+; Persistent state accessors.
 (define (owner) (get-prop "owner"))
 (define (parent)
   (let ((p (get-prop "parent")))
@@ -61,6 +63,7 @@
       (set-prop! "recovery-secret" secret))
   (ma-save-state!))
 
+; Caller and reply helpers.
 (define (owner-caller? msg)
   (let ((o (owner)))
     (and o (equal? (msg-from msg) o))))
@@ -108,6 +111,8 @@
       (equal? kind "thing")
       (equal? kind "agent")))
 
+; Transfer ctx is optional, but when present it must be a full room-local ctx
+; payload so future parent displays can use stable name/nick/description data.
 (define (valid-transfer-ctx? ctx)
   (and (map? ctx)
        (non-empty-string? (ctx-text ctx "kind"))
@@ -127,6 +132,7 @@
   (let ((p (parent)))
     (and (not (equal? p "")) (same-actor? (msg-from msg) p))))
 
+; Public methods.
 (set-method! :about
   (lambda (args msg)
     (reply-ok msg
@@ -173,6 +179,8 @@
                 (reply-ok msg "claimed"))
               (reply-error msg "claim failed"))))))
 
+; Parent-mediated transfer. The parent room asks the thing to bind to a user
+; or move to another parent; direct user calls are deliberately rejected.
 (set-method! :take
   (lambda (args msg)
     (let ((user (effective-user args msg))

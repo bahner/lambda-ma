@@ -1,6 +1,7 @@
 ; RMS fortune agent.
 ; This behaviour extends /ma/scheme/agent/0.0.1.
 
+; Fortune corpus used by the scheduled :fortune method.
 (define FORTUNES
   (list
     "Technology at present is covert philosophy; the point is to make it openly philosophical."
@@ -64,6 +65,7 @@
     "With paper printed books, you have certain freedoms. You can acquire the book anonymously by paying cash, which is the way I always buy books. I never use a credit card. I don't identify to any database when I buy books. Amazon takes away that freedom."
     "There is nothing wrong with wanting pay for work, or seeking to maximize one's income, as long as one does not use means that are destructive."))
 
+; Defaults fill in only missing inherited agent state.
 (define (rms-defaults!)
   (begin
     (if (get-prop "name") #f (set-prop! "name" "Richard Stallman"))
@@ -73,6 +75,8 @@
         (set-prop! "description" "A roaming free software sage dispensing random fortunes."))
     (ma-save-state!)))
 
+; Per-runtime scheduling guard. A restarted runtime schedules again; duplicate
+; init/start events in one process do not create duplicate scheduler jobs.
 (define (runtime-started-at)
   (let ((value (ma-get-config-key "started_at")))
     (if value value "")))
@@ -93,6 +97,7 @@
           (mark-scheduled! key)
           (ma-send! (entity-url "scheduler") (list "fortune" :random 60 :fortune))))))
 
+; Small list helpers kept local to avoid growing the generic stdlib contract.
 (define (list-length xs)
   (if (null? xs) 0 (+ 1 (list-length (cdr xs)))))
 
@@ -108,6 +113,7 @@
         (let ((fortune (list-ref-at FORTUNES (random count))))
           (if fortune fortune "Freedom requires sharing.")))))
 
+; Public methods added on top of the generic agent behaviour.
 (set-method! :help
   (lambda (args msg)
     (reply-ok msg

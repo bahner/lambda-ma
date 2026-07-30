@@ -1,6 +1,7 @@
 ; Locked avatar actor.
 ; Root owns protected state. The controlling DID may call exposed command methods only.
 
+; Runtime identity and address helpers.
 (define (self) (ma-get-config-key "self"))
 (define (runtime) (ma-get-config-key "runtime"))
 (define LAMBDA_CTX_PROTOCOL "/ma/lambda/ctx/0.0.1")
@@ -26,6 +27,9 @@
   (blake3 (string-append "lambda-ma avatar v1\n" (runtime) "\n" did) 8))
 (define (valid-did? value)
   (and (string? value) (string-prefix? "did:ma:" value)))
+
+; A deterministic avatar may rehydrate its controlling DID from the matching
+; user DID, but an existing mismatched DID remains denied.
 (define (ensure-did! expected-did expected-id)
   (if (and (valid-did? expected-did)
            (equal? expected-id (entity-id)))
@@ -56,6 +60,8 @@
   (let ((value (get-prop "nick")))
     (if value value "avatar")))
 
+; Context terms sent to the controlling user. These must contain fully
+; qualified actor references, never runtime-local #fragment shorthand.
 (define (ctx-term text)
   (list :ctx
     (list (list :protocol LAMBDA_CTX_PROTOCOL)
@@ -87,6 +93,7 @@
   (let ((current (room)))
     (and current (same-actor? (msg-from msg) current))))
 
+; Validate committed context from a room before persisting local avatar state.
 (define (ctx-value pairs key)
   (cond ((null? pairs) #f)
         ((and (pair? (car pairs))
@@ -122,6 +129,8 @@
         ((null? (cdr words)) (car words))
         (else (string-append (car words) " " (join-words (cdr words))))))
 
+; User-command forwarding helpers. Plain avatar commands are translated into
+; room RPCs, with owner-sensitive room verbs prepending the user's DID.
 (define (require-did msg thunk)
   (if (did? msg)
       (thunk)
@@ -172,6 +181,7 @@
 (define (unknown-help-text topic)
   (string-append "No help topic: " topic "\nTry help or help here."))
 
+; Root and room callbacks.
 (set-method! :sync-ctx
   (lambda (args msg)
     (if (root? msg)
@@ -233,6 +243,7 @@
       (ma-send! (canonical-actor (msg-from msg))
                 (list :parent-report (local-self) (if current-room (canonical-actor current-room) "") tick nonce)))))
 
+; User-facing commands.
 (set-method! :help
   (lambda (args msg)
     (require-did msg
@@ -340,6 +351,7 @@
         (send-room-as-did :go args)
         (reply-ok-silent msg)))))
 
+; Room-mediated drop helper for carried things/agents.
 (set-method! :drop-thing
   (lambda (args msg)
     (if (room-caller? msg)
@@ -354,6 +366,8 @@
           (ma-send! (canonical-actor thing) (list :drop did (canonical-actor target-parent))))))
         #f)))
 
+; Unknown user commands are treated as room verbs so room-specific behaviours
+; can add commands without changing the avatar proxy.
 (set-default-method!
   (lambda (verb args msg)
     (require-did msg
