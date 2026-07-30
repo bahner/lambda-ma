@@ -112,9 +112,10 @@ Rules:
 Committed lambda-ma context is delivered as `:ctx` with protocol
 `/ma/lambda/ctx/0.0.1`.
 
-All actor references in committed ctx MUST be fully qualified DID-URLs. Runtime-
-local `#fragment` shorthand is valid only for internal runtime messages, never
-for ctx fields persisted by avatars, agents, clients, or future ctx consumers.
+All actor references crossing actor, client, or runtime message boundaries MUST
+be full DIDs or DID-URLs. Runtime-local `#fragment` shorthand may be
+canonicalised while reading legacy state, but MUST NOT be sent in messages or
+persisted in ctx fields by avatars, agents, clients, or future ctx consumers.
 
 Required context fields:
 
@@ -183,10 +184,10 @@ Rules:
 4. Exit replies to the source room with `:traversed <ctx>`. If traversal is
    allowed, `ctx.room` is the target room. If traversal is blocked, `ctx.room`
    remains the source room and `ctx.text` explains why.
-5. Source room sends `:move-ctx <ctx>` to `ctx.actor`; it does not commit
+5. Source room sends `:ctx <ctx>` to `ctx.actor`; it does not commit
    movement state or own departure side effects.
-6. The actor performs the actual target-room `:enter <ctx>` or equivalent
-   avatar entry flow. Target room admission remains target-room authority.
+6. The actor validates the ctx, then performs the actual target-room
+   `:enter <ctx>`. Target room admission remains target-room authority.
 7. Only the target room's committed `:ctx` updates actor/avatar state and is
    forwarded to the user.
 
@@ -219,6 +220,13 @@ For existing-room link targets:
 
 All terms are CBOR-style actor terms, typically `:verb` or `[":verb", ...]`.
 
+All Scheme-backed lambda-ma actors inherit the generic actor method below from
+`/ma/scheme/actor/0.0.1` before their kind-specific behaviour is loaded.
+
+| Verb | Args | Notes |
+| --- | --- | --- |
+| `:behaviour` | `[ /ipfs/<cid> ]` | No args returns this actor's current per-entity behaviour reference, if any. With one IPFS reference, the caller must match the actor's `owner` prop; on success this queues a reload of this actor's own extra behaviour layer. |
+
 ### 5.1 root actor
 
 Purpose: deterministic avatar factory.
@@ -240,7 +248,7 @@ Key verbs:
 | --- | --- | --- | --- |
 | `:enter-room` | `<room>` | root or target room | Avatar receives this from root or the target room, sends room `:enter`, and waits for committed room ctx before persisting room state and forwarding `:ctx` to user. |
 | `:sync-ctx` | none | root only | Emits current `:ctx` to user without changing avatar state. |
-| `:move-ctx` | `<ctx-map>` | current room | Validates ordinary movement ctx, optionally prints `ctx.text`, then asks `ctx.room` to admit the avatar. The avatar forwards no new `:ctx` to the user until the target room commits one. |
+| `:ctx` | `<ctx-map>` | current room, root, or controlling DID | With no args, returns current context to authorised callers. With a movement ctx-map, validates ordinary movement ctx, optionally prints `ctx.text`, then asks `ctx.room` to admit the avatar. The avatar forwards no new `:ctx` to the user until the target room commits one. |
 | `:ctx?` | none | user only | Returns context term. |
 | `:help` | `[topic]` | user only | `help here` asks room `:help`. |
 | `:nick` | `[nick]` | user only | No args returns current nick; with args forwards to room. |
@@ -257,13 +265,10 @@ Key verbs:
 
 | Verb | Args | Notes |
 | --- | --- | --- |
-| `:enter` | `<ctx-map>` | Room-first enter endpoint. Absent/`avatar` kind ensures the caller's deterministic avatar; `agent`/`thing` require ctx required keys. |
-| `:enter` | `<user> <avatar-did-url> <old-room-did-url> [nick]` | Movement arrival shape. Same-runtime avatars are admitted directly; foreign/source-runtime avatars trigger target-runtime local avatar entry for `user` and old-room cleanup for the source avatar. |
+| `:enter` | `<ctx-map>` | Room-first enter endpoint. Avatar ctx maps include full DID/DID-URL actor references and a `user` DID; target rooms create or reuse that user's deterministic local avatar. `agent`/`thing` require ctx required keys. |
 | `:enter` | `<avatar-did-url> [old-room-did-url]` | Admit known avatar flow. |
-| `:enter` | `<user> <avatar-did-url> <old-room-did-url> [nick]` | Cross-room/cross-runtime-friendly arrival shape. |
 | `:leave` | none | Caller-origin live-presence departure. Removes the caller's local deterministic avatar from this room, but does not change avatar state or client ctx; the saved room remains the next-login return point. |
 | `:remove` | `<occupant>` | Owner-gated manual presence cleanup. Resolves an occupant by DID/DID-URL or by a unique current display label; ambiguous labels are rejected. Removes the occupant from room-local presence caches and does not change actor state. The occupant may re-enter later through normal `:enter` flow. |
-| `:leave-avatar` | `<avatar-did-url> <to-room-did-url>` | Target-room-origin cache removal during movement. |
 | `:leave-occupant` | none | Sender-origin cache removal for non-avatar occupants such as agents after actor-owned parent changes. |
 | `:look` | `[exit-direction]` | No args prints room text plus `Occupants:`, `Things:`, and `Exits:`. With an exit direction, forwards inspection to the first-class exit actor. |
 | `:exits?` `:who?` `:occupants?` `:things?` | none | Local presentation. `exits?` lists directions known to the room; `who?` is people/avatar-oriented; `occupants?` includes avatars plus room-local agents/occupants. |
@@ -276,7 +281,6 @@ Key verbs:
 | `:dig` | direct args | Owner-gated exit creation/linking; newly-created rooms are assigned to the stored owner DID. |
 | `:fill` | direct args | Owner-gated exit removal. Removes the direction from the room and asks the exit actor to terminate itself; target rooms are not deleted. |
 | `:exit` | `<direction> <verb> [args]` | Owner-gated direction resolver and generic forwarder to the exit actor. Exit semantics live in `exit.ma`. |
-| `:behaviour` | `[ /ipfs/<cid> ]` | Owner-gated behaviour update. |
 | `:child-alive` | `<actor> <kind> <nonce> <direction>` | Child readiness callback; rooms use it for pending new-room dig targets when actor, kind, nonce, and direction match. |
 | `:ping` / `:pong` / `:authorise-link` / `:link-authorised` / `:link-denied` | link handshake args | Existing-room link handshake. |
 | `:presence-tick` | none | Scheduled room-local occupant sweep. Asks occupants to report their parent and removes occupants that have not reported within the room timeout. |
@@ -349,7 +353,7 @@ Key helpers and verbs:
 | `:exits?` | none | Asks the current parent room for exits and stores the printed reply as `last-message`. |
 | `:go` | `<direction>` | Free-agent or owner movement through a named room exit; no exit creation. |
 | `:move` | none | Asks the current parent room to choose one available exit at random and traverse it. |
-| `:move-ctx` | `<ctx-map>` | Room-facing movement helper; validates the ctx against the current parent, performs ordinary room-visible `:leave-occupant`, then sends map-shaped agent `:enter` to the target room. |
+| `:ctx` | `<ctx-map>` | Room-facing movement helper; validates the ctx against the current parent, performs ordinary room-visible `:leave-occupant`, then sends map-shaped agent `:enter` to the target room. With no args, returns current ctx to authorised callers. |
 | `:enter-room` | `<target-room-did-url> <source-room-did-url>` | Root/room movement helper retained for direct room-driven entry flows. |
 | `:report-parent` | `<room> <tick> <nonce>` | Machine presence request; replies to the requesting room with `:parent-report <self> <parent> <tick> <nonce>`. |
 | `:claim` | `<secret>` | Recovery-path ownership claim. |
@@ -445,9 +449,9 @@ world-level actor names.
 3. Enter `ctx` is an optional map value. Missing `ctx.kind` means client/session
    entry: the client waits for committed context. Direct `agent`/`thing` entry
    MUST carry required string fields listed in section 2.2.
-4. DID values crossing zion/runtime boundary SHOULD be full DID or DID-URL
-   values, not runtime-local shorthand. Committed ctx actor references MUST be
-   full DID-URLs.
+4. DID values crossing actor, zion, or runtime message boundaries MUST be full
+   DID or DID-URL values, not runtime-local shorthand. Committed ctx actor
+   references MUST be full DID-URLs.
 5. Committed client context uses `/ma/lambda/ctx/0.0.1` and includes the
    effective `kind` chosen by the world.
 6. Room `:enter` dispatch is kind-driven: absent kind or explicit `avatar`
@@ -455,7 +459,7 @@ world-level actor names.
    and `agent` require explicit kind and are admitted into the same room-local
    non-avatar occupant cache for now.
 7. Thing transfer validation is strict by default: user MUST be `did:ma:...`;
-   non-ctx parent arguments MUST be `did:ma:...` or `#fragment`. Optional
+   non-ctx parent arguments MUST be DID-URLs. Optional
    transfer ctx MUST include non-empty `kind`, `name`, `nick`, and `description`
    fields. Any actor references inside ctx MUST be full DID-URLs.
 

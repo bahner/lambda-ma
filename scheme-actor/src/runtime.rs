@@ -89,6 +89,15 @@ pub fn install(env: &Rc<Env>) {
     );
 }
 
+pub fn reply_to(msg: &crate::msg::MsgRecord, term: &Value) -> EvalResult<()> {
+    let input = encode_reply_request(msg, term)?;
+    host::reply(&input).map_err(|e| EvalError::new(format!("ma-reply!: {e}")))
+}
+
+pub fn set_behaviour_reference(reference: &str) -> EvalResult<()> {
+    host::set_behaviour(reference).map_err(|e| EvalError::new(format!("ma-set-behaviour!: {e}")))
+}
+
 fn b_ma_send(args: &[Value]) -> EvalResult<Value> {
     let [target, term] = args else {
         return Err(EvalError::new(format!(
@@ -122,8 +131,7 @@ fn b_ma_reply(args: &[Value]) -> EvalResult<Value> {
         )));
     };
 
-    let input = encode_reply_request(msg, term)?;
-    host::reply(&input).map_err(|e| EvalError::new(format!("ma-reply!: {e}")))?;
+    reply_to(msg, term)?;
     Ok(Value::Nil)
 }
 
@@ -154,8 +162,7 @@ fn b_ma_set_behaviour(args: &[Value]) -> EvalResult<Value> {
         )));
     };
 
-    host::set_behaviour(reference)
-        .map_err(|e| EvalError::new(format!("ma-set-behaviour!: {e}")))?;
+    set_behaviour_reference(reference)?;
     Ok(Value::Nil)
 }
 

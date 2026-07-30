@@ -161,11 +161,11 @@ that user owns it too. That keeps the invariant simple: no actor creates an exit
 to an existing room unless the target room is reachable and ownership of both
 rooms can be verified.
 
-Existing-room targets may be full DID-URLs or local runtime fragments. A local
-fragment such as `#garden` is checked against this runtime and kept as a local
-target throughout the handshake. Full `did:ma:...#room` targets may point at
-another runtime; the same room-to-room ownership handshake must still succeed
-before the exit is created.
+Existing-room targets are full DID-URLs. Runtime-local fragments may be
+canonicalised while reading legacy state, but actor messages use full DID or
+DID-URL values throughout the handshake. Full `did:ma:...#room` targets may
+point at another runtime; the same room-to-room ownership handshake must still
+succeed before the exit is created.
 
 New-room digs use the lambda-ma child-alive callback because
 `ma-create-actor` is queued until the current dispatch completes. The source
@@ -196,12 +196,11 @@ Leave event:
 
 ```scheme
 (:leave)
-(:leave-avatar <avatar-did-url> <to-room-did-url>)
 ```
 
-Rooms accept ordinary avatar `:enter`, user-facing `:leave` for deliberate
-live-presence departure, and target-room-origin `:leave-avatar` for movement
-cleanup. `:leave` removes the avatar from room presentation without changing the
+Rooms accept ordinary avatar `:enter` and user-facing `:leave` for deliberate
+live-presence departure. Movement cleanup is ctx-driven, not a separate old-room
+notification. `:leave` removes the avatar from room presentation without changing the
 avatar's stored room or zion's cached context; the same room remains the user's
 return point on the next login. User-facing context is sent by avatar.
 
@@ -218,17 +217,18 @@ External entry is room-first:
    room state and forwards the ctx to user.
 
 Room-to-room movement uses the same avatar handshake as external entry. The
-source avatar carries the user DID and nick through the exit; the target room
-creates or reuses that user's deterministic local avatar before publishing the
-new context.
+source room resolves a direction to a first-class exit actor. The exit
+transforms ordinary movement ctx and returns it to the source room; the moving
+actor then tries to enter the target room itself. The target room creates or
+reuses that user's deterministic local avatar before publishing the new context.
 
 1. Avatar sends `:go <direction>` to its current room.
-2. Room sends `:traverse <avatar-did-url> <source-room-did-url> <user> <nick>` to the exit.
-3. Exit sends `:enter <user> <avatar-did-url> <source-room-did-url> <nick>` to the target room.
-4. Target rooms ask the deterministic local avatar for `user` to enter the room;
-   stale or foreign source avatars are used only for old-room cleanup.
-5. Target room asks the old room to remove the source avatar with
-   `:leave-avatar` when needed.
+2. Room sends `:traverse <ctx>` to the exit, with minimal ctx fields `actor`,
+   `kind`, `room`, and optional `nick`/`text`.
+3. Exit sends `:traversed <ctx>` back to the source room with `ctx.room` set to
+   either the target room or the original room if blocked.
+4. Source room sends `:ctx <ctx>` to `ctx.actor`.
+5. Target rooms ask the deterministic local avatar for `user` to enter the room.
 
 Agent movement is actor-owned and room-visible:
 
@@ -236,9 +236,9 @@ Agent movement is actor-owned and room-visible:
    `:go <direction>` to the agent.
 2. The agent asks its current parent room to choose an exit for `:move`, or to
    use the named exit for `:go <direction>`.
-3. The room sends `:traverse-agent <agent-did-url> <source-room-did-url> <nick>`
-   to the exit.
-4. The exit tells the full agent DID-URL to enter the full target room DID-URL.
+3. The room sends `:traverse <ctx>` to the exit.
+4. The exit returns `:traversed <ctx>` to the source room, and the source room
+   sends `:ctx <ctx>` to the agent.
 5. The agent sends `:leave-occupant` to the old room, then sends map-shaped
    `:enter` with `agent-ctx` to the target room.
 6. The old room broadcasts `<nick> leaves.` and the target room broadcasts

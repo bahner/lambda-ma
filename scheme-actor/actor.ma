@@ -46,8 +46,7 @@
 
 (define (local-actor-ref? actor)
   (and (string? actor)
-       (or (string-prefix? "#" actor)
-           (string-prefix? (string-append (runtime) "#") actor))))
+  (string-prefix? (string-append (runtime) "#") actor)))
 
 (define (did-url? actor)
   (and (string? actor)
@@ -109,6 +108,25 @@
 (define (reply-error msg text)
   (ma-reply! msg (list :error text)))
 
+(define (handle-actor-behaviour! msg args)
+  (cond ((null? args)
+         (let ((current (ma-get-config-key "behaviour")))
+           (if current
+               (reply-ok msg current)
+               (reply-ok msg "No custom behaviour is set for this actor."))))
+        ((null? (cdr args))
+         (let ((actor-owner (get-prop "owner")))
+           (cond ((not actor-owner)
+                  (reply-error msg "This actor is unowned. Claim it before editing behaviour."))
+                 ((not (msg-from-owner? actor-owner msg))
+                  (reply-error msg "Only this actor's owner can edit behaviour."))
+                 (else
+                  (begin
+                    (ma-set-behaviour! (car args))
+                    (reply-ok msg "Behaviour update queued."))))))
+        (else
+         (reply-error msg "Usage: behaviour /ipfs/<cid>"))))
+
 (define (on-signal term)
   #f)
 
@@ -117,6 +135,8 @@
 
 (define (set-method! verb fn)
   (set! *methods* (cons (cons verb fn) *methods*)))
+
+(set-method! :behaviour handle-actor-behaviour!)
 
 (define (set-default-method! fn)
   (set! *default-method* fn))
@@ -133,7 +153,11 @@
          (args (args-of term))
          (fn (find-method verb)))
     (if fn
-        (fn args msg)
+        (begin
+          (fn args msg)
+          #f)
       (if *default-method*
-        (*default-method* verb args msg)
+        (begin
+          (*default-method* verb args msg)
+          #f)
         (ma-reply! msg (list :error "unknown verb"))))))

@@ -57,14 +57,11 @@ When documenting or changing behaviour, keep these contracts aligned:
   `:enter-avatar`/`:enter-user`).
 - Enter payload naming: one extensible map named `ctx` (not `attrs`). Direct
   non-avatar entry requires fields `kind`, `name`, `nick`, `description`.
-- Committed ctx actor references must be fully qualified DID-URLs. Do not put
-  runtime-local `#fragment` shorthand in ctx fields such as `root`, `avatar`,
-  `room`, or future actor/path references.
-- Runtime-local `#fragment` addressing is only an internal runtime traffic
-  optimization for local delivery/ACL qualification. It is not an actor/world
-  identity contract; actors may accept it as shorthand at a runtime boundary,
-  but must qualify it before storing, committing ctx, or exposing references to
-  clients/other actors.
+- Actor references crossing actor, client, or runtime message boundaries must
+  be full DIDs or DID-URLs. Do not send runtime-local `#fragment` shorthand in
+  messages, ctx fields such as `root`, `avatar`, `room`, or future actor/path
+  references. Actors may canonicalise old local shorthand while reading legacy
+  state, but sibling privilege is a local policy over full DID-URLs.
 - Cross-runtime movement must not admit the source-runtime avatar into the
   target room. The target room creates or reuses the target-runtime deterministic
   avatar for the user, and uses the source avatar only for old-room cleanup.
@@ -84,6 +81,6 @@ When documenting or changing behaviour, keep these contracts aligned:
   parent authority governs `take`/`drop` flows.
 - Transfer strictness (default): thing/agent transfer calls must keep strict
   input validation until explicitly relaxed:
-  user must be `did:ma:...`; non-ctx parent arguments may be `did:ma:...` or
-  `#fragment`. Optional transfer `ctx` must contain non-empty `kind`, `name`,
-  `nick`, `description`. Any actor references inside ctx must be full DID-URLs.
+  user must be `did:ma:...`; non-ctx parent arguments must be DID-URLs.
+  Optional transfer `ctx` must contain non-empty `kind`, `name`, `nick`,
+  `description`. Any actor references inside ctx must be full DID-URLs.

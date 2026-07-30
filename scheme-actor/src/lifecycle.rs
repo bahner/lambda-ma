@@ -294,7 +294,96 @@ pub fn on_signal(input: &[u8]) -> EvalResult<()> {
 /// behaviour configured"]` if a reply is expected, otherwise drop it
 /// silently).
 pub fn on_message(msg: Rc<MsgRecord>) -> EvalResult<Option<Value>> {
+    if handle_host_behaviour_message(&msg)? {
+        return Ok(Some(Value::Nil));
+    }
     call_if_defined("on-message", &[Value::Msg(msg)])
+}
+
+fn handle_host_behaviour_message(msg: &Rc<MsgRecord>) -> EvalResult<bool> {
+    let (verb, args) = match &msg.content {
+        Value::Pair(_) => (msg.content.car()?, msg.content.cdr()?),
+        term => (term.clone(), Value::Nil),
+    };
+    if verb != Value::symbol(":behaviour") {
+        return Ok(false);
+    }
+
+    match args.to_vec()?.as_slice() {
+        [] => {
+            let current = crate::state::config_value("behaviour")
+                .unwrap_or_else(|| "No custom behaviour is set for this actor.".to_string());
+            reply_ok(msg, &current)?;
+        }
+        [Value::Str(reference)] => {
+            let Some(owner) = actor_owner() else {
+                reply_error(
+                    msg,
+                    "This actor is unowned. Claim it before editing behaviour.",
+                )?;
+                return Ok(true);
+            };
+            if !msg_from_owner(&owner, msg) {
+                reply_error(msg, "Only this actor's owner can edit behaviour.")?;
+                return Ok(true);
+            }
+            crate::runtime::set_behaviour_reference(reference)?;
+            reply_ok(msg, "Behaviour update queued.")?;
+        }
+        [_] => reply_error(msg, "Usage: behaviour /ipfs/<cid>")?,
+        _ => reply_error(msg, "Usage: behaviour /ipfs/<cid>")?,
+    }
+    Ok(true)
+}
+
+fn actor_owner() -> Option<String> {
+    match crate::state::prop_value("owner") {
+        Some(Value::Str(owner)) if !owner.is_empty() => Some(owner.to_string()),
+        _ => None,
+    }
+}
+
+fn msg_from_owner(owner: &str, msg: &MsgRecord) -> bool {
+    msg.from == owner
+        || owner_avatar(owner).is_some_and(|avatar| canonical_actor(&msg.from) == avatar)
+}
+
+fn owner_avatar(owner: &str) -> Option<String> {
+    if !owner.starts_with("did:ma:") || owner.contains('#') {
+        return None;
+    }
+    let runtime = crate::state::config_value("runtime")?;
+    let seed = format!("lambda-ma avatar v1\n{runtime}\n{owner}");
+    let hash = blake3::hash(seed.as_bytes());
+    let mut fragment = String::with_capacity(16);
+    for byte in &hash.as_bytes()[..8] {
+        fragment.push(b"0123456789abcdef"[(byte >> 4) as usize] as char);
+        fragment.push(b"0123456789abcdef"[(byte & 0x0f) as usize] as char);
+    }
+    Some(format!("{runtime}#{fragment}"))
+}
+
+fn canonical_actor(actor: &str) -> String {
+    if let Some(fragment) = actor.strip_prefix('#') {
+        if let Some(runtime) = crate::state::config_value("runtime") {
+            return format!("{runtime}#{fragment}");
+        }
+    }
+    actor.to_string()
+}
+
+fn reply_ok(msg: &MsgRecord, text: &str) -> EvalResult<()> {
+    crate::runtime::reply_to(
+        msg,
+        &Value::list(vec![Value::symbol(":ok"), Value::str(text)]),
+    )
+}
+
+fn reply_error(msg: &MsgRecord, text: &str) -> EvalResult<()> {
+    crate::runtime::reply_to(
+        msg,
+        &Value::list(vec![Value::symbol(":error"), Value::str(text)]),
+    )
 }
 
 /// Decode a `CastInput` (ma-runtime-v1.md §14.3) into a [`MsgRecord`].
@@ -385,13 +474,20 @@ mod tests {
     /// runtime's `PluginMsg` shape (ma-runtime-v1.md §14.3), with a
     /// ma-scheme-encoded `content` (§6: a colon-symbol here, `:ping`).
     fn sample_cast_input() -> Vec<u8> {
-        let content = crate::cbor::encode(&Value::symbol(":ping")).unwrap();
+        sample_cast_input_with_content(Value::symbol(":ping"))
+    }
+
+    fn sample_cast_input_with_content(content_value: Value) -> Vec<u8> {
+        let content = crate::cbor::encode(&content_value).unwrap();
         let msg = Cbor::Map(vec![
             (Cbor::Text("id".into()), Cbor::Text("msg-1".into())),
-            (Cbor::Text("from".into()), Cbor::Text("did:ma:alice".into())),
+            (
+                Cbor::Text("from".into()),
+                Cbor::Text("did:ma:runtime#construct".into()),
+            ),
             (
                 Cbor::Text("to".into()),
-                Cbor::Text("did:ma:bob#room".into()),
+                Cbor::Text("did:ma:runtime#duckie".into()),
             ),
             (Cbor::Text("created_at".into()), Cbor::Integer(0.into())),
             (Cbor::Text("exp".into()), Cbor::Integer(0.into())),
@@ -546,6 +642,31 @@ mod tests {
         on_signal(&data_signal(":set-behaviour", b"(define x 1)")).unwrap();
         let msg = decode_cast_input(&sample_cast_input()).unwrap();
         assert_eq!(on_message(msg).unwrap(), None);
+        reset();
+    }
+
+    #[test]
+    fn on_message_duck_parent_report_does_not_treat_msg_as_list() {
+        reset();
+        let behaviour = [
+            include_str!("../stdlib.ma"),
+            include_str!("../actor.ma"),
+            include_str!("../state.ma"),
+            "(define (ma-save-state!) #f)\n(define (ma-send! target term) #f)\n(define (ma-reply! msg term) #f)",
+            include_str!("../../actors/agent.ma"),
+            include_str!("../../actors/duck.ma"),
+        ]
+        .join("\n");
+        on_signal(&data_signal(":set-behaviour", behaviour.as_bytes())).unwrap();
+        let msg = decode_cast_input(&sample_cast_input_with_content(Value::list(vec![
+            Value::symbol(":report-parent"),
+            Value::str("did:ma:runtime#construct"),
+            Value::str("tick-1"),
+            Value::str("nonce-1"),
+        ])))
+        .unwrap();
+
+        on_message(msg).unwrap();
         reset();
     }
 

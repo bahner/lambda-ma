@@ -62,7 +62,7 @@
   (let ((avatar (avatar-for-user user)))
     (if (entity-live? avatar)
         (begin
-          (ma-send! (canonical-actor avatar) (list :enter-room (canonical-actor room) user (avatar-fragment user) (nick-or-default nick)))
+          (ma-send! (canonical-actor avatar) (list :enter-room (canonical-actor room) user (nick-or-default nick)))
           avatar)
         (entity-url (ma-create-actor AVATAR_KIND #f (avatar-init user nick room) (avatar-fragment user))))))
 

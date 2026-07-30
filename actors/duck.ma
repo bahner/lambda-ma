@@ -26,7 +26,7 @@
         (reply-error msg "duck is nowhere")
         (begin
           (ma-send! p (list :say text))
-          (reply-ok msg text)))))
+          (reply-ok msg "")))))
 
 ; Public methods added on top of the generic agent behaviour.
 (set-method! :help

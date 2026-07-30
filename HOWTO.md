@@ -251,6 +251,12 @@ owner did:ma:<target>  transfer the room to another user DID
 did? lamp              show the DID for a visible occupant or thing
 dig north to Name      create an exit and a new room
 fill north             remove the north exit
+look north             inspect the north exit
+lock north             lock the north exit
+unlock north           unlock the north exit
+exit-message north traveller You step through the green door.
+exit-message north blocked The green door is locked.
+exit-message north source Someone slips through the green door.
 :dids?                 owner lists visible occupants/things with DIDs
 :remove Alice          owner removes Alice if that nick is unique here
 :remove did:ma:...#x   owner removes an exact occupant DID-URL
@@ -262,18 +268,20 @@ prop name Name         shorthand for setting the focused room name
 
 Digging an existing direction replaces that exit. Filling a direction removes
 the exit from the current room and asks the exit actor to terminate itself; it
-does not delete the target room. To link to an existing room instead of creating
-a new one, use a room DID-URL or a local fragment from the same runtime:
+does not delete the target room. Exits are inspectable objects: `look north`
+shows the exit name, description, owner, source room, target room, direction,
+and lock state. Locked exits stay visible, but `go north` prints the blocked
+message instead of traversing. To link to an existing room instead of creating a
+new one, use a room DID-URL:
 
 ```text
 dig mirror to @sky#FQWJA5V3
-dig mirror to #FQWJA5V3
 ```
 
-The local `#fragment` form is a local runtime target and stays local through the
-handshake. A full `did:ma:...#room` target may point at another runtime. The
-target room must run compatible room code and confirm that you own it before the
-source room creates the exit. The source room first sends `:ping` to the target
+Runtime-local fragments may exist in old state, but actor messages use full DID
+or DID-URL values. A full `did:ma:...#room` target may point at another runtime.
+The target room must run compatible room code and confirm that you own it before
+the source room creates the exit. The source room first sends `:ping` to the target
 room; after `:pong`, it asks for ownership authorisation.
 
 The important rule is simple:
@@ -309,18 +317,20 @@ Why this works well:
 - `:enter` with `agent-ctx` informs the room how to present the occupant.
 - `:move` and `:go` use ordinary room exits. `:go <direction>` names an exit;
   `:move` asks the current room to choose one of the exits it knows with
-  practical, non-security random choice. The source room sees
-  `:leave-occupant` and broadcasts `<nick> leaves.`; the target room receives
-  the agent's normal `:enter` and broadcasts `<nick> arrives.`
+  practical, non-security random choice. The room sends movement ctx to the
+  exit, the exit returns transformed ctx to the room, and the room sends
+  `:ctx` to the agent. The agent then performs the target-room `:enter`
+  itself, so the target room remains responsible for admission.
 - Full init logic stays in the code users provide at creation time, so users can
   adjust it safely when creating entities.
 Agents can use exits, but they do not expose `:dig`.
 
-## Add custom code to one room
+## Add custom code to one actor
 
 Sometimes you want one room to have a special method or two without changing
 `actors/room.ma`, without using CRUD, and without registering a new kind. λ-間
-supports that from inside the room.
+supports that for any Scheme-backed actor; the example below customises a room
+from inside that room.
 
 The normal room behaviour still comes from `/ma/room/0.0.1`. Your extra code is
 added only to that room.
@@ -333,8 +343,8 @@ claim
 ```
 
 That opens the room's current per-entity behaviour source if one is already set,
-or a blank editor if the room has no custom code yet. Add Scheme code and press
-Publish.
+or a blank editor if the room has no custom code yet. Publishing requires the
+actor's `owner` prop to match you. Add Scheme code and press Publish.
 
 For example:
 
@@ -346,8 +356,8 @@ For example:
 ```
 
 Zion publishes the editor contents as `text/plain`, sends the returned
-`/ipfs/<cid>` to the room's `:behaviour` method, and the runtime reloads only
-that room. Call the new method directly:
+`/ipfs/<cid>` to the actor's `:behaviour` method, and the runtime reloads only
+that actor. Call the new method directly:
 
 ```text
 :duck
@@ -373,14 +383,15 @@ the room's own help text without changing `actors/room.ma`. Save the original
 
 Now both `:help` and `help here` include the local room affordance.
 
-To see the current per-room behaviour reference:
+To see the current per-actor behaviour reference:
 
 ```text
 :behaviour
 ```
 
 You can do the same thing manually: write a `duck.ma` file, publish it with
-`ipfs add --quieter duck.ma`, then run `:behaviour /ipfs/<cid>` from the room.
+`ipfs add --quieter duck.ma`, then run `:behaviour /ipfs/<cid>` from the focused
+actor.
 The editor command is just the friendly path over that same mechanism.
 
 You can also compose code files. If `duck-room.ma` contains this:

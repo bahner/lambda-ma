@@ -110,6 +110,12 @@
          (car (cdr (car ctx))))
         (else (ctx-alist-ref (cdr ctx) key))))
 
+(define (valid-move-ctx? ctx)
+  (and (map? ctx)
+       (same-actor? (ctx-text ctx "actor") (self))
+       (equal? (ctx-text ctx "kind") "agent")
+       (valid-parent-ref? (ctx-text ctx "room"))))
+
       ; Transfer validation keeps take/drop strict at the room boundary.
 (define (valid-room-ctx? ctx)
   (and (pair? ctx)
@@ -232,14 +238,21 @@
 (set-method! :ctx
   (lambda (args msg)
     (if (null? args)
-        #f
-        (let* ((ctx (car args))
-               (room (ctx-alist-ref ctx :room)))
-          (if (and (valid-room-ctx? ctx)
-                   (same-actor? (msg-from msg) room)
-                   (authorised-room-ctx? room))
-              (set-parent! room)
-              #f)))))
+        (if (or (owner-caller? msg) (caller-is-parent? msg))
+            (ma-reply! msg (list :ok (agent-ctx)))
+            #f)
+           (let ((ctx (car args)))
+          (cond
+            ((and (valid-room-ctx? ctx)
+               (same-actor? (msg-from msg) (ctx-alist-ref ctx :room))
+               (authorised-room-ctx? (ctx-alist-ref ctx :room)))
+             (set-parent! (ctx-alist-ref ctx :room)))
+            ((and (valid-move-ctx? ctx)
+                  (or (caller-is-parent? msg) (owner-caller? msg)))
+             (if (same-actor? (ctx-text ctx "room") (parent))
+                 (set-last-message! (ctx-text ctx "text"))
+                 (move-to-room! (ctx-text ctx "room") (msg-from msg))))
+            (else #f))))))
 
 (set-method! :set-recovery-secret
   (lambda (args msg)
@@ -251,17 +264,21 @@
 
 (set-method! :claim
   (lambda (args msg)
-    (if (null? args)
-        (reply-error msg "usage: :claim <secret>")
-        (let ((secret (car args))
-              (stored (recovery-secret))
-              (user (msg-from msg)))
-          (if (and stored (equal? secret stored))
-              (begin
-                (set-owner! user)
-                (set-recovery-secret! "")
-                (reply-ok msg "claimed"))
-              (reply-error msg "claim failed"))))))
+    (let ((stored (recovery-secret))
+          (user (msg-from msg)))
+      (cond ((and (not (owner)) (not stored) (null? args))
+             (begin
+               (set-owner! user)
+               (reply-ok msg "claimed")))
+            ((null? args)
+             (reply-error msg "usage: :claim <secret>"))
+            ((and stored (equal? (car args) stored))
+             (begin
+               (set-owner! user)
+               (set-recovery-secret! "")
+               (reply-ok msg "claimed")))
+            (else
+             (reply-error msg "claim failed"))))))
 
 ; Parent-mediated transfer. The parent room asks the agent to bind to a user
 ; or re-enter another parent; direct user calls are deliberately rejected.
@@ -278,7 +295,7 @@
             ((null? rest)
              (reply-error msg "usage: :take <user-did> <carrier-parent-did-url> [ctx-map]"))
             ((not (valid-parent-ref? (car rest)))
-             (reply-error msg "take requires carrier parent as did:ma:...#fragment"))
+             (reply-error msg "take requires carrier parent as DID-URL"))
             ((and (not (null? (cdr rest))) (not (null? (cdr (cdr rest)))))
              (reply-error msg "take accepts at most one optional ctx-map"))
             ((and (not (null? (cdr rest))) (not (valid-transfer-ctx? (car (cdr rest)))))
@@ -306,7 +323,7 @@
             ((null? rest)
              (reply-error msg "usage: :drop <target-parent-did-url> [ctx-map]"))
             ((not (valid-parent-ref? (car rest)))
-             (reply-error msg "drop requires target parent as did:ma:...#fragment"))
+             (reply-error msg "drop requires target parent as DID-URL"))
             ((and (not (null? (cdr rest))) (not (null? (cdr (cdr rest)))))
              (reply-error msg "drop accepts at most one optional ctx-map"))
             ((and (not (null? (cdr rest))) (not (valid-transfer-ctx? (car (cdr rest)))))

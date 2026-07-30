@@ -11,7 +11,7 @@
 ; `avatar-occupants` is the person/avatar subset used by who?.
 (define (occupants)
   (let ((xs (get-prop "occupants")))
-    (if xs (unique-string-entries xs) '())))
+    (if xs (unique-actor-entries xs) '())))
 
 (define (add-occupant! actor)
   (if (member-entry? actor (occupants))
@@ -28,11 +28,6 @@
         (avatar-added (add-avatar-occupant! avatar)))
     (or occupant-added avatar-added)))
 
-(define (notify-old-room! old-room avatar)
-  (if (and old-room (not (same-actor? old-room (self))))
-  (ma-send! (canonical-actor old-room) (list :leave-avatar (canonical-actor avatar) (canonical-actor (self))))
-      #f))
-
 (define (label-key actor) (string-append "label:" (canonical-actor actor)))
 
 (define (set-label! actor label)
@@ -46,7 +41,7 @@
 
 (define (avatar-occupants)
   (let ((xs (get-prop "avatar-occupants")))
-    (if xs (unique-string-entries xs) '())))
+    (if xs (unique-actor-entries xs) '())))
 
 (define (add-avatar-occupant! avatar)
   (if (member-entry? avatar (avatar-occupants))
@@ -301,7 +296,7 @@
   (let* ((avatar (avatar-for-user user))
          (n (nick-or-default nick)))
     (if (entity-live? avatar)
-      (ma-send! (canonical-actor avatar) (list :enter-room (canonical-actor (self)) user (avatar-fragment user) n))
+      (ma-send! (canonical-actor avatar) (list :enter-room (canonical-actor (self)) user n))
       (ma-create-actor AVATAR_KIND #f (avatar-init user n (canonical-actor (self))) (avatar-fragment user)))
     avatar))
 
@@ -315,10 +310,8 @@
   (if (and (local-actor-ref? avatar)
            (entity-live? avatar)
            (expected-avatar? user avatar))
-      (ma-send! (canonical-actor avatar) (list :enter-room (canonical-actor (self)) user (avatar-fragment user) (nick-or-default nick)))
-      (begin
-        (notify-old-room! old-room avatar)
-        (request-avatar-entry! user nick))))
+      (ma-send! (canonical-actor avatar) (list :enter-room (canonical-actor (self)) user (nick-or-default nick)))
+      (request-avatar-entry! user nick)))
 
 (define (announce-avatar-presence! avatar)
   (if (add-avatar-presence! avatar)
@@ -328,7 +321,6 @@
 (define (commit-avatar-entry! avatar old-room nick)
   (begin
     (set-label! avatar nick)
-    (notify-old-room! old-room avatar)
     (announce-avatar-presence! avatar)
     (presence-touch! avatar (presence-tick))
     (ma-save-state!)
@@ -336,7 +328,6 @@
 
 (define (record-avatar-presence! avatar old-room)
   (begin
-    (notify-old-room! old-room avatar)
     (announce-avatar-presence! avatar)
     (presence-touch! avatar (presence-tick))
     (ma-save-state!)
@@ -351,12 +342,12 @@
 (define (self-avatar-entry? args msg)
   (and (not (null? args))
        (string? (car args))
+  (local-actor-ref? (car args))
        (same-actor? (msg-from msg) (car args))))
 
 (define (user-avatar-entry? args)
   (and (not (null? args))
-       (string? (car args))
-       (string-prefix? "did:ma:" (car args))
+  (user-did? (car args))
        (not (null? (cdr args)))))
 
 (define (enter-avatar-kind? kind)
@@ -365,12 +356,15 @@
 ; Direct non-avatar entry is kind-driven. Agents are visible occupants; things
 ; are token-bound room locals whose own parent state remains authoritative.
 (define (handle-enter-ctx! msg ctx)
-  (let* ((user (msg-from msg))
+  (let* ((ctx-user (ctx-text ctx "user"))
+         (user (if (user-did? ctx-user) ctx-user (msg-from msg)))
          (kind (ctx-text ctx "kind"))
          (name (ctx-text ctx "name")))
     (cond
-      ((enter-avatar-kind? kind)
+      ((and (enter-avatar-kind? kind) (user-did? user))
        (request-avatar-entry! user (ctx-text ctx "nick")))
+      ((enter-avatar-kind? kind)
+       (reply-error msg "avatar enter requires user DID in ctx"))
       ((and (agent-kind? kind) (enter-direct-ctx-valid? ctx "agent"))
        (handle-agent-enter! msg user ctx))
       ((agent-kind? kind)
@@ -400,7 +394,9 @@
 (define (handle-legacy-avatar-entry! args)
   (let* ((avatar (car args))
          (old-room (entry-old-room args)))
-    (record-avatar-presence! avatar old-room)))
+    (if (local-actor-ref? avatar)
+        (record-avatar-presence! avatar old-room)
+        #f)))
 
 (define (handle-agent-enter! msg user ctx)
   (let* ((actor (canonical-actor user))
@@ -522,13 +518,11 @@
 (define (remove-exit! direction)
   (begin
     (set-prop! "exits" (map-delete (exits) direction))
-    (del-prop! (exit-key direction))
     (del-prop! (exit-target-key direction))
     (del-prop! (exit-target-name-key direction))))
 
 (define (exit-target direction)
-  (let ((exit (map-ref (exits) direction #f)))
-    (if exit exit (get-prop (exit-key direction)))))
+  (map-ref (exits) direction #f))
 
 (define (exit-room-target direction)
   (get-prop (exit-target-key direction)))
@@ -539,14 +533,19 @@
         (let ((fragment (exit-fragment direction)))
           (ma-create-actor EXIT_KIND #f (exit-init direction target-room) fragment)
           (let ((healed (entity-url fragment)))
-            (set-prop! (exit-key direction) healed)
             (put-exit! direction healed)
             (ma-save-state!)
-            target-room))
+            healed))
         #f)))
 
 (define (exit-directions)
   (map-keys (exits)))
+
+(define (known-exit? actor)
+  (let loop ((directions (exit-directions)))
+    (cond ((null? directions) #f)
+          ((same-actor? actor (exit-target (car directions))) #t)
+          (else (loop (cdr directions))))))
 
 (define (random-exit-direction)
   (let ((directions (exit-directions)))
@@ -554,23 +553,41 @@
         #f
         (list-ref-at directions (random (list-length directions))))))
 
-      ; Traversal keeps avatar/user/source-room context intact so target rooms can
-      ; clean old presence and choose the correct deterministic avatar.
-(define (traverse-target-room! actor user direction target-room)
-  (if (movable-occupant? actor)
-      (ma-send! (canonical-actor actor) (list :enter-room (canonical-actor target-room) (canonical-actor (self))))
-      (begin
-        (ma-send! (canonical-actor actor) (list :print (string-append "You go " direction ".")))
-        (ma-send! (canonical-actor target-room) (list :enter user (canonical-actor actor) (canonical-actor (self)) (speaker-name actor))))))
+(define (movement-kind actor user)
+  (let ((claim (claim-ctx actor)))
+    (cond ((and user (same-actor? actor (avatar-for-user user))) "avatar")
+          ((map? claim) (ctx-text claim "kind"))
+          (else "actor"))))
+
+(define (movement-ctx actor user)
+  (let ((ctx (map-set
+               (map-set
+                 (map-set (make-map) "actor" (canonical-actor actor))
+                 "kind" (movement-kind actor user))
+               "room" (canonical-actor (self)))))
+    (let ((with-nick (if (has-label? actor)
+                         (map-set ctx "nick" (speaker-name actor))
+                         ctx)))
+      (if user
+          (map-set with-nick "user" user)
+          with-nick))))
 
 (define (traverse-exit! actor user direction exit)
-  (let ((healed-target (heal-local-exit! direction exit)))
-    (cond (healed-target
-           (traverse-target-room! actor user direction healed-target))
-          ((movable-occupant? actor)
-           (ma-send! (canonical-actor exit) (list :traverse-agent (canonical-actor actor) (canonical-actor (self)) (speaker-name actor))))
-          (else
-           (ma-send! (canonical-actor exit) (list :traverse (canonical-actor actor) (canonical-actor (self)) user (speaker-name actor)))))))
+  (let* ((healed-exit (heal-local-exit! direction exit))
+         (active-exit (if healed-exit healed-exit exit)))
+    (ma-send! (canonical-actor active-exit) (list :traverse (movement-ctx actor user)))))
+
+(define (traversed-ctx-valid? ctx)
+  (and (map? ctx)
+       (non-empty-string? (ctx-text ctx "actor"))
+       (non-empty-string? (ctx-text ctx "kind"))
+       (non-empty-string? (ctx-text ctx "room"))))
+
+(define (handle-traversed! msg ctx)
+  (let ((actor (ctx-text ctx "actor")))
+    (if (and (known-exit? (msg-from msg)) (traversed-ctx-valid? ctx))
+        (ma-send! (canonical-actor actor) (list :ctx ctx))
+        #f)))
 
 (define (exits-text)
   (let ((directions (exit-directions)))
@@ -614,6 +631,7 @@
     "  where <thing>     ask where an occupant says it is\n"
     "  say <text>        speak here\n"
     "  emote <text>      act here\n"
+    "  look <exit>       inspect an exit\n"
     "  :leave           stop being shown here until you return\n"
     "  :remove <who>     owner removes an occupant by unique nick or DID\n"
     "  go <direction>    move through an exit\n"
@@ -622,9 +640,10 @@
     "  owner [did]       show or transfer ownership\n"
     "  dig <dir> [to name] [with code] create an exit\n"
     "  fill <dir>        remove an exit\n"
+    "  :exit <dir> <verb> [args] forward a command to an exit\n"
     "  :dids?            owner lists occupants and things with DIDs\n"
     "  :thing <name> [did] set/list local occupant alias\n"
-    "  :behaviour /ipfs/<cid> add or replace this room's own code\n"
+    "  :behaviour /ipfs/<cid> add or replace this actor's own code\n"
     "  :prop <key> [value] set or reset room text\n"
     "Agents and things enter with :enter ctx; their own parent state is the authority.\n"
     "Commands with : hit this place directly; commands without : go through your avatar."))
@@ -708,26 +727,6 @@
           (else
            (apply-room-prop! msg (car prop-args) (cdr prop-args) mediated)))))
 
-(define (handle-room-behaviour! msg args)
-  (cond ((null? args)
-         (let ((current (ma-get-config-key "behaviour")))
-           (if current
-               (reply-ok msg current)
-               (reply-ok msg "No custom behaviour is set for this room."))))
-        ((null? (cdr args))
-         (cond ((not (owned?))
-                (reply-error msg "This room is unowned. Claim it before editing behaviour."))
-               ((not (valid-owner? (owner)))
-                (reply-error msg "Owner must be a user DID."))
-               ((not (owner-message? msg))
-                (reply-error msg "Only this room's owner can edit behaviour."))
-               (else
-                (begin
-                  (ma-set-behaviour! (car args))
-                  (reply-ok msg "Behaviour update queued.")))))
-        (else
-         (reply-error msg "Usage: behaviour /ipfs/<cid>"))))
-
 ; User-context helpers for movement and parent-authority flows. Owner checks do
 ; not use this shape; they compare msg-from with the owner or owner avatar.
 (define (delegated-user-arg? args)
@@ -783,12 +782,7 @@
 
 ; Presence and room event handlers.
 (define (on-event event args msg)
-  (cond ((equal? event :leave-avatar)
-         (let ((avatar (car args)))
-           (presence-remove! avatar)
-           (ma-save-state!)
-           (broadcast (string-append (speaker-name avatar) " leaves."))))
-        ((equal? event :leave-occupant)
+  (cond ((equal? event :leave-occupant)
          (let ((actor (msg-from msg)))
            (presence-remove! actor)
            (ma-save-state!)
@@ -808,8 +802,8 @@
           (presence-remove! actor)
           (ma-save-state!)
           (broadcast (string-append (speaker-name actor) " leaves."))
-          (reply-ok msg "You leave."))
-        (reply-ok msg "You are not here."))))
+          (reply-ok msg ""))
+        (reply-ok msg ""))))
 
 (define (remove-candidate token)
   (cond ((not (string? token)) #f)
@@ -875,7 +869,6 @@
 
 ; Exit build/link state. Existing-room links handshake across both rooms;
 ; new-room digs wait for a child-alive callback before installing the exit.
-(define (exit-key direction) (string-append "exit:" direction))
 (define (exit-target-key direction) (string-append "exit-target:" direction))
 (define (exit-target-name-key direction) (string-append "exit-target-name:" direction))
 
@@ -918,7 +911,6 @@
 (define (create-exit! direction target-room target-name)
   (let* ((exit-fragment (ma-create-actor EXIT_KIND #f (exit-init direction target-room) (exit-fragment direction)))
          (exit (entity-url exit-fragment)))
-    (set-prop! (exit-key direction) exit)
     (put-exit! direction exit)
     (remember-exit-target! direction target-room target-name)
     exit))
@@ -952,6 +944,7 @@
 (define (exit-init direction target-room)
   (string-append
     "(set-prop! \"direction\" \"" direction "\")\n"
+    (if (owner) (string-append "(set-prop! \"owner\" \"" (owner) "\")\n") "")
     "(set-prop! \"source-room\" \"" (canonical-actor (self)) "\")\n"
     "(set-prop! \"target-room\" \"" (canonical-actor target-room) "\")\n"
     "(ma-save-state!)\n"))
@@ -1100,14 +1093,6 @@
 
 ; ── Presence and presentation methods ─────────────────────────────────────
 
-(set-method! :leave-avatar
-  (lambda (args msg)
-    (if (and (not (null? args))
-             (not (null? (cdr args)))
-             (same-actor? (msg-from msg) (car (cdr args))))
-        (on-event :leave-avatar args msg)
-        #f)))
-
 (set-method! :leave-occupant
   (lambda (args msg)
     (if (member-entry? (msg-from msg) (occupants))
@@ -1124,9 +1109,17 @@
 
 (set-method! :look
   (lambda (args msg)
-    (let ((avatar (msg-from msg)))
+    (let ((avatar (msg-from msg))
+          (look-args (command-args args msg)))
       (reconcile-caller-occupant! avatar)
-      (print-and-reply-ok msg (room-text)))))
+      (if (null? look-args)
+          (print-and-reply-ok msg (room-text))
+          (let ((direction (car look-args)))
+            (if (exit-target direction)
+                (begin
+                  (ma-send! (canonical-actor (exit-target direction)) (list :about))
+                  (reply-ok msg "queued"))
+                (print-and-reply-ok msg (string-append "No exit " direction "."))))))))
 
 (set-method! :exits?
   (lambda (args msg)
@@ -1226,6 +1219,40 @@
             (else
              (reply-to-sender msg (string-append "Unknown agent or thing: " token)))))))
 
+(set-method! :traversed
+  (lambda (args msg)
+    (if (null? args)
+        #f
+        (handle-traversed! msg (car args)))))
+
+(define (normalise-exit-verb verb)
+  (cond ((symbol? verb) verb)
+        ((and (string? verb) (string-prefix? ":" verb)) (string->symbol verb))
+        ((string? verb) (string->symbol (string-append ":" verb)))
+        (else verb)))
+
+(define (proxy-exit-command! msg direction term)
+  (require-valid-owner (owner) msg
+    (lambda ()
+      (require-owner msg
+        (lambda ()
+          (let ((exit (exit-target direction)))
+            (if exit
+                (begin
+                  (ma-send! (canonical-actor exit) term)
+                  (reply-to-sender msg "Exit command queued."))
+                (reply-to-sender msg (string-append "No exit " direction ".")))))))))
+
+(set-method! :exit
+  (lambda (args msg)
+    (let ((exit-args (command-args args msg)))
+      (if (or (null? exit-args) (null? (cdr exit-args)))
+          (reply-to-sender msg "Usage: exit <direction> <verb> [args]")
+          (let ((direction (car exit-args))
+                (verb (normalise-exit-verb (car (cdr exit-args))))
+                (verb-args (cdr (cdr exit-args))))
+            (proxy-exit-command! msg direction (cons verb verb-args)))))))
+
 (set-method! :help
   (lambda (args msg)
     (let ((text (room-help-text)))
@@ -1281,10 +1308,6 @@
 (set-method! :prop
   (lambda (args msg)
     (handle-room-prop! msg args)))
-
-(set-method! :behaviour
-  (lambda (args msg)
-    (handle-room-behaviour! msg args)))
 
 ; ── Link handshake and scheduled presence callbacks ───────────────────────
 

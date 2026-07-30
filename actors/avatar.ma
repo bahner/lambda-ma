@@ -80,6 +80,11 @@
   (let ((current (room)))
     (and current (same-actor? (msg-from msg) current))))
 
+(define (ctx-caller? msg)
+  (or (did? msg)
+      (root? msg)
+      (room? msg)))
+
 ; Validate committed context from a room before persisting local avatar state.
 (define (ctx-value pairs key)
   (cond ((null? pairs) #f)
@@ -90,18 +95,20 @@
         (else (ctx-value (cdr pairs) key))))
 
 (define (avatar-ctx-valid? payload msg)
-  (let ((protocol (ctx-value payload :protocol))
-        (kind (ctx-value payload :kind))
-        (root (ctx-value payload :root))
-        (avatar (ctx-value payload :avatar))
-        (target-room (ctx-value payload :room)))
-    (and (equal? protocol LAMBDA_CTX_PROTOCOL)
-         (equal? kind "avatar")
-         (qualified-ctx-actor? root)
-         (qualified-ctx-actor? avatar)
-         (qualified-ctx-actor? target-room)
-         (same-actor? avatar (self))
-         (same-actor? (msg-from msg) target-room))))
+  (if (pair? payload)
+      (let ((protocol (ctx-value payload :protocol))
+            (kind (ctx-value payload :kind))
+            (root (ctx-value payload :root))
+            (avatar (ctx-value payload :avatar))
+            (target-room (ctx-value payload :room)))
+        (and (equal? protocol LAMBDA_CTX_PROTOCOL)
+             (equal? kind "avatar")
+             (qualified-ctx-actor? root)
+             (qualified-ctx-actor? avatar)
+             (qualified-ctx-actor? target-room)
+             (same-actor? avatar (self))
+             (same-actor? (msg-from msg) target-room)))
+      #f))
 
 (define (move-ctx-valid? ctx)
   (let ((actor (ctx-text ctx "actor"))
@@ -130,8 +137,7 @@
 (define (enter-room-authorised? args msg)
   (and (not (null? args))
        (not (null? (cdr args)))
-       (not (null? (cdr (cdr args))))
-       (ensure-did! (car (cdr args)) (car (cdr (cdr args))))
+  (ensure-did! (car (cdr args)) (avatar-fragment (car (cdr args))))
        (or (root? msg)
            (same-actor? (msg-from msg) (car args)))))
 
@@ -218,11 +224,10 @@
     (if (and (enter-room-authorised? args msg) (not (null? args)))
         (let ((target-room (car args))
               (old-room (room))
-              (requested-nick (if (or (null? (cdr args))
-                                      (null? (cdr (cdr args)))
-                                      (null? (cdr (cdr (cdr args)))))
+                (requested-nick (if (or (null? (cdr args))
+                            (null? (cdr (cdr args))))
                                   #f
-                                  (car (cdr (cdr (cdr args)))))))
+                          (car (cdr (cdr args))))))
           (if (non-empty-string? requested-nick)
               (begin
                 (set-prop! "nick" requested-nick)
@@ -234,36 +239,32 @@
 (set-method! :ctx
   (lambda (args msg)
     (if (null? args)
-        #f
+        (if (ctx-caller? msg)
+            (ma-reply! msg (list :ok (ctx-term #f)))
+            #f)
         (let ((payload (car args)))
-          (if (avatar-ctx-valid? payload msg)
-              (begin
-                (clear-pending-move!)
-                (set-prop! "room" (canonical-actor (ctx-value payload :room)))
-                (set-prop! "nick" (ctx-value payload :nick))
-                (ma-save-state!)
-                (ma-send! (did) (cons :ctx args)))
-              #f)))))
-
-(set-method! :move-ctx
-  (lambda (args msg)
-    (if (null? args)
-        #f
-        (let* ((ctx (car args))
-               (target-room (ctx-text ctx "room"))
-               (old-room (room))
-               (text (ctx-text ctx "text")))
-          (if (move-ctx-valid? ctx)
-              (begin
-                (if (non-empty-string? text)
-                    (ma-send! (did) (list :print text))
-                    #f)
-                (if (same-actor? target-room old-room)
-                    #f
-                    (begin
-                      (set-pending-move! target-room old-room)
-                      (ma-send! (canonical-actor target-room) (list :enter (local-self) (canonical-actor old-room) (nick))))))
-              #f)))))
+          (cond
+            ((avatar-ctx-valid? payload msg)
+             (begin
+               (clear-pending-move!)
+               (set-prop! "room" (canonical-actor (ctx-value payload :room)))
+               (set-prop! "nick" (ctx-value payload :nick))
+               (ma-save-state!)
+               (ma-send! (did) (cons :ctx args))))
+            ((and (move-ctx-valid? payload) (ctx-caller? msg))
+             (let* ((target-room (ctx-text payload "room"))
+                    (old-room (room))
+                    (text (ctx-text payload "text")))
+               (begin
+                 (if (non-empty-string? text)
+                     (ma-send! (did) (list :print text))
+                     #f)
+                 (if (same-actor? target-room old-room)
+                     #f
+                     (begin
+                       (set-pending-move! target-room old-room)
+                       (ma-send! (canonical-actor target-room) (list :enter payload)))))))
+            (else #f))))))
 
 (set-method! :ctx?
   (lambda (args msg)

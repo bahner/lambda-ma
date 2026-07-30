@@ -48,11 +48,9 @@ $(SCHEME_ACTOR_CID_FILE): $(SCHEME_ACTOR_WASM) | $(CID_DIR)
 $(SCHEME_STDLIB_CID_FILE): $(SCHEME_STDLIB) | $(CID_DIR)
 	$(IPFS) add --quieter "$<" > "$@"
 
-$(SCHEME_ACTOR_LIB_CID_FILE): $(SCHEME_ACTOR_LIB) $(SCHEME_STDLIB_CID_FILE) | $(CID_DIR)
-	stdlib_cid=$$(cat "$(SCHEME_STDLIB_CID_FILE)"); \
+$(SCHEME_ACTOR_LIB_CID_FILE): $(SCHEME_STDLIB) $(SCHEME_ACTOR_LIB) | $(CID_DIR)
 	tmp=$$(mktemp); \
-	printf '(ma-include-ipfs #/ipfs/%s)\n' "$$stdlib_cid" > "$$tmp"; \
-	cat "$<" >> "$$tmp"; \
+	cat "$(SCHEME_STDLIB)" "$(SCHEME_ACTOR_LIB)" > "$$tmp"; \
 	$(IPFS) add --quieter "$$tmp" > "$@"; \
 	rm -f "$$tmp"
 

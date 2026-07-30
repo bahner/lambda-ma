@@ -110,4 +110,4 @@
           (reply-error msg "rms is nowhere")
           (begin
             (ma-send! p (list :say fortune))
-            (reply-ok msg fortune))))))
+            (reply-ok msg ""))))))
