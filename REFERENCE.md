@@ -176,14 +176,19 @@ Rules:
 ### 4.2 Room-to-room movement via exit
 
 1. Avatar sends `:go <direction>` to current room.
-2. Room sends `:traverse` to exit.
-3. Exit sends `:enter` to target room with either
-   `<user> <avatar-did-url> <old-room-did-url> [nick]` or
-   `<avatar-did-url> <old-room-did-url?>` shape.
-4. Target rooms ask the deterministic local avatar for `user` to enter the
-   room. Stale or foreign source avatars are used only to clean up the old room.
-5. Target room asks the old room to remove the source avatar with
-   `:leave-avatar` when needed.
+2. Room resolves `<direction>` to a first-class exit actor and sends
+   `:traverse <ctx>` to that exit. Minimal movement ctx uses `actor`, `kind`,
+   `room`, and optional `nick`/`text`.
+3. Exit checks source-side state such as lock and target configuration.
+4. Exit replies to the source room with `:traversed <ctx>`. If traversal is
+   allowed, `ctx.room` is the target room. If traversal is blocked, `ctx.room`
+   remains the source room and `ctx.text` explains why.
+5. Source room sends `:move-ctx <ctx>` to `ctx.actor`; it does not commit
+   movement state or own departure side effects.
+6. The actor performs the actual target-room `:enter <ctx>` or equivalent
+   avatar entry flow. Target room admission remains target-room authority.
+7. Only the target room's committed `:ctx` updates actor/avatar state and is
+   forwarded to the user.
 
 ### 4.3 Dig/link to existing room
 
@@ -235,10 +240,11 @@ Key verbs:
 | --- | --- | --- | --- |
 | `:enter-room` | `<room>` | root or target room | Avatar receives this from root or the target room, sends room `:enter`, and waits for committed room ctx before persisting room state and forwarding `:ctx` to user. |
 | `:sync-ctx` | none | root only | Emits current `:ctx` to user without changing avatar state. |
+| `:move-ctx` | `<ctx-map>` | current room | Validates ordinary movement ctx, optionally prints `ctx.text`, then asks `ctx.room` to admit the avatar. The avatar forwards no new `:ctx` to the user until the target room commits one. |
 | `:ctx?` | none | user only | Returns context term. |
 | `:help` | `[topic]` | user only | `help here` asks room `:help`. |
 | `:nick` | `[nick]` | user only | No args returns current nick; with args forwards to room. |
-| `:look` `:exits?` `:who?` `:did?` `:say` `:emote` `:go` | varies | user only | Delegates to room. |
+| `:look`/`:l` `:exits?` `:who?` `:did?` `:say` `:emote` `:go` | varies | user only | Delegates to room. |
 | `:claim` `:owner` `:dig` `:fill` `:prop` | varies | user only | Delegates to room without owner-authority arguments; rooms recognise the owner DID or deterministic owner avatar from `msg-from`. |
 | `:drop-thing` | `<user> <thing> <target-parent> [token] [ctx]` | room caller only | Parent-mediated drop helper; forwards optional user ctx map. |
 | `:report-parent` | `<room> <tick> <nonce>` | room caller | Machine presence request; replies with `:parent-report <self> <room> <tick> <nonce>` using the avatar's persisted room. |
@@ -259,7 +265,8 @@ Key verbs:
 | `:remove` | `<occupant>` | Owner-gated manual presence cleanup. Resolves an occupant by DID/DID-URL or by a unique current display label; ambiguous labels are rejected. Removes the occupant from room-local presence caches and does not change actor state. The occupant may re-enter later through normal `:enter` flow. |
 | `:leave-avatar` | `<avatar-did-url> <to-room-did-url>` | Target-room-origin cache removal during movement. |
 | `:leave-occupant` | none | Sender-origin cache removal for non-avatar occupants such as agents after actor-owned parent changes. |
-| `:look` `:exits?` `:who?` `:occupants?` `:things?` | none | Local presentation; `:look` prints room text plus `Occupants:`, `Things:`, and `Exits:`. `who?` is people/avatar-oriented; `occupants?` includes avatars plus room-local agents/occupants. |
+| `:look` | `[exit-direction]` | No args prints room text plus `Occupants:`, `Things:`, and `Exits:`. With an exit direction, forwards inspection to the first-class exit actor. |
+| `:exits?` `:who?` `:occupants?` `:things?` | none | Local presentation. `exits?` lists directions known to the room; `who?` is people/avatar-oriented; `occupants?` includes avatars plus room-local agents/occupants. |
 | `:did?` | `<occupant-or-thing>` | Explicit visible reference lookup. Resolves a room-local thing alias or unique visible occupant display label to a DID/DID-URL; ambiguous labels are rejected. |
 | `:dids?` | none | Owner-gated full reference listing for visible occupants and room-local things. |
 | `:go` / `:move` | `<direction>` / none | `:go` traverses a named exit. `:move` chooses one currently available room exit for the caller. |
@@ -268,6 +275,7 @@ Key verbs:
 | `:claim` / `:owner` / `:prop` | direct args | Room ownership controls write operations; owner authority is checked against `msg-from` or the deterministic owner avatar. |
 | `:dig` | direct args | Owner-gated exit creation/linking; newly-created rooms are assigned to the stored owner DID. |
 | `:fill` | direct args | Owner-gated exit removal. Removes the direction from the room and asks the exit actor to terminate itself; target rooms are not deleted. |
+| `:exit` | `<direction> <verb> [args]` | Owner-gated direction resolver and generic forwarder to the exit actor. Exit semantics live in `exit.ma`. |
 | `:behaviour` | `[ /ipfs/<cid> ]` | Owner-gated behaviour update. |
 | `:child-alive` | `<actor> <kind> <nonce> <direction>` | Child readiness callback; rooms use it for pending new-room dig targets when actor, kind, nonce, and direction match. |
 | `:ping` / `:pong` / `:authorise-link` / `:link-authorised` / `:link-denied` | link handshake args | Existing-room link handshake. |
@@ -303,12 +311,27 @@ Room presence cache rules:
 
 ### 5.4 exit actor
 
-Purpose: traversal handoff.
+Purpose: first-class inspectable traversal object.
 
 | Verb | Args | Notes |
 | --- | --- | --- |
-| `:traverse` | `<avatar-did-url> [source-room-did-url] [user] [nick]` | Emits movement text and forwards enter event to target room. |
-| `:traverse-agent` | `<agent-did-url> <source-room-did-url> [nick]` | Tells the agent to leave its source room and enter the full target room DID-URL with `agent-ctx`. |
+| `:about` | none | Returns name, description, owner, source room, target room, direction, and locked state. |
+| `:where` | none | Returns the source room DID-URL. |
+| `:owner` | none | Returns the owner DID or `(none)`. |
+| `:report-parent` | `<room> <tick> <nonce>` | Machine presence request; replies to the requesting room with `:parent-report <self> <source-room> <tick> <nonce>`. |
+| `:locked?` | none | Returns `true` or `false`. |
+| `:lock` / `:unlock` | none | Source-room-only mutation. Avatar/user `lock <direction>` and direct room `:exit <direction> :lock` resolve through the source room. |
+| `:message` | `<traveller|source|target|blocked> <text>` | Source-room-only traversal-message update. Avatar/user `exit-message <direction> ...` and direct room `:exit <direction> :message ...` resolve through the source room; the exit actor keeps canonical message state. |
+| `:traverse` | `<ctx-map>` | Source-room-only traversal request. If unlocked, returns `:traversed <ctx>` to the source room with `ctx.room` set to the target. If locked, returns `:traversed <ctx>` with `ctx.room` still set to the source room and `ctx.text` set to the blocked message. |
+
+Movement ctx is ordinary actor/entity state, not a separate signed or protocol
+envelope. Minimal fields for now are `actor`, `kind`, `room`, and optional
+`nick`/`text`. The exit may annotate ctx with `exit` and `direction` while
+transforming it.
+
+The exit actor is the canonical store for first-class exit metadata and policy.
+The room stores topology only: direction to exit actor, and the target room used
+to recreate a local exit if the local actor is missing.
 
 ### 5.5 Scheme agent parent kind
 
@@ -326,7 +349,8 @@ Key helpers and verbs:
 | `:exits?` | none | Asks the current parent room for exits and stores the printed reply as `last-message`. |
 | `:go` | `<direction>` | Free-agent or owner movement through a named room exit; no exit creation. |
 | `:move` | none | Asks the current parent room to choose one available exit at random and traverse it. |
-| `:enter-room` | `<target-room-did-url> <source-room-did-url>` | Exit-facing movement helper; performs ordinary room-visible `:leave-occupant` plus map-shaped agent `:enter`. |
+| `:move-ctx` | `<ctx-map>` | Room-facing movement helper; validates the ctx against the current parent, performs ordinary room-visible `:leave-occupant`, then sends map-shaped agent `:enter` to the target room. |
+| `:enter-room` | `<target-room-did-url> <source-room-did-url>` | Root/room movement helper retained for direct room-driven entry flows. |
 | `:report-parent` | `<room> <tick> <nonce>` | Machine presence request; replies to the requesting room with `:parent-report <self> <parent> <tick> <nonce>`. |
 | `:claim` | `<secret>` | Recovery-path ownership claim. |
 | `:take` | `<user> <carrier-parent> [ctx]` | Caller must be current parent. |
@@ -381,7 +405,9 @@ world-level actor names.
 | --- | --- | --- |
 | `owner` | user DID | authoritative room ownership |
 | `name`, `description` | string | authoritative room metadata |
-| `exits` map and `exit:<direction>` | map/string | authoritative exit registry; removed by `:fill <direction>` |
+| `exits` | map | direction to exit actor DID-URL |
+| `exit-target:<direction>` | DID-URL | target room used for local exit healing |
+| `exit-target-name:<direction>` | string | optional deterministic new-room target name |
 | `things` map | map | room-local alias map to non-avatar occupant DID-URLs |
 | `claim:<actor>` | map | stored enter claim/context |
 | `occupants` | list | derived cache (presentation/broadcast), root-fed |

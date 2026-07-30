@@ -103,6 +103,30 @@
          (same-actor? avatar (self))
          (same-actor? (msg-from msg) target-room))))
 
+(define (move-ctx-valid? ctx)
+  (let ((actor (ctx-text ctx "actor"))
+        (kind (ctx-text ctx "kind"))
+        (target-room (ctx-text ctx "room")))
+    (and (map? ctx)
+         (or (same-actor? actor (local-self))
+             (equal? actor (did)))
+         (or (equal? kind "avatar")
+             (equal? kind "user"))
+         (qualified-ctx-actor? target-room))))
+
+(define (set-pending-move! target-room old-room)
+  (begin
+    (set-prop! "pending-room" (canonical-actor target-room))
+    (if old-room
+        (set-prop! "pending-old-room" (canonical-actor old-room))
+        (del-prop! "pending-old-room"))
+    (ma-save-state!)))
+
+(define (clear-pending-move!)
+  (begin
+    (del-prop! "pending-room")
+    (del-prop! "pending-old-room")))
+
 (define (enter-room-authorised? args msg)
   (and (not (null? args))
        (not (null? (cdr args)))
@@ -131,6 +155,18 @@
 (define (send-room-as-did verb args)
   (send-room verb (cons (did) args)))
 
+(define (avatar-look args msg)
+  (require-did msg
+    (lambda ()
+      (send-room :look args)
+      (reply-ok-silent msg))))
+
+(define (avatar-say args msg)
+  (require-did msg
+    (lambda ()
+      (send-room :say (list (join-words args)))
+      (reply-ok-silent msg))))
+
 (define (send-did-text text)
   (ma-send! (did) (list :print text)))
 
@@ -143,6 +179,8 @@
     "  help              show this help\n"
     "  help here         ask this place what is possible here\n"
     "  look              look around\n"
+    "  l                 alias for look\n"
+    "  look <exit>       inspect an exit\n"
     "  exits?            list exits\n"
     "  who?              show who is here\n"
     "  things?           list local non-avatar occupants\n"
@@ -158,6 +196,9 @@
     "  owner [did]       show or transfer room ownership\n"
     "  dig <dir> [to name] [with code] create an exit\n"
     "  fill <dir>        remove an exit\n"
+    "  lock <dir>        lock an exit\n"
+    "  unlock <dir>      unlock an exit\n"
+    "  exit-message <dir> <traveller|source|target|blocked> <text>\n"
     "  prop <key> [value] set or reset room text\n"
     "  nick [name]       show or set your display name\n"
     "Use :help for the focused actor directly."))
@@ -197,10 +238,31 @@
         (let ((payload (car args)))
           (if (avatar-ctx-valid? payload msg)
               (begin
+                (clear-pending-move!)
                 (set-prop! "room" (canonical-actor (ctx-value payload :room)))
                 (set-prop! "nick" (ctx-value payload :nick))
                 (ma-save-state!)
                 (ma-send! (did) (cons :ctx args)))
+              #f)))))
+
+(set-method! :move-ctx
+  (lambda (args msg)
+    (if (null? args)
+        #f
+        (let* ((ctx (car args))
+               (target-room (ctx-text ctx "room"))
+               (old-room (room))
+               (text (ctx-text ctx "text")))
+          (if (move-ctx-valid? ctx)
+              (begin
+                (if (non-empty-string? text)
+                    (ma-send! (did) (list :print text))
+                    #f)
+                (if (same-actor? target-room old-room)
+                    #f
+                    (begin
+                      (set-pending-move! target-room old-room)
+                      (ma-send! (canonical-actor target-room) (list :enter (local-self) (canonical-actor old-room) (nick))))))
               #f)))))
 
 (set-method! :ctx?
@@ -259,11 +321,10 @@
               (reply-ok-silent msg)))))))
 
 (set-method! :look
-  (lambda (args msg)
-    (require-did msg
-      (lambda ()
-        (send-room :look '())
-        (reply-ok-silent msg)))))
+  avatar-look)
+
+(set-method! :l
+  avatar-look)
 
 (set-method! :exits?
   (lambda (args msg)
@@ -308,11 +369,7 @@
         (reply-ok-silent msg)))))
 
 (set-method! :say
-  (lambda (args msg)
-    (require-did msg
-      (lambda ()
-        (send-room :say (list (join-words args)))
-        (reply-ok-silent msg)))))
+  avatar-say)
 
 (set-method! :emote
   (lambda (args msg)
@@ -347,6 +404,33 @@
     (require-did msg
       (lambda ()
         (send-room :fill args)
+        (reply-ok-silent msg)))))
+
+(set-method! :lock
+  (lambda (args msg)
+    (require-did msg
+      (lambda ()
+        (if (null? args)
+            (send-did-text "Usage: lock <direction>")
+            (send-room :exit (list (car args) :lock)))
+        (reply-ok-silent msg)))))
+
+(set-method! :unlock
+  (lambda (args msg)
+    (require-did msg
+      (lambda ()
+        (if (null? args)
+            (send-did-text "Usage: unlock <direction>")
+            (send-room :exit (list (car args) :unlock)))
+        (reply-ok-silent msg)))))
+
+(set-method! :exit-message
+  (lambda (args msg)
+    (require-did msg
+      (lambda ()
+        (if (or (null? args) (null? (cdr args)) (null? (cdr (cdr args))))
+            (send-did-text "Usage: exit-message <direction> <traveller|source|target|blocked> <text>")
+            (send-room :exit (list (car args) :message (car (cdr args)) (join-words (cdr (cdr args))))))
         (reply-ok-silent msg)))))
 
 (set-method! :prop

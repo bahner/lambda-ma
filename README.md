@@ -138,7 +138,14 @@ help here              ask the current room what is possible here
 claim                  claim an unowned room through your avatar
 owner                  show the current room owner through your avatar
 owner did:ma:<target>  transfer the room to another user DID through your avatar
+look                   look around
+l                      alias for look
+say hello              speak here
 dig north to Garden    create an exit and a new room owned by you
+look north             inspect an exit as a first-class object
+lock north             lock an exit
+unlock north           unlock an exit
+exit-message north blocked The gate is locked.
 ```
 
 Colon-prefixed methods bypass the avatar and target the focused room directly:
@@ -148,6 +155,9 @@ Colon-prefixed methods bypass the avatar and target the focused room directly:
 :prop name Biblioteket
 :prop description Et stille bibliotek.
 :prop description
+:exit north :lock
+:exit north :unlock
+:exit north :message blocked The gate is locked.
 @ma#construct!help
 @ma#construct!prop name Biblioteket
 @ma#construct!prop description Et stille bibliotek.
@@ -160,8 +170,12 @@ Only the current owner may create or remove exits from a room. Newly dug rooms
 are owned by the digger automatically, so a builder can give someone a room
 with `owner` and that user can then build outward from there. Linking to an
 already-existing room is allowed when the target room confirms that the same
-user owns it too. `fill <direction>` removes the exit link and terminates the
-exit actor, but leaves the target room intact.
+user owns it too. Exits are first-class inspectable objects owned by exit
+actors; rooms resolve directions and can forward direct `:exit <direction>
+<verb>` commands to the exit. Avatar/user commands such as `lock <direction>`
+and `exit-message <direction> <slot> <text>` are shorthand for that forwarding.
+`fill <direction>` removes the exit link and terminates the exit actor, but
+leaves the target room intact.
 
 ## Develop
 
