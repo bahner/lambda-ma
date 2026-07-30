@@ -238,8 +238,8 @@ Key verbs:
 | `:ctx?` | none | user only | Returns context term. |
 | `:help` | `[topic]` | user only | `help here` asks room `:help`. |
 | `:nick` | `[nick]` | user only | No args returns current nick; with args forwards to room. |
-| `:look` `:exits?` `:who?` `:say` `:emote` `:go` | varies | user only | Delegates to room. |
-| `:claim` `:owner` `:dig` `:fill` `:prop` | varies | user only | Delegated with prepended user DID. |
+| `:look` `:exits?` `:who?` `:did?` `:say` `:emote` `:go` | varies | user only | Delegates to room. |
+| `:claim` `:owner` `:dig` `:fill` `:prop` | varies | user only | Delegates to room without owner-authority arguments; rooms recognise the owner DID or deterministic owner avatar from `msg-from`. |
 | `:drop-thing` | `<user> <thing> <target-parent> [token] [ctx]` | room caller only | Parent-mediated drop helper; forwards optional user ctx map. |
 | `:report-parent` | `<room> <tick> <nonce>` | room caller | Machine presence request; replies with `:parent-report <self> <room> <tick> <nonce>` using the avatar's persisted room. |
 
@@ -256,15 +256,18 @@ Key verbs:
 | `:enter` | `<avatar-did-url> [old-room-did-url]` | Admit known avatar flow. |
 | `:enter` | `<user> <avatar-did-url> <old-room-did-url> [nick]` | Cross-room/cross-runtime-friendly arrival shape. |
 | `:leave` | none | Caller-origin live-presence departure. Removes the caller's local deterministic avatar from this room, but does not change avatar state or client ctx; the saved room remains the next-login return point. |
+| `:remove` | `<occupant>` | Owner-gated manual presence cleanup. Resolves an occupant by DID/DID-URL or by a unique current display label; ambiguous labels are rejected. Removes the occupant from room-local presence caches and does not change actor state. The occupant may re-enter later through normal `:enter` flow. |
 | `:leave-avatar` | `<avatar-did-url> <to-room-did-url>` | Target-room-origin cache removal during movement. |
 | `:leave-occupant` | none | Sender-origin cache removal for non-avatar occupants such as agents after actor-owned parent changes. |
 | `:look` `:exits?` `:who?` `:occupants?` `:things?` | none | Local presentation; `:look` prints room text plus `Occupants:`, `Things:`, and `Exits:`. `who?` is people/avatar-oriented; `occupants?` includes avatars plus room-local agents/occupants. |
+| `:did?` | `<occupant-or-thing>` | Explicit visible reference lookup. Resolves a room-local thing alias or unique visible occupant display label to a DID/DID-URL; ambiguous labels are rejected. |
+| `:dids?` | none | Owner-gated full reference listing for visible occupants and room-local things. |
 | `:go` / `:move` | `<direction>` / none | `:go` traverses a named exit. `:move` chooses one currently available room exit for the caller. |
 | `:thing` | `<name> [did-or-empty]` | Local occupant alias list/get/set/delete; owner-gated for write. |
 | `:take` / `:drop` / `:where` | `[user?] [token]` | Uses movable actor parent-authority contract. |
-| `:claim` / `:owner` / `:prop` | delegated or direct shapes | Room ownership controls write operations. |
-| `:dig` | delegated or direct shape | Owner-gated exit creation/linking. |
-| `:fill` | delegated or direct shape | Owner-gated exit removal. Removes the direction from the room and asks the exit actor to terminate itself; target rooms are not deleted. |
+| `:claim` / `:owner` / `:prop` | direct args | Room ownership controls write operations; owner authority is checked against `msg-from` or the deterministic owner avatar. |
+| `:dig` | direct args | Owner-gated exit creation/linking; newly-created rooms are assigned to the stored owner DID. |
+| `:fill` | direct args | Owner-gated exit removal. Removes the direction from the room and asks the exit actor to terminate itself; target rooms are not deleted. |
 | `:behaviour` | `[ /ipfs/<cid> ]` | Owner-gated behaviour update. |
 | `:child-alive` | `<actor> <kind> <nonce> <direction>` | Child readiness callback; rooms use it for pending new-room dig targets when actor, kind, nonce, and direction match. |
 | `:ping` / `:pong` / `:authorise-link` / `:link-authorised` / `:link-denied` | link handshake args | Existing-room link handshake. |
@@ -277,16 +280,24 @@ Room presence cache rules:
 2. User-facing `:leave` removes only live room presence. It deliberately leaves
    avatar state and zion `.my.ctx.*` unchanged so the remembered room remains the
    return point on a later login.
-3. On lifecycle `:start`, a room registers a `#scheduler` interval for
+3. Owner-facing `:remove <occupant>` is manual cleanup only. It removes cached
+   room presence, not actor state or future admission rights. If multiple
+   occupants share the same nick/display label, the owner must use a DID or
+   DID-URL to identify the target.
+4. `:did? <occupant-or-thing>` is an explicit lookup for a single visible
+   occupant/thing. It does not dump all occupants for ordinary users.
+5. `:dids?` is owner-gated and lists all visible occupant and thing references
+   for administrative disambiguation.
+6. On lifecycle `:start`, a room registers a `#scheduler` interval for
    `:presence-tick`.
-4. `#scheduler` later sends `:presence-tick` to the room as an ordinary
+7. `#scheduler` later sends `:presence-tick` to the room as an ordinary
    message. On each tick, the room sends `:report-parent <room> <tick> <nonce>` to
    current occupants.
-5. Avatars report their current `room`; agents and things report their current
+8. Avatars report their current `room`; agents and things report their current
    `parent`.
-6. If a child reports a parent other than the room, the room removes that child
+9. If a child reports a parent other than the room, the room removes that child
    from local occupant caches immediately.
-7. If a child does not report for the configured timeout, the room removes it
+10. If a child does not report for the configured timeout, the room removes it
    from local occupant caches. The child may re-enter later through normal
    `:enter` flow.
 

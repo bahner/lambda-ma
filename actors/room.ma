@@ -194,6 +194,47 @@
   (let ((label (get-prop (label-key actor))))
     (if (non-empty-string? label) label actor)))
 
+(define (visible-occupant-matches token)
+  (let loop ((xs (occupants)))
+    (cond ((null? xs) '())
+          ((equal? (speaker-name (car xs)) token)
+           (cons (car xs) (loop (cdr xs))))
+          (else (loop (cdr xs))))))
+
+(define (unique-visible-occupant-ref token)
+  (let ((matches (visible-occupant-matches token)))
+    (cond ((null? matches) #f)
+          ((null? (cdr matches)) (car matches))
+          (else :ambiguous))))
+
+(define (visible-ref token)
+  (let ((thing (thing-ref token)))
+    (if thing thing (unique-visible-occupant-ref token))))
+
+(define (entry-lines xs)
+  (cond ((null? xs) "")
+        ((null? (cdr xs)) (car xs))
+        (else (string-append (car xs) "\n" (entry-lines (cdr xs))))))
+
+(define (list-append left right)
+  (if (null? left)
+      right
+      (cons (car left) (list-append (cdr left) right))))
+
+(define (occupant-did-lines)
+  (let loop ((xs (occupants)))
+    (if (null? xs)
+        '()
+        (cons (string-append (speaker-name (car xs)) " = " (canonical-actor (car xs)))
+              (loop (cdr xs))))))
+
+(define (thing-did-lines)
+  (let loop ((tokens (thing-token-names)))
+    (if (null? tokens)
+        '()
+        (cons (string-append (car tokens) " = " (canonical-actor (thing-ref (car tokens))))
+              (loop (cdr tokens))))))
+
 (define (room-name)
   (let ((name (get-prop "name")))
     (if name name "Construct")))
@@ -516,6 +557,37 @@
 (define (things-text)
   (token-list-text "Things" (map-keys (things-map))))
 
+(define (dids-text)
+  (let ((lines (list-append (occupant-did-lines) (thing-did-lines))))
+    (if (null? lines)
+        "DIDs: none."
+        (string-append "DIDs:\n" (entry-lines lines)))))
+
+(define (handle-dids! msg args)
+  (let ((mediated (avatar-caller? msg)))
+    (cond ((not (owned?))
+           (reply-command-error msg mediated "This room is unowned. Claim it before listing DIDs."))
+          ((not (valid-owner? (owner)))
+           (reply-command-error msg mediated "Owner must be a user DID."))
+          ((not (owner-message? msg))
+           (reply-command-error msg mediated "Only this room's owner can list occupant DIDs."))
+          (else
+           (reply-command-ok msg mediated (dids-text))))))
+
+(define (handle-did! msg args)
+  (let ((mediated (avatar-caller? msg))
+        (did-args args))
+    (if (null? did-args)
+        (reply-command-error msg mediated "Usage: did? <occupant-or-thing>")
+        (let* ((token (join-words did-args))
+               (actor (visible-ref token)))
+          (cond ((equal? actor :ambiguous)
+                 (reply-command-error msg mediated (string-append "Ambiguous occupant nick: " token ". Ask for a DID or DID-URL.")))
+                (actor
+                 (reply-command-ok msg mediated (string-append token " = " (canonical-actor actor))))
+                (else
+                 (reply-command-error msg mediated (string-append "No visible occupant or thing: " token))))))))
+
 (define (reconcile-caller-occupant! actor)
   (cond ((member-actor? actor (occupants)) #f)
         ((not (has-label? actor)) #f)
@@ -630,18 +702,21 @@
     "  who?              show people here\n"
     "  occupants?        show all occupants (avatars + room locals)\n"
     "  things?           list known non-avatar occupants\n"
+    "  did? <name>       show the DID for a visible occupant or thing\n"
     "  take <thing>      ask an occupant to bind to you\n"
     "  drop <thing>      ask an occupant to set this room as parent\n"
     "  where <thing>     ask where an occupant says it is\n"
     "  say <text>        speak here\n"
     "  emote <text>      act here\n"
     "  :leave           stop being shown here until you return\n"
+    "  :remove <who>     owner removes an occupant by unique nick or DID\n"
     "  go <direction>    move through an exit\n"
     "  move              move through one available exit\n"
     "  claim             claim this room if it is unowned\n"
     "  owner [did]       show or transfer ownership\n"
     "  dig <dir> [to name] [with code] create an exit\n"
     "  fill <dir>        remove an exit\n"
+    "  :dids?            owner lists occupants and things with DIDs\n"
     "  :thing <name> [did] set/list local occupant alias\n"
     "  :behaviour /ipfs/<cid> add or replace this room's own code\n"
     "  :prop <key> [value] set or reset room text\n"
@@ -658,7 +733,10 @@
   (equal? user (owner)))
 
 (define (valid-owner? value)
-  (and (string? value) (not (equal? value ""))))
+  (ma-user-did? value))
+
+(define (owner-message? msg)
+  (msg-from-owner? (owner) msg))
 
 (define (set-owner! user)
   (set-prop! "owner" user)
@@ -675,6 +753,16 @@
   (begin
     (reply-to-sender msg text)
     (reply-ok msg "")))
+
+(define (reply-command-ok msg delegated text)
+  (if delegated
+      (reply-to-sender msg text)
+      (reply-ok msg text)))
+
+(define (reply-command-error msg delegated text)
+  (if delegated
+      (reply-to-sender msg text)
+      (reply-error msg text)))
 
 (define (reply-room-prop-ok msg delegated text)
   (if delegated
@@ -697,47 +785,45 @@
         (reply-room-prop-ok msg delegated (string-append "Set prop " key ".")))))
 
 (define (handle-room-prop! msg args)
-  (let ((delegated (delegated-call? args msg))
-        (user (caller-user args msg))
-        (prop-args (command-args args msg)))
+  (let ((mediated (avatar-caller? msg))
+        (prop-args args))
     (cond ((null? args)
-           (reply-room-prop-error msg delegated "Usage: prop <key> [value]"))
+           (reply-room-prop-error msg mediated "Usage: prop <key> [value]"))
           ((null? prop-args)
-           (reply-room-prop-error msg delegated "Usage: prop <key> [value]"))
+           (reply-room-prop-error msg mediated "Usage: prop <key> [value]"))
           ((equal? (car prop-args) "")
-           (reply-room-prop-error msg delegated "Prop key must be non-empty."))
-          ((not (valid-owner? user))
-           (reply-room-prop-error msg delegated "Owner must be a non-empty user DID."))
+           (reply-room-prop-error msg mediated "Prop key must be non-empty."))
           ((not (owned?))
-           (reply-room-prop-error msg delegated "This room is unowned. Claim it before building here."))
-          ((not (owner? user))
-           (reply-room-prop-error msg delegated "Only this room's owner can set props here."))
+           (reply-room-prop-error msg mediated "This room is unowned. Claim it before building here."))
+          ((not (valid-owner? (owner)))
+           (reply-room-prop-error msg mediated "Owner must be a user DID."))
+          ((not (owner-message? msg))
+           (reply-room-prop-error msg mediated "Only this room's owner can set props here."))
           (else
-           (apply-room-prop! msg (car prop-args) (cdr prop-args) delegated)))))
+           (apply-room-prop! msg (car prop-args) (cdr prop-args) mediated)))))
 
 (define (handle-room-behaviour! msg args)
-  (let ((user (msg-from msg)))
-    (cond ((null? args)
-           (let ((current (ma-get-config-key "behaviour")))
-             (if current
-                 (reply-ok msg current)
-                 (reply-ok msg "No custom behaviour is set for this room."))))
-          ((null? (cdr args))
-           (cond ((not (valid-owner? user))
-                  (reply-error msg "Owner must be a non-empty user DID."))
-                 ((not (owned?))
-                  (reply-error msg "This room is unowned. Claim it before editing behaviour."))
-                 ((not (owner? user))
-                  (reply-error msg "Only this room's owner can edit behaviour."))
-                 (else
-                  (begin
-                    (ma-set-behaviour! (car args))
-                    (reply-ok msg "Behaviour update queued.")))))
-          (else
-           (reply-error msg "Usage: behaviour /ipfs/<cid>")))))
+  (cond ((null? args)
+         (let ((current (ma-get-config-key "behaviour")))
+           (if current
+               (reply-ok msg current)
+               (reply-ok msg "No custom behaviour is set for this room."))))
+        ((null? (cdr args))
+         (cond ((not (owned?))
+                (reply-error msg "This room is unowned. Claim it before editing behaviour."))
+               ((not (valid-owner? (owner)))
+                (reply-error msg "Owner must be a user DID."))
+               ((not (owner-message? msg))
+                (reply-error msg "Only this room's owner can edit behaviour."))
+               (else
+                (begin
+                  (ma-set-behaviour! (car args))
+                  (reply-ok msg "Behaviour update queued.")))))
+        (else
+         (reply-error msg "Usage: behaviour /ipfs/<cid>"))))
 
-; Delegation helpers. Avatar-mediated calls prepend the user's DID; direct
-; colon-prefixed room methods use msg-from as the caller.
+; User-context helpers for movement and parent-authority flows. Owner checks do
+; not use this shape; they compare msg-from with the owner or owner avatar.
 (define (delegated-user-arg? args)
   (and (not (null? args)) (string-prefix? "did:ma:" (car args))))
 
@@ -767,21 +853,25 @@
 (define (require-valid-owner user msg thunk)
   (if (valid-owner? user)
       (thunk)
-      (reply-to-sender msg "Owner must be a non-empty user DID.")))
+      (reply-to-sender msg "Owner must be a user DID.")))
 
 ; Exit building keeps its historical messages; ownership transfer uses the
 ; narrower helper below so :owner does not mention building exits.
-(define (require-owner user msg thunk)
+(define (require-owner msg thunk)
   (cond ((not (owned?))
          (reply-to-sender msg "This room is unowned. Claim it before building here."))
-        ((owner? user) (thunk))
+   ((not (valid-owner? (owner)))
+    (reply-to-sender msg "Owner must be a user DID."))
+   ((owner-message? msg) (thunk))
         (else
          (reply-to-sender msg "Only this room's owner can build exits here."))))
 
-(define (require-owner-transfer user msg thunk)
+(define (require-owner-transfer msg thunk)
   (cond ((not (owned?))
          (reply-to-sender msg "This room is unowned. Claim it before transferring ownership."))
-        ((owner? user) (thunk))
+   ((not (valid-owner? (owner)))
+    (reply-to-sender msg "Owner must be a user DID."))
+   ((owner-message? msg) (thunk))
         (else
          (reply-to-sender msg "Only this room's owner can transfer ownership."))))
 
@@ -819,6 +909,37 @@
           (broadcast (string-append (speaker-name actor) " leaves."))
           (reply-ok msg "You leave."))
         (reply-ok msg "You are not here."))))
+
+(define (remove-candidate token)
+  (cond ((not (string? token)) #f)
+        ((and (user-did? token) (member-actor? (avatar-for-user token) (occupants)))
+         (avatar-for-user token))
+        ((member-actor? token (occupants)) (canonical-actor token))
+    (else (unique-visible-occupant-ref token))))
+
+(define (handle-remove! msg args)
+  (let ((remove-args args))
+    (cond ((null? remove-args)
+           (reply-error msg "Usage: remove <occupant>"))
+          ((not (owned?))
+           (reply-error msg "This room is unowned. Claim it before removing occupants."))
+          ((not (valid-owner? (owner)))
+           (reply-error msg "Owner must be a user DID."))
+          ((not (owner-message? msg))
+           (reply-error msg "Only this room's owner can remove occupants."))
+          (else
+           (let* ((target (join-words remove-args))
+                  (actor (remove-candidate target)))
+             (cond ((equal? actor :ambiguous)
+                    (reply-error msg (string-append "Ambiguous occupant nick: " target ". Use a DID or DID-URL.")))
+                   (actor
+                 (let ((name (speaker-name actor)))
+                   (presence-remove! actor)
+                   (ma-save-state!)
+                   (broadcast (string-append name " leaves."))
+                   (reply-ok msg (string-append "Removed " name " from this room."))))
+                   (else
+                    (reply-error msg (string-append "No such occupant: " target)))))))))
 
 (define (presence-sweep! tick)
   (let loop ((xs (occupants))
@@ -1096,6 +1217,10 @@
   (lambda (args msg)
     (handle-leave! msg)))
 
+(set-method! :remove
+  (lambda (args msg)
+    (handle-remove! msg args)))
+
 (set-method! :look
   (lambda (args msg)
     (let ((avatar (msg-from msg)))
@@ -1124,12 +1249,19 @@
     (let ((avatar (msg-from msg)))
       (print-and-reply-ok msg (things-text)))))
 
+(set-method! :dids?
+  (lambda (args msg)
+    (handle-dids! msg args)))
+
+(set-method! :did?
+  (lambda (args msg)
+    (handle-did! msg args)))
+
 ; ── Room-local occupant commands ──────────────────────────────────────────
 
 (set-method! :thing
   (lambda (args msg)
-    (let ((user (caller-user args msg))
-          (thing-args (command-args args msg)))
+    (let ((thing-args args))
       (cond ((null? thing-args)
              (reply-ok msg (things-text)))
             ((null? (cdr thing-args))
@@ -1138,7 +1270,7 @@
                (if did
                    (reply-ok msg did)
                    (reply-error msg (string-append "Unknown thing alias: " token)))))
-            ((not (owner? user))
+            ((not (owner-message? msg))
              (reply-error msg "Only this room's owner can change thing aliases."))
             ((equal? (car (cdr thing-args)) "")
              (begin
@@ -1217,7 +1349,7 @@
 
 (set-method! :claim
   (lambda (args msg)
-    (let ((user (caller-user args msg)))
+    (let ((user (msg-from msg)))
       (require-valid-owner user msg
         (lambda ()
           (if (owned?)
@@ -1228,23 +1360,22 @@
 
 (set-method! :owner
   (lambda (args msg)
-    (let ((user (caller-user args msg))
-          (owner-args (command-args args msg)))
+    (let ((owner-args args))
       (if (null? owner-args)
           (let ((current-owner (owner)))
             (if current-owner
                 (reply-to-sender msg (string-append "Owner: " current-owner))
                 (reply-to-sender msg "This room is unowned.")))
-          (require-valid-owner user msg
+          (require-valid-owner (car owner-args) msg
             (lambda ()
-              (require-owner-transfer user msg
+              (require-owner-transfer msg
                 (lambda ()
                   (let ((new-owner (car owner-args)))
                     (if (valid-owner? new-owner)
                         (begin
                           (set-owner! new-owner)
                           (reply-to-sender msg (string-append "Owner set to " new-owner ".")))
-                        (reply-to-sender msg "New owner must be a non-empty user DID.")))))))))))
+                        (reply-to-sender msg "New owner must be a user DID.")))))))))))
 
 (set-method! :prop
   (lambda (args msg)
@@ -1376,12 +1507,12 @@
 
 (set-method! :dig
   (lambda (args msg)
-    (let* ((user (caller-user args msg))
-           (dig-args (command-args args msg))
+    (let* ((user (owner))
+           (dig-args args)
            (direction (if (null? dig-args) "out" (car dig-args))))
       (require-valid-owner user msg
         (lambda ()
-          (require-owner user msg
+          (require-owner msg
             (lambda ()
               (let* ((target (dig-target-text dig-args))
                      (custom-init (dig-custom-init-text dig-args))
@@ -1403,13 +1534,13 @@
 
 (set-method! :fill
   (lambda (args msg)
-    (let* ((user (caller-user args msg))
-           (fill-args (command-args args msg)))
+    (let* ((user (owner))
+           (fill-args args))
       (if (null? fill-args)
           (reply-to-sender msg "Usage: fill <direction>")
           (require-valid-owner user msg
             (lambda ()
-              (require-owner user msg
+              (require-owner msg
                 (lambda ()
                   (let* ((direction (car fill-args))
                          (exit (exit-target direction)))

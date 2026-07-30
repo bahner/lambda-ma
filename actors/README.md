@@ -93,29 +93,26 @@ practical control boundary.
 ## Room ownership
 
 Rooms store their owner as a user DID in the room-local `owner` prop. Avatars
-are not owners; for user-facing commands they act as delegates and prepend their
-stored user DID before forwarding to the room. Direct room RPCs use `msg-from`
-as the caller identity.
+are not owners; room owner checks accept a message from either the owner DID
+directly or the deterministic same-runtime avatar for that owner DID. The avatar
+fragment is derived with `blake3("lambda-ma avatar v1\n" runtime "\n" did, 8)`.
 
-Protected room commands accept both shapes:
+Protected room commands are ordinary room verbs:
 
 ```scheme
 (:claim)
 (:owner [<new-owner-did>])
 (:dig <direction> [to <new-room-name-or-room-target>])
-
-(:claim <user-did>)
-(:owner <user-did> [<new-owner-did>])
-(:dig <user-did> <direction> [to <new-room-name-or-room-target>])
 ```
 
-The second shape is accepted only from known room occupants, normally avatar
-actors that entered the room and carry the user's authority.
+No owner-authority argument is accepted. The room derives authority from
+`msg-from` and its stored `owner` DID.
 
 `:claim` only succeeds when the room has no owner. `:owner` with no target
 prints the owner; with a target DID it transfers ownership and requires the
-caller to be the current owner. `:dig` requires ownership of the current room
-and assigns the digger's user DID to any newly-created target room.
+message to come from the current owner or the current owner's deterministic
+avatar. `:dig` requires ownership of the current room and assigns the current
+owner DID to any newly-created target room.
 
 Digging an existing direction replaces that exit instead of failing. This lets
 room owners rewire mistakes or rebuild a topology without deleting the old exit

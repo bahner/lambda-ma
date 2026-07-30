@@ -130,7 +130,8 @@
         (else (string-append (car words) " " (join-words (cdr words))))))
 
 ; User-command forwarding helpers. Plain avatar commands are translated into
-; room RPCs, with owner-sensitive room verbs prepending the user's DID.
+; room RPCs. Only commands whose payload needs the user DID prepend it; room
+; owner checks recognise direct owner messages and deterministic owner avatars.
 (define (require-did msg thunk)
   (if (did? msg)
       (thunk)
@@ -163,6 +164,7 @@
     "  exits?            list exits\n"
     "  who?              show who is here\n"
     "  things?           list local non-avatar occupants\n"
+    "  did? <name>       show the DID for a visible occupant or thing\n"
     "  take <thing>      ask a local occupant to bind to you\n"
     "  drop <thing>      ask a carried occupant to enter this room\n"
     "  where <thing>     ask where a local occupant says it is\n"
@@ -295,6 +297,34 @@
         (send-room :who? '())
         (reply-ok-silent msg)))))
 
+(set-method! :occupants?
+  (lambda (args msg)
+    (require-did msg
+      (lambda ()
+        (send-room :occupants? '())
+        (reply-ok-silent msg)))))
+
+(set-method! :things?
+  (lambda (args msg)
+    (require-did msg
+      (lambda ()
+        (send-room :things? '())
+        (reply-ok-silent msg)))))
+
+(set-method! :did?
+  (lambda (args msg)
+    (require-did msg
+      (lambda ()
+        (send-room :did? args)
+        (reply-ok-silent msg)))))
+
+(set-method! :dids?
+  (lambda (args msg)
+    (require-did msg
+      (lambda ()
+        (send-room :dids? args)
+        (reply-ok-silent msg)))))
+
 (set-method! :say
   (lambda (args msg)
     (require-did msg
@@ -313,35 +343,56 @@
   (lambda (args msg)
     (require-did msg
       (lambda ()
-        (send-room-as-did :claim args)
+        (send-room :claim args)
         (reply-ok-silent msg)))))
 
 (set-method! :owner
   (lambda (args msg)
     (require-did msg
       (lambda ()
-        (send-room-as-did :owner args)
+        (send-room :owner args)
         (reply-ok-silent msg)))))
 
 (set-method! :dig
   (lambda (args msg)
     (require-did msg
       (lambda ()
-        (send-room-as-did :dig args)
+        (send-room :dig args)
         (reply-ok-silent msg)))))
 
 (set-method! :fill
   (lambda (args msg)
     (require-did msg
       (lambda ()
-        (send-room-as-did :fill args)
+        (send-room :fill args)
         (reply-ok-silent msg)))))
 
 (set-method! :prop
   (lambda (args msg)
     (require-did msg
       (lambda ()
-        (send-room-as-did :prop args)
+        (send-room :prop args)
+        (reply-ok-silent msg)))))
+
+(set-method! :take
+  (lambda (args msg)
+    (require-did msg
+      (lambda ()
+        (send-room-as-did :take args)
+        (reply-ok-silent msg)))))
+
+(set-method! :drop
+  (lambda (args msg)
+    (require-did msg
+      (lambda ()
+        (send-room-as-did :drop args)
+        (reply-ok-silent msg)))))
+
+(set-method! :where
+  (lambda (args msg)
+    (require-did msg
+      (lambda ()
+        (send-room :where args)
         (reply-ok-silent msg)))))
 
 (set-method! :go

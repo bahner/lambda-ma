@@ -248,8 +248,12 @@ help here              show what this room says is possible
 claim                  claim an unowned room
 owner                  show the current room owner
 owner did:ma:<target>  transfer the room to another user DID
+did? lamp              show the DID for a visible occupant or thing
 dig north to Name      create an exit and a new room
 fill north             remove the north exit
+:dids?                 owner lists visible occupants/things with DIDs
+:remove Alice          owner removes Alice if that nick is unique here
+:remove did:ma:...#x   owner removes an exact occupant DID-URL
 :prop name Name        set the focused room name
 :prop description ...  set the focused room description
 :prop description      reset the focused room description

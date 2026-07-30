@@ -42,6 +42,37 @@
   (let ((value (map-ref ctx key #f)))
     (if (string? value) value #f)))
 
+; Lambda-ma identity helpers. Room ownership is user-DID based; an avatar is
+; recognised by deterministic fragment derivation, not by a forwarded argument.
+(define (ma-runtime)
+  (ma-get-config-key "runtime"))
+
+(define (ma-user-did? value)
+  (and (string? value)
+       (string-prefix? "did:ma:" value)
+       (not (string-contains? value "#"))))
+
+(define (ma-canonical-actor actor)
+  (if (and actor (string-prefix? "#" actor))
+      (string-append (ma-runtime) actor)
+      actor))
+
+(define (ma-avatar-fragment did)
+  (blake3 (string-append "lambda-ma avatar v1\n" (ma-runtime) "\n" did) 8))
+
+(define (ma-avatar-for-user did)
+  (string-append (ma-runtime) "#" (ma-avatar-fragment did)))
+
+(define (ma-did-avatar? did actor)
+  (and (ma-user-did? did)
+       (string? actor)
+       (equal? (ma-canonical-actor actor) (ma-avatar-for-user did))))
+
+(define (msg-from-owner? owner msg)
+  (let ((from (msg-from msg)))
+    (or (equal? from owner)
+        (ma-did-avatar? owner from))))
+
 (define (canonical-entry entry) entry)
 
 (define (same-entry? a b)
