@@ -1,5 +1,5 @@
 //! Core builtins (ma-scheme-v1.md §8) — intentionally small; anything else
-//! is either user-written ma-scheme or a convention prelude (§15), never
+//! is either did-written ma-scheme or a convention prelude (§15), never
 //! grown here without a version bump.
 
 use std::cell::Cell;

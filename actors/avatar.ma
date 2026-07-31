@@ -13,10 +13,12 @@
        (not (local-fragment? actor))))
 (define (entity-id) (ma-get-config-key "id"))
 (define (valid-did? value)
-  (and (string? value) (string-prefix? "did:ma:" value)))
+  (and (string? value)
+       (string-prefix? "did:ma:" value)
+       (not (string-contains? "#" value))))
 
 ; A deterministic avatar may rehydrate its controlling DID from the matching
-; user DID, but an existing mismatched DID remains denied.
+; DID, but an existing mismatched DID remains denied.
 (define (ensure-did! expected-did expected-id)
   (if (and (valid-did? expected-did)
            (equal? expected-id (entity-id)))
@@ -47,7 +49,7 @@
   (let ((value (get-prop "nick")))
     (if value value "avatar")))
 
-; Context terms sent to the controlling user. These must contain fully
+; Context terms sent to the controlling did. These must contain fully
 ; qualified actor references, never runtime-local #fragment shorthand.
 (define (ctx-term text)
   (list :ctx
@@ -117,7 +119,7 @@
     (and (map? ctx)
          (equal? actor (did))
          (or (equal? kind "avatar")
-             (equal? kind "user"))
+             (equal? kind "did"))
          (qualified-ctx-actor? target-room))))
 
 (define (set-pending-move! target-room old-room)
@@ -140,8 +142,8 @@
        (or (root? msg)
            (same-actor? (msg-from msg) (car args)))))
 
-; User-command forwarding helpers. Plain avatar commands are translated into
-; room RPCs. Only commands whose payload needs the user DID prepend it; room
+; DID-command forwarding helpers. Plain avatar commands are translated into
+; room RPCs. Only commands whose payload needs the DID prepend it; room
 ; owner checks recognise direct owner messages and deterministic owner avatars.
 (define (require-did msg thunk)
   (if (did? msg)
@@ -176,7 +178,7 @@
   (ma-send! (did) (list :print text)))
 
 (define (reply-ok-silent msg)
-  (ma-reply! msg (list :ok "")))
+  (reply-ok msg))
 
 (define (avatar-help-text)
   (string-append
@@ -189,10 +191,11 @@
     "  exits?            list exits\n"
     "  who?              show who is here\n"
     "  things?           list local non-avatar occupants\n"
-    "  did? <name>       show the DID for a visible occupant or thing\n"
+    "  did? [kind] <name> show the DID for a visible occupant, thing, or exit\n"
+    "  owner? <name>     show who owns a visible occupant, thing, or exit\n"
     "  take <thing>      ask a local occupant to bind to you\n"
     "  drop <thing>      ask a carried occupant to enter this room\n"
-    "  where <thing>     ask where a local occupant says it is\n"
+    "  where? <thing>    ask where a local occupant says it is\n"
     "  say <text>        speak here\n"
     "  emote <text>      act here\n"
     "  leave             stop being shown here until you return\n"
@@ -289,7 +292,7 @@
       (ma-send! (canonical-actor (msg-from msg))
                 (list :parent-report (local-self) (if current-room (canonical-actor current-room) "") tick nonce)))))
 
-; User-facing commands.
+; DID-facing commands.
 (set-method! :help
   (lambda (args msg)
     (require-did msg
@@ -392,6 +395,17 @@
         (send-room :owner args)
         (reply-ok-silent msg)))))
 
+(set-method! :owner?
+  (lambda (args msg)
+    (if (and (room? msg) (not (null? args)))
+        (begin
+          (ma-send! (canonical-actor (car args)) (list :print (string-append "Owner: " (did))))
+          (reply-ok-silent msg))
+        (require-did msg
+          (lambda ()
+            (send-room :owner? args)
+            (reply-ok-silent msg))))))
+
 (set-method! :dig
   (lambda (args msg)
     (require-did msg
@@ -454,11 +468,11 @@
         (send-room-as-did :drop args)
         (reply-ok-silent msg)))))
 
-(set-method! :where
+(set-method! :where?
   (lambda (args msg)
     (require-did msg
       (lambda ()
-        (send-room :where args)
+        (send-room :where? args)
         (reply-ok-silent msg)))))
 
 (set-method! :go
@@ -483,7 +497,7 @@
           (ma-send! (canonical-actor thing) (list :drop did (canonical-actor target-parent))))))
         #f)))
 
-; Unknown user commands are treated as room verbs so room-specific behaviours
+; Unknown DID commands are treated as room verbs so room-specific behaviours
 ; can add commands without changing the avatar proxy.
 (set-default-method!
   (lambda (verb args msg)

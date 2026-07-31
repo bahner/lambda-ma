@@ -7,7 +7,7 @@
 (define (verb-of term) (if (pair? term) (car term) term))
 (define (args-of term) (if (pair? term) (cdr term) '()))
 
-; Lambda-ma identity helpers. Room ownership is user-DID based; an avatar is
+; Lambda-ma identity helpers. Room ownership is DID based; an avatar is
 ; recognised by deterministic fragment derivation, not by a forwarded argument.
 (define AVATAR_KIND "/ma/avatar/0.0.1")
 (define LAMBDA_CTX_PROTOCOL "/ma/lambda/ctx/0.0.1")
@@ -21,14 +21,10 @@
 (define (entity-url fragment)
   (string-append (runtime) "#" fragment))
 
-(define (user-did? value)
+(define (valid-did? value)
   (and (string? value)
        (string-prefix? "did:ma:" value)
-       (not (string-contains? value "#"))))
-
-(define (valid-user-did? did)
-  (and (string? did)
-       (string-prefix? "did:ma:" did)))
+       (not (string-contains? "#" value))))
 
 (define (canonical-actor actor)
   (if (and actor (string-prefix? "#" actor))
@@ -48,7 +44,7 @@
   (and (string? actor)
   (string-prefix? (string-append (runtime) "#") actor)))
 
-(define (did-url? actor)
+(define (valid-did-url? actor)
   (and (string? actor)
        (string-prefix? "did:ma:" actor)
        (string-contains? "#" actor)))
@@ -62,13 +58,13 @@
 (define (avatar-fragment did)
   (blake3 (string-append "lambda-ma avatar v1\n" (runtime) "\n" did) 8))
 
-(define (avatar-for-user did)
+(define (avatar-for-did did)
   (string-append (runtime) "#" (avatar-fragment did)))
 
 (define (did-avatar? did actor)
-  (and (user-did? did)
+  (and (valid-did? did)
        (string? actor)
-       (equal? (canonical-actor actor) (avatar-for-user did))))
+       (equal? (canonical-actor actor) (avatar-for-did did))))
 
 (define (msg-from-owner? owner msg)
   (let ((from (msg-from msg)))
@@ -102,8 +98,11 @@
         (else
          (cons (car xs) (without-entries (cdr xs) drop)))))
 
-(define (reply-ok msg text)
-  (ma-reply! msg (list :ok text)))
+(define (reply-ok msg)
+  (ma-reply! msg :ok))
+
+(define (reply-ok-with msg payload)
+  (ma-reply! msg (list :ok payload)))
 
 (define (reply-error msg text)
   (ma-reply! msg (list :error text)))
@@ -112,8 +111,8 @@
   (cond ((null? args)
          (let ((current (ma-get-config-key "behaviour")))
            (if current
-               (reply-ok msg current)
-               (reply-ok msg "No custom behaviour is set for this actor."))))
+               (reply-ok-with msg current)
+               (reply-ok-with msg "No custom behaviour is set for this actor."))))
         ((null? (cdr args))
          (let ((actor-owner (get-prop "owner")))
            (cond ((not actor-owner)
@@ -123,7 +122,7 @@
                  (else
                   (begin
                     (ma-set-behaviour! (car args))
-                    (reply-ok msg "Behaviour update queued."))))))
+                    (reply-ok-with msg "Behaviour update queued."))))))
         (else
          (reply-error msg "Usage: behaviour /ipfs/<cid>"))))
 

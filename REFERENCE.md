@@ -36,7 +36,7 @@ all ma worlds.
 
 Zion focus shorthand is split by leading colon:
 
-- No leading `:`: avatar-mediated user command.
+- No leading `:`: avatar-mediated avatar-mediated command.
 - Leading `:`: direct method on focused room/target.
 
 Examples:
@@ -67,13 +67,13 @@ When a concrete room target is available, enter is room-first.
    sends room `:enter`.
 - Room registers avatar entry in room state and sends committed
    `/ma/lambda/ctx/0.0.1` to the avatar. The avatar then persists its room state
-   and forwards that ctx to the user.
+   and forwards that ctx to the DID principal.
 
 Compatibility path:
 
 - Root `:enter` still exists and may be used when only runtime target is known.
 - For an existing avatar, root asks the avatar to send its current ctx to the
-   user. Root must not send messages to rooms.
+   DID principal. Root must not send messages to rooms.
 
 ### 2.2 Enter payload
 
@@ -85,7 +85,7 @@ claiming to be a concrete world object kind yet; the room MUST treat this as a
 request to enter as the world's default session kind and send no `:ok` itself.
 The room creates or finds the avatar; the avatar performs room entry, receives
 committed `/ma/lambda/ctx/0.0.1` context from the room, persists that state, and
-forwards the ctx to the user asynchronously. In lambda-ma the default session
+forwards the ctx to the DID principal asynchronously. In lambda-ma the default session
 kind is an avatar.
 
 Direct non-avatar occupants MUST identify themselves with a strict `ctx` map:
@@ -125,7 +125,7 @@ Required context fields:
 - `room`
 - `nick`
 
-Avatar contexts include `avatar`, the actor to receive avatar-mediated user
+Avatar contexts include `avatar`, the actor to receive avatar-mediated DID principal
 commands. Direct agent contexts may set `avatar` to the empty string.
 
 ### 2.4 Commit behaviour
@@ -141,8 +141,8 @@ Client-side focus/context commit is acknowledgment-driven.
 
 ### 3.1 Rooms
 
-- Room ownership is a user DID in room `owner` prop.
-- Avatar is a delegate for user-facing commands, not the owner identity.
+- Room ownership is a bare DID in room `owner` prop.
+- Avatar is a delegate for display commands, not the owner identity.
 - Direct room RPC uses message sender identity (`msg.from`).
 
 ### 3.2 Things and agents
@@ -164,7 +164,7 @@ Rules:
 
 ## 4. Movement and arrival flows
 
-### 4.1 User enter via room ctx
+### 4.1 DID enter via room ctx
 
 1. Caller sends `:enter <ctx>` to the target room.
 2. Room derives the deterministic avatar fragment from the caller DID.
@@ -172,7 +172,7 @@ Rules:
 4. If the avatar does not exist, room creates it with an explicit deterministic
    fragment; avatar init sends room `:enter` from the live avatar.
 5. Room registers entry and sends committed `:ctx` to avatar; avatar persists
-   room state and forwards the ctx to user.
+   room state and forwards the ctx to DID principal.
 
 ### 4.2 Room-to-room movement via exit
 
@@ -189,7 +189,7 @@ Rules:
 6. The actor validates the ctx, then performs the actual target-room
    `:enter <ctx>`. Target room admission remains target-room authority.
 7. Only the target room's committed `:ctx` updates actor/avatar state and is
-   forwarded to the user.
+   forwarded to the DID principal.
 
 ### 4.3 Dig/link to existing room
 
@@ -235,26 +235,26 @@ Key verbs:
 
 | Verb | Args | Notes |
 | --- | --- | --- |
-| `:enter` | `[room? nick?]` | Compatibility path when no concrete room target is available. Creates caller avatar if absent, or asks an existing avatar to send its current ctx to the user. Root does not message rooms. |
+| `:enter` | `[room? nick?]` | Compatibility path when no concrete room target is available. Creates caller avatar if absent, or asks an existing avatar to send its current ctx to the DID principal. Root does not message rooms. |
 | `:avatar?` | none | Returns caller avatar, creating if needed in the configured start room. |
 
 ### 5.2 avatar actor
 
-Purpose: user command endpoint and context emitter.
+Purpose: avatar-mediated command endpoint and context emitter.
 
 Key verbs:
 
 | Verb | Args | Caller constraints | Notes |
 | --- | --- | --- | --- |
-| `:enter-room` | `<room>` | root or target room | Avatar receives this from root or the target room, sends room `:enter`, and waits for committed room ctx before persisting room state and forwarding `:ctx` to user. |
-| `:sync-ctx` | none | root only | Emits current `:ctx` to user without changing avatar state. |
-| `:ctx` | `<ctx-map>` | current room, root, or controlling DID | With no args, returns current context to authorised callers. With a movement ctx-map, validates ordinary movement ctx, optionally prints `ctx.text`, then asks `ctx.room` to admit the avatar. The avatar forwards no new `:ctx` to the user until the target room commits one. |
-| `:ctx?` | none | user only | Returns context term. |
-| `:help` | `[topic]` | user only | `help here` asks room `:help`. |
-| `:nick` | `[nick]` | user only | No args returns current nick; with args forwards to room. |
-| `:look`/`:l` `:exits?` `:who?` `:did?` `:say` `:emote` `:go` | varies | user only | Delegates to room. |
-| `:claim` `:owner` `:dig` `:fill` `:prop` | varies | user only | Delegates to room without owner-authority arguments; rooms recognise the owner DID or deterministic owner avatar from `msg-from`. |
-| `:drop-thing` | `<user> <thing> <target-parent> [token] [ctx]` | room caller only | Parent-mediated drop helper; forwards optional user ctx map. |
+| `:enter-room` | `<room>` | root or target room | Avatar receives this from root or the target room, sends room `:enter`, and waits for committed room ctx before persisting room state and forwarding `:ctx` to DID principal. |
+| `:sync-ctx` | none | root only | Emits current `:ctx` to DID principal without changing avatar state. |
+| `:ctx` | `<ctx-map>` | current room, root, or controlling DID | With no args, returns current context to authorised callers. With a movement ctx-map, validates ordinary movement ctx, optionally prints `ctx.text`, then asks `ctx.room` to admit the avatar. The avatar forwards no new `:ctx` to the DID principal until the target room commits one. |
+| `:ctx?` | none | DID principal only | Returns context term. |
+| `:help` | `[topic]` | DID principal only | `help here` asks room `:help`. |
+| `:nick` | `[nick]` | DID principal only | No args returns current nick; with args forwards to room. |
+| `:look`/`:l` `:exits?` `:who?` `:did?` `:owner?` `:say` `:emote` `:go` | varies | DID principal only | Delegates to room. |
+| `:claim` `:owner` `:dig` `:fill` `:prop` | varies | DID principal only | Delegates to room without owner-authority arguments; rooms recognise the owner DID or deterministic owner avatar from `msg-from`. |
+| `:drop-thing` | `<did> <thing> <target-parent> [token] [ctx]` | room caller only | Parent-mediated drop helper; forwards optional DID principal ctx map. |
 | `:report-parent` | `<room> <tick> <nonce>` | room caller | Machine presence request; replies with `:parent-report <self> <room> <tick> <nonce>` using the avatar's persisted room. |
 
 ### 5.3 room actor
@@ -265,18 +265,19 @@ Key verbs:
 
 | Verb | Args | Notes |
 | --- | --- | --- |
-| `:enter` | `<ctx-map>` | Room-first enter endpoint. Avatar ctx maps include full DID/DID-URL actor references and a `user` DID; target rooms create or reuse that user's deterministic local avatar. `agent`/`thing` require ctx required keys. |
+| `:enter` | `<ctx-map>` | Room-first enter endpoint. Avatar ctx maps include full DID/DID-URL actor references and a `did` DID; target rooms create or reuse that DID principal's deterministic local avatar. `agent`/`thing` require ctx required keys. |
 | `:enter` | `<avatar-did-url> [old-room-did-url]` | Admit known avatar flow. |
 | `:leave` | none | Caller-origin live-presence departure. Removes the caller's local deterministic avatar from this room, but does not change avatar state or client ctx; the saved room remains the next-login return point. |
 | `:remove` | `<occupant>` | Owner-gated manual presence cleanup. Resolves an occupant by DID/DID-URL or by a unique current display label; ambiguous labels are rejected. Removes the occupant from room-local presence caches and does not change actor state. The occupant may re-enter later through normal `:enter` flow. |
 | `:leave-occupant` | none | Sender-origin cache removal for non-avatar occupants such as agents after actor-owned parent changes. |
 | `:look` | `[exit-direction]` | No args prints room text plus `Occupants:`, `Things:`, and `Exits:`. With an exit direction, forwards inspection to the first-class exit actor. |
 | `:exits?` `:who?` `:occupants?` `:things?` | none | Local presentation. `exits?` lists directions known to the room; `who?` is people/avatar-oriented; `occupants?` includes avatars plus room-local agents/occupants. |
-| `:did?` | `<occupant-or-thing>` | Explicit visible reference lookup. Resolves a room-local thing alias or unique visible occupant display label to a DID/DID-URL; ambiguous labels are rejected. |
-| `:dids?` | none | Owner-gated full reference listing for visible occupants and room-local things. |
+| `:did?` | `[exit\|thing\|occupant] <name>` | Explicit visible reference lookup. Resolves a visible exit direction, room-local thing alias, or occupant display label to a DID/DID-URL. Without a kind, one unambiguous match is returned; ambiguous names list every matching kind. |
+| `:owner?` | `[name]` | With no args, shows room ownership. With a visible exit, thing, or occupant name, resolves the target like `:did?` and asks that actor to print its owner to the requester. |
+| `:dids?` | none | Owner-gated full reference listing for visible occupants, room-local things, and exits. |
 | `:go` / `:move` | `<direction>` / none | `:go` traverses a named exit. `:move` chooses one currently available room exit for the caller. |
 | `:thing` | `<name> [did-or-empty]` | Local occupant alias list/get/set/delete; owner-gated for write. |
-| `:take` / `:drop` / `:where` | `[user?] [token]` | Uses movable actor parent-authority contract. |
+| `:take` / `:drop` / `:where?` | `[DID principal?] [token]` | Uses movable actor parent-authority contract. |
 | `:claim` / `:owner` / `:prop` | direct args | Room ownership controls write operations; owner authority is checked against `msg-from` or the deterministic owner avatar. |
 | `:dig` | direct args | Owner-gated exit creation/linking; newly-created rooms are assigned to the stored owner DID. |
 | `:fill` | direct args | Owner-gated exit removal. Removes the direction from the room and asks the exit actor to terminate itself; target rooms are not deleted. |
@@ -289,17 +290,18 @@ Key verbs:
 Room presence cache rules:
 
 1. `occupants` and `avatar-occupants` are room-local derived caches.
-2. User-facing `:leave` removes only live room presence. It deliberately leaves
+2. DID principal-facing `:leave` removes only live room presence. It deliberately leaves
    avatar state and zion `.my.ctx.*` unchanged so the remembered room remains the
    return point on a later login.
 3. Owner-facing `:remove <occupant>` is manual cleanup only. It removes cached
    room presence, not actor state or future admission rights. If multiple
    occupants share the same nick/display label, the owner must use a DID or
    DID-URL to identify the target.
-4. `:did? <occupant-or-thing>` is an explicit lookup for a single visible
-   occupant/thing. It does not dump all occupants for ordinary users.
-5. `:dids?` is owner-gated and lists all visible occupant and thing references
-   for administrative disambiguation.
+4. `:did? [exit|thing|occupant] <name>` is an explicit lookup for a visible
+   exit, occupant, or thing. Without a kind, one unambiguous match is returned;
+   ambiguous names list every matching kind.
+5. `:dids?` is owner-gated and lists all visible occupant, thing, and exit
+   references for administrative disambiguation.
 6. On lifecycle `:start`, a room registers a `#scheduler` interval for
    `:presence-tick`.
 7. `#scheduler` later sends `:presence-tick` to the room as an ordinary
@@ -320,12 +322,12 @@ Purpose: first-class inspectable traversal object.
 | Verb | Args | Notes |
 | --- | --- | --- |
 | `:about` | none | Returns name, description, owner, source room, target room, direction, and locked state. |
-| `:where` | none | Returns the source room DID-URL. |
+| `:where?` | none | Returns the source room DID-URL. |
 | `:owner` | none | Returns the owner DID or `(none)`. |
 | `:report-parent` | `<room> <tick> <nonce>` | Machine presence request; replies to the requesting room with `:parent-report <self> <source-room> <tick> <nonce>`. |
 | `:locked?` | none | Returns `true` or `false`. |
-| `:lock` / `:unlock` | none | Source-room-only mutation. Avatar/user `lock <direction>` and direct room `:exit <direction> :lock` resolve through the source room. |
-| `:message` | `<traveller|source|target|blocked> <text>` | Source-room-only traversal-message update. Avatar/user `exit-message <direction> ...` and direct room `:exit <direction> :message ...` resolve through the source room; the exit actor keeps canonical message state. |
+| `:lock` / `:unlock` | none | Source-room-only mutation. Avatar/DID principal `lock <direction>` and direct room `:exit <direction> :lock` resolve through the source room. |
+| `:message` | `<traveller|source|target|blocked> <text>` | Source-room-only traversal-message update. Avatar/DID principal `exit-message <direction> ...` and direct room `:exit <direction> :message ...` resolve through the source room; the exit actor keeps canonical message state. |
 | `:traverse` | `<ctx-map>` | Source-room-only traversal request. If unlocked, returns `:traversed <ctx>` to the source room with `ctx.room` set to the target. If locked, returns `:traversed <ctx>` with `ctx.room` still set to the source room and `ctx.text` set to the blocked message. |
 
 Movement ctx is ordinary actor/entity state, not a separate signed or protocol
@@ -349,7 +351,7 @@ Key helpers and verbs:
 | Verb/helper | Args | Notes |
 | --- | --- | --- |
 | `agent-ctx` | none | Builds `ctx` with `kind=agent`, `name`, `nick`, `description`. |
-| `:about` `:where` `:owner` | none | Generic state summary. |
+| `:about` `:where?` `:owner` | none | Generic state summary. |
 | `:exits?` | none | Asks the current parent room for exits and stores the printed reply as `last-message`. |
 | `:go` | `<direction>` | Free-agent or owner movement through a named room exit; no exit creation. |
 | `:move` | none | Asks the current parent room to choose one available exit at random and traverse it. |
@@ -357,8 +359,8 @@ Key helpers and verbs:
 | `:enter-room` | `<target-room-did-url> <source-room-did-url>` | Root/room movement helper retained for direct room-driven entry flows. |
 | `:report-parent` | `<room> <tick> <nonce>` | Machine presence request; replies to the requesting room with `:parent-report <self> <parent> <tick> <nonce>`. |
 | `:claim` | `<secret>` | Recovery-path ownership claim. |
-| `:take` | `<user> <carrier-parent> [ctx]` | Caller must be current parent. |
-| `:drop` | `<user> <target-parent> [ctx]` | Caller must be current parent. |
+| `:take` | `<did> <carrier-parent> [ctx]` | Caller must be current parent. |
+| `:drop` | `<did> <target-parent> [ctx]` | Caller must be current parent. |
 
 ### 5.6 rms actor
 
@@ -384,13 +386,13 @@ Purpose: movable passive object with owner/parent authority.
 | Verb | Args | Notes |
 | --- | --- | --- |
 | `:about` | none | Name, description, owner, parent summary. |
-| `:where` | none | Current parent. |
+| `:where?` | none | Current parent. |
 | `:owner` | none | Current owner. |
 | `:set-recovery-secret` | `[text]` | Owner only. |
 | `:claim` | `<secret>` | Recovery-path ownership claim. |
 | `:report-parent` | `<room> <tick> <nonce>` | Machine presence request; replies to the requesting room with `:parent-report <self> <parent> <tick> <nonce>`. |
-| `:take` | `<user> <carrier-parent> [ctx]` | Caller must be current parent; optional ctx map is accepted and persisted. |
-| `:drop` | `<user> <target-parent> [ctx]` | Caller must be current parent; optional ctx map is accepted and persisted. |
+| `:take` | `<did> <carrier-parent> [ctx]` | Caller must be current parent; optional ctx map is accepted and persisted. |
+| `:drop` | `<did> <target-parent> [ctx]` | Caller must be current parent; optional ctx map is accepted and persisted. |
 
 ---
 
@@ -407,7 +409,7 @@ world-level actor names.
 
 | Key | Type | Authority |
 | --- | --- | --- |
-| `owner` | user DID | authoritative room ownership |
+| `owner` | bare DID | authoritative room ownership |
 | `name`, `description` | string | authoritative room metadata |
 | `exits` | map | direction to exit actor DID-URL |
 | `exit-target:<direction>` | DID-URL | target room used for local exit healing |
@@ -427,7 +429,7 @@ world-level actor names.
 
 | Key | Meaning |
 | --- | --- |
-| `user` | controlling user DID |
+| `did` | controlling bare DID |
 | `room` | current room DID-URL |
 | `nick` | current display nick |
 
@@ -458,7 +460,7 @@ world-level actor names.
    ensures the caller's deterministic avatar locally and sends no `:ok`; `thing`
    and `agent` require explicit kind and are admitted into the same room-local
    non-avatar occupant cache for now.
-7. Thing transfer validation is strict by default: user MUST be `did:ma:...`;
+7. Thing transfer validation is strict by default: DID principal MUST be `did:ma:...`;
    non-ctx parent arguments MUST be DID-URLs. Optional
    transfer ctx MUST include non-empty `kind`, `name`, `nick`, and `description`
    fields. Any actor references inside ctx MUST be full DID-URLs.

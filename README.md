@@ -19,7 +19,7 @@ creating, while staying small enough that a runtime can make it its own.
 
 ```text
 actors/root.ma          deterministic avatar factory
-actors/avatar.ma        user command endpoint
+actors/avatar.ma        avatar-mediated command endpoint
 actors/room.ma          room policy, occupants, claim/owner, dig/go, exit ownership
 actors/exit.ma          traversal between rooms
 kinds/                  kind definitions used by the generated bootstrap
@@ -127,17 +127,17 @@ After that, zion routes focus shorthand through the avatar created by `#root`.
 
 ## Building rooms
 
-Rooms are owned by user DIDs, not avatars. An avatar is only the user's current
+Rooms are owned by bare DIDs, not avatars. An avatar is only the DID principal's current
 command costume. For normal focus commands the avatar acts as a delegate and
-forwards the user's DID to the room; direct room RPCs still use the message
+forwards the DID principal's DID to the room; direct room RPCs still use the message
 `from` DID as the caller.
 
 ```text
-help                   show avatar/user commands
+help                   show avatar/avatar-mediated commands
 help here              ask the current room what is possible here
 claim                  claim an unowned room through your avatar
 owner                  show the current room owner through your avatar
-owner did:ma:<target>  transfer the room to another user DID through your avatar
+owner did:ma:<target>  transfer the room to another bare DID through your avatar
 look                   look around
 l                      alias for look
 say hello              speak here
@@ -168,11 +168,11 @@ The last form resets `description` to the default.
 
 Only the current owner may create or remove exits from a room. Newly dug rooms
 are owned by the digger automatically, so a builder can give someone a room
-with `owner` and that user can then build outward from there. Linking to an
+with `owner` and that DID can then build outward from there. Linking to an
 already-existing room is allowed when the target room confirms that the same
-user owns it too. Exits are first-class inspectable objects owned by exit
+DID principal owns it too. Exits are first-class inspectable objects owned by exit
 actors; rooms resolve directions and can forward direct `:exit <direction>
-<verb>` commands to the exit. Avatar/user commands such as `lock <direction>`
+<verb>` commands to the exit. Avatar/avatar-mediated commands such as `lock <direction>`
 and `exit-message <direction> <slot> <text>` are shorthand for that forwarding.
 `fill <direction>` removes the exit link and terminates the exit actor, but
 leaves the target room intact.

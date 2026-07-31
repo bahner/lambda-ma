@@ -62,7 +62,7 @@
 ; Public inspection methods.
 (set-method! :about
   (lambda (args msg)
-    (reply-ok msg
+    (reply-ok-with msg
       (string-append
         (name) "\n"
         (description) "\n"
@@ -72,13 +72,21 @@
         "direction: " (if (direction) (direction) "(none)") "\n"
         "locked: " (if (locked?) "true" "false")))))
 
-(set-method! :where
+(set-method! :where?
   (lambda (args msg)
-    (reply-ok msg (if (source-room) (source-room) "(none)"))))
+    (reply-ok-with msg (if (source-room) (source-room) "(none)"))))
 
 (set-method! :owner
   (lambda (args msg)
-    (reply-ok msg (if (owner) (owner) "(none)"))))
+    (reply-ok-with msg (if (owner) (owner) "(none)"))))
+
+(set-method! :owner?
+  (lambda (args msg)
+    (if (null? args)
+        (reply-ok-with msg (string-append "Owner: " (if (owner) (owner) "(none)")))
+        (begin
+          (ma-send! (canonical-actor (car args)) (list :print (string-append "Owner: " (if (owner) (owner) "(none)"))))
+          (reply-ok msg)))))
 
 (set-method! :report-parent
   (lambda (args msg)
@@ -89,14 +97,14 @@
 
 (set-method! :locked?
   (lambda (args msg)
-    (reply-ok msg (if (locked?) "true" "false"))))
+    (reply-ok-with msg (if (locked?) "true" "false"))))
 
 (set-method! :lock
   (lambda (args msg)
     (if (source-room-caller? msg)
         (begin
           (set-locked! #t)
-          (reply-ok msg "locked"))
+          (reply-ok-with msg "locked"))
         (reply-error msg "only source room may lock this exit"))))
 
 (set-method! :unlock
@@ -104,7 +112,7 @@
     (if (source-room-caller? msg)
         (begin
           (set-locked! #f)
-          (reply-ok msg "unlocked"))
+          (reply-ok-with msg "unlocked"))
         (reply-error msg "only source room may unlock this exit"))))
 
 (set-method! :message
@@ -119,7 +127,7 @@
                (equal? (car args) "blocked"))
            (begin
              (set-message! (car args) (join-words (cdr args)))
-             (reply-ok msg "message updated")))
+             (reply-ok-with msg "message updated")))
           (else
            (reply-error msg "unknown exit message slot")))))
 
@@ -142,13 +150,13 @@
             ((locked?)
              (begin
                (ma-send! (canonical-actor (source-room)) (list :traversed (blocked-ctx ctx)))
-               (reply-ok msg "")))
+               (reply-ok msg)))
             ((target-room)
              (begin
                (ma-send! (canonical-actor (source-room)) (list :traversed (target-ctx ctx)))
-               (reply-ok msg "")))
+               (reply-ok msg)))
             (else
              (begin
                (ma-send! (canonical-actor (source-room))
                          (list :traversed (annotate-movement-ctx ctx (source-room) "This exit leads nowhere.")))
-               (reply-ok msg "")))))))
+               (reply-ok msg)))))))

@@ -50,7 +50,7 @@ pub enum Value {
 
 pub type BuiltinFn = fn(&[Value]) -> Result<Value, EvalError>;
 
-/// A user-defined procedure created by `lambda` (directly, or via the
+/// A did-defined procedure created by `lambda` (directly, or via the
 /// `(define (name args...) body...)` sugar).
 pub struct Lambda {
     pub name: Option<Rc<str>>,

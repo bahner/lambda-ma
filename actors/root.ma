@@ -41,43 +41,43 @@
 (define (delegated-enter? args)
   (and (not (null? args)) (string-prefix? "did:ma:" (car args))))
 
-(define (entry-user args msg)
+(define (entry-did args msg)
   (if (delegated-enter? args) (car args) (msg-from msg)))
 
 ; Avatar creation is asynchronous. The init code asks the room to admit the
 ; avatar; the room later sends committed ctx back to the avatar.
-(define (avatar-init user nick room)
+(define (avatar-init did nick room)
   (let ((n (nick-or-default nick))
         (r (local-self))
-        (avatar (avatar-for-user user))
+        (avatar (avatar-for-did did))
         (target-room (canonical-actor room)))
     (string-append
-      "(set-prop! \"did\" \"" user "\")\n"
+      "(set-prop! \"did\" \"" did "\")\n"
       "(set-prop! \"root\" \"" r "\")\n"
       "(set-prop! \"nick\" \"" n "\")\n"
       "(ma-save-state!)\n"
       "(ma-send! \"" target-room "\" (list :enter \"" avatar "\" #f \"" n "\"))\n")))
 
-(define (ensure-avatar user nick room)
-  (let ((avatar (avatar-for-user user)))
+(define (ensure-avatar did nick room)
+  (let ((avatar (avatar-for-did did)))
     (if (entity-live? avatar)
         (begin
-          (ma-send! (canonical-actor avatar) (list :enter-room (canonical-actor room) user (nick-or-default nick)))
+          (ma-send! (canonical-actor avatar) (list :enter-room (canonical-actor room) did (nick-or-default nick)))
           avatar)
-        (entity-url (ma-create-actor AVATAR_KIND #f (avatar-init user nick room) (avatar-fragment user))))))
+        (entity-url (ma-create-actor AVATAR_KIND #f (avatar-init did nick room) (avatar-fragment did))))))
 
 ; Public entry methods.
 (set-method! :enter
   (lambda (args msg)
-    (let* ((user (entry-user args msg))
+    (let* ((did (entry-did args msg))
            (room (entry-room (requested-room args)))
            (nick (nick-or-default (requested-nick args)))
-           (avatar (ensure-avatar user nick room)))
+           (avatar (ensure-avatar did nick room)))
       (ma-reply! msg (list :ok avatar)))))
 
 (set-method! :avatar?
   (lambda (args msg)
-    (let* ((user (msg-from msg))
+    (let* ((did (msg-from msg))
            (room (ensure-start-room))
-           (avatar (ensure-avatar user #f room)))
+           (avatar (ensure-avatar did #f room)))
       (ma-reply! msg (list :ok avatar)))))

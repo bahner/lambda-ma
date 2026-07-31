@@ -93,11 +93,10 @@
 ; Public methods added on top of the generic agent behaviour.
 (set-method! :help
   (lambda (args msg)
-    (reply-ok msg
+    (reply-ok-with msg
       (string-append
         (name) " help\n"
         "  :about      show rms identity and location\n"
-        "  :where      show rms current parent\n"
         "  :owner      show current owner\n"
         "  :fortune    say a random fortune in the current room\n"
         "rms registers schedule fortune with #scheduler as random up to 60 seconds."))))
@@ -110,4 +109,4 @@
           (reply-error msg "rms is nowhere")
           (begin
             (ma-send! p (list :say fortune))
-            (reply-ok msg ""))))))
+            (reply-ok msg))))))

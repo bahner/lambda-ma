@@ -55,7 +55,7 @@
        (ctx-kind-valid? (ctx-text ctx "kind"))
        (ctx-optional-text-valid? ctx "actor")
        (ctx-optional-text-valid? ctx "avatar")
-       (ctx-optional-text-valid? ctx "user")
+       (ctx-optional-text-valid? ctx "did")
        (ctx-optional-text-valid? ctx "root")
        (ctx-optional-text-valid? ctx "room")
        (ctx-optional-text-valid? ctx "name")

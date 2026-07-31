@@ -25,7 +25,7 @@ You need three things:
 
 Download Kubo/IPFS:
 
-- IPFS Desktop, easiest for new users: <https://docs.ipfs.tech/install/ipfs-desktop/>
+- IPFS Desktop, easiest for new principals: <https://docs.ipfs.tech/install/ipfs-desktop/>
 - Kubo command-line install: <https://docs.ipfs.tech/install/command-line/>
 
 Download `ma`:
@@ -243,12 +243,13 @@ re-bootstrap (see troubleshooting below).
 Useful room-building commands:
 
 ```text
-help                   show avatar/user commands
+help                   show avatar/avatar-mediated commands
 help here              show what this room says is possible
 claim                  claim an unowned room
 owner                  show the current room owner
-owner did:ma:<target>  transfer the room to another user DID
-did? lamp              show the DID for a visible occupant or thing
+owner did:ma:<target>  transfer the room to another bare DID
+did? [kind] lamp       show the DID for a visible occupant, thing, or exit
+owner? lamp            show who owns a visible occupant, thing, or exit
 dig north to Name      create an exit and a new room
 fill north             remove the north exit
 look north             inspect the north exit
@@ -257,7 +258,7 @@ unlock north           unlock the north exit
 exit-message north traveller You step through the green door.
 exit-message north blocked The green door is locked.
 exit-message north source Someone slips through the green door.
-:dids?                 owner lists visible occupants/things with DIDs
+:dids?                 owner lists visible occupants, things, and exits with DIDs
 :remove Alice          owner removes Alice if that nick is unique here
 :remove did:ma:...#x   owner removes an exact occupant DID-URL
 :prop name Name        set the focused room name
@@ -287,7 +288,7 @@ room; after `:pong`, it asks for ownership authorisation.
 The important rule is simple:
 
 - Commands without a leading colon, such as `look`, `go north`, `say hello`, and
-  `dig north`, are avatar-mediated user commands. `prop` is a room-metadata
+  `dig north`, are avatar-mediated avatar-mediated commands. `prop` is a room-metadata
   shorthand and targets the focused room directly.
 - Commands with a leading colon, such as `:prop name ...` and `:help`, are sent
   directly to the focused room.
@@ -321,7 +322,7 @@ Why this works well:
   exit, the exit returns transformed ctx to the room, and the room sends
   `:ctx` to the agent. The agent then performs the target-room `:enter`
   itself, so the target room remains responsible for admission.
-- Full init logic stays in the code users provide at creation time, so users can
+- Full init logic stays in the code principals provide at creation time, so principals can
   adjust it safely when creating entities.
 Agents can use exits, but they do not expose `:dig`.
 
@@ -456,7 +457,7 @@ actors/exit.ma
 ```
 
 To change the default room behaviour, edit `actors/room.ma`. To change movement
-or user commands, start with `actors/avatar.ma` and `actors/room.ma`. To change
+or avatar-mediated commands, start with `actors/avatar.ma` and `actors/room.ma`. To change
 world entry and zion context, start with `actors/root.ma`.
 
 To change a kind descriptor, edit the matching `kinds/*.yaml` file. `make`

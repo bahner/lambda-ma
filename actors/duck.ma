@@ -26,16 +26,16 @@
         (reply-error msg "duck is nowhere")
         (begin
           (ma-send! p (list :say text))
-          (reply-ok msg "")))))
+          (reply-ok msg)))))
 
 ; Public methods added on top of the generic agent behaviour.
 (set-method! :help
   (lambda (args msg)
-    (reply-ok msg
+    (reply-ok-with msg
       (string-append
         (name) " help\n"
         "  :about      show duck identity and location\n"
-        "  :where      show duck current parent\n"
+        "  :where?     show duck current parent\n"
         "  :owner      show current owner\n"
         "  :duck       say a duck line in the current room\n"
         "  :quack      say quack in the current room"))))
