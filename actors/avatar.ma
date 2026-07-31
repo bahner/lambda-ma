@@ -72,6 +72,7 @@
           (list :text text))))
 
 (define (start-room) (ma-get-config-key "start"))
+(define THING_KIND "/ma/thing/0.0.1")
 
 (define (send-ctx text)
   (ma-send! (did) (ctx-term text)))
@@ -177,6 +178,71 @@
 (define (send-did-text text)
   (ma-send! (did) (list :print text)))
 
+(define (inventory-map)
+  (prop-map "inventory"))
+
+(define (set-inventory-map! m)
+  (set-prop-map! "inventory" m)
+  (ma-save-state!))
+
+(define (remember-inventory! token actor)
+  (if (and (non-empty-string? token) (non-empty-string? actor))
+      (set-inventory-map! (map-set (inventory-map) token (canonical-actor actor)))
+      #f))
+
+(define (forget-inventory! token)
+  (if (non-empty-string? token)
+      (set-inventory-map! (map-delete (inventory-map) token))
+      #f))
+
+(define (entry-lines xs)
+  (cond ((null? xs) "")
+        ((null? (cdr xs)) (car xs))
+        (else (string-append (car xs) "\n" (entry-lines (cdr xs))))))
+
+(define (inventory-line entry)
+  (let ((token (car entry))
+        (actor (cdr entry)))
+    (if (equal? token actor)
+        token
+        (string-append token " = " (canonical-actor actor)))))
+
+(define (inventory-lines entries)
+  (cond ((null? entries) '())
+        (else (cons (inventory-line (car entries)) (inventory-lines (cdr entries))))))
+
+(define (inventory-text)
+  (let ((lines (inventory-lines (map->alist (inventory-map)))))
+    (if (null? lines)
+        "Inventory: empty."
+        (string-append "Inventory:\n" (entry-lines lines)))))
+
+(define (make-kind kind)
+  (if (equal? kind "thing") THING_KIND kind))
+
+(define (valid-make-kind? kind)
+  (and (non-empty-string? kind)
+       (string-prefix? "/" kind)))
+
+(define (avatar-make args msg)
+  (require-did msg
+    (lambda ()
+      (cond ((or (null? args) (null? (cdr args)))
+             (reply-error msg "Usage: make <kind> <init...>"))
+            (else
+             (let ((kind (make-kind (car args)))
+                   (init (join-words (cdr args))))
+               (cond ((not (valid-make-kind? kind))
+                      (reply-error msg "make kind must be a protocol id"))
+                     ((not (string? init))
+                      (reply-error msg "make init must be a string"))
+                     (else
+                      (let* ((fragment (ma-create-actor kind #f init))
+                             (actor (entity-url fragment)))
+                       (remember-inventory! actor actor)
+                        (send-did-text (string-append "Create requested: " actor "."))
+                        (reply-ok-with msg actor))))))))))
+
 (define (reply-ok-silent msg)
   (reply-ok msg))
 
@@ -193,6 +259,9 @@
     "  things?           list local non-avatar occupants\n"
     "  did? [kind] <name> show the DID for a visible occupant, thing, or exit\n"
     "  owner? <name>     show who owns a visible occupant, thing, or exit\n"
+    "  make <kind> <init...> create an actor from init text\n"
+    "  inventory         show what you are carrying\n"
+    "  i                 alias for inventory\n"
     "  take <thing>      ask a local occupant to bind to you\n"
     "  drop <thing>      ask a carried occupant to enter this room\n"
     "  where? <thing>    ask where a local occupant says it is\n"
@@ -406,6 +475,23 @@
             (send-room :owner? args)
             (reply-ok-silent msg))))))
 
+(set-method! :make
+  avatar-make)
+
+(set-method! :inventory
+  (lambda (args msg)
+    (require-did msg
+      (lambda ()
+        (send-did-text (inventory-text))
+        (reply-ok-silent msg)))))
+
+(set-method! :i
+  (lambda (args msg)
+    (require-did msg
+      (lambda ()
+        (send-did-text (inventory-text))
+        (reply-ok-silent msg)))))
+
 (set-method! :dig
   (lambda (args msg)
     (require-did msg
@@ -458,6 +544,9 @@
   (lambda (args msg)
     (require-did msg
       (lambda ()
+        (if (null? args)
+            #f
+            (remember-inventory! (car args) (car args)))
         (send-room-as-did :take args)
         (reply-ok-silent msg)))))
 
@@ -465,6 +554,9 @@
   (lambda (args msg)
     (require-did msg
       (lambda ()
+        (if (null? args)
+            #f
+            (forget-inventory! (car args)))
         (send-room-as-did :drop args)
         (reply-ok-silent msg)))))
 
