@@ -138,11 +138,7 @@
       (equal? kind "agent")))
 
 (define (valid-transfer-ctx? ctx)
-  (and (map? ctx)
-       (non-empty-string? (ctx-text ctx "kind"))
-       (non-empty-string? (ctx-text ctx "name"))
-       (non-empty-string? (ctx-text ctx "nick"))
-       (non-empty-string? (ctx-text ctx "description"))
+  (and (actor-ctx? ctx)
        (valid-transfer-kind? (ctx-text ctx "kind"))))
 
 (define (caller-is-parent? msg)
@@ -165,7 +161,7 @@
         (reply-error msg (string-append (nick) " is nowhere"))
         (begin
           (ma-send! (canonical-actor p) term)
-          (reply-ok msg "queued")))))
+          (reply-ok msg "")))))
 
 (define (move-to-room! target-room source-room)
   (if (and (not (movement-pending?))

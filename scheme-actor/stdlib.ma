@@ -41,6 +41,55 @@
   (let ((value (map-ref ctx key #f)))
     (if (string? value) value #f)))
 
+(define (ctx-optional-text-valid? ctx key)
+  (let ((value (map-ref ctx key #f)))
+    (or (not value) (string? value))))
+
+(define (ctx-kind-valid? kind)
+  (or (equal? kind "avatar")
+      (equal? kind "thing")
+      (equal? kind "agent")))
+
+(define (valid-ctx? ctx)
+  (and (map? ctx)
+       (ctx-kind-valid? (ctx-text ctx "kind"))
+       (ctx-optional-text-valid? ctx "actor")
+       (ctx-optional-text-valid? ctx "avatar")
+       (ctx-optional-text-valid? ctx "user")
+       (ctx-optional-text-valid? ctx "root")
+       (ctx-optional-text-valid? ctx "room")
+       (ctx-optional-text-valid? ctx "name")
+       (ctx-optional-text-valid? ctx "nick")
+       (ctx-optional-text-valid? ctx "description")
+       (ctx-optional-text-valid? ctx "text")
+      (ctx-optional-text-valid? ctx "exit")
+      (ctx-optional-text-valid? ctx "direction")))
+
+(define (ctx-kind? ctx kind)
+  (and (valid-ctx? ctx)
+       (equal? (ctx-text ctx "kind") kind)))
+
+(define (actor-ctx? ctx)
+  (and (valid-ctx? ctx)
+       (non-empty-string? (ctx-text ctx "name"))
+       (non-empty-string? (ctx-text ctx "nick"))
+       (non-empty-string? (ctx-text ctx "description"))))
+
+(define (avatar-ctx? ctx)
+  (ctx-kind? ctx "avatar"))
+
+(define (agent-ctx? ctx)
+  (and (actor-ctx? ctx)
+       (equal? (ctx-text ctx "kind") "agent")))
+
+(define (thing-ctx? ctx)
+  (and (actor-ctx? ctx)
+       (equal? (ctx-text ctx "kind") "thing")))
+
+(define (room-ctx? ctx)
+  (and (valid-ctx? ctx)
+       (non-empty-string? (ctx-text ctx "room"))))
+
 (define (string-entries xs)
   (let loop ((rest xs) (acc '()))
     (cond ((null? rest) acc)

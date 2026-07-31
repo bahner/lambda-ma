@@ -75,11 +75,7 @@
 ; Transfer ctx is optional, but when present it must be a full room-local ctx
 ; payload so future parent displays can use stable name/nick/description data.
 (define (valid-transfer-ctx? ctx)
-  (and (map? ctx)
-       (non-empty-string? (ctx-text ctx "kind"))
-       (non-empty-string? (ctx-text ctx "name"))
-       (non-empty-string? (ctx-text ctx "nick"))
-       (non-empty-string? (ctx-text ctx "description"))
+  (and (actor-ctx? ctx)
        (valid-transfer-kind? (ctx-text ctx "kind"))))
 
 (define (owner-or-unowned? user)

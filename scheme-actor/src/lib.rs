@@ -415,6 +415,97 @@ mod tests {
     }
 
     #[test]
+    fn room_nick_broadcast_preserves_old_nick() {
+        let env = room_env();
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert(
+            "self".to_string(),
+            "did:ma:runtime#construct".to_string(),
+        );
+        crate::state::set_config(config);
+        install_send_reply_recorders(&env);
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_msg(
+                "did:ma:other#avatar1",
+                "did:ma:runtime#construct",
+            )),
+        );
+
+        eval_all(
+            r#"
+            (define avatar "did:ma:other#avatar1")
+            (set-label! avatar "Atlas")
+            (add-avatar-presence! avatar)
+            ((find-method :nick) (list "Aletheia") msg)
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        assert_eq!(
+            eval_all("(get-prop \"sent-term:1\")", &env).unwrap(),
+            Value::list(vec![
+                Value::symbol(":print"),
+                Value::str("Atlas is now known as Aletheia."),
+            ])
+        );
+        assert_eq!(eval_str("(speaker-name avatar)", &env), "Aletheia");
+        assert_eq!(eval_int("(get-prop \"reply-count\")", &env), 1);
+    }
+
+    #[test]
+    fn room_arrival_broadcast_skips_arriving_avatar() {
+        let env = room_env();
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert(
+            "self".to_string(),
+            "did:ma:runtime#construct".to_string(),
+        );
+        crate::state::set_config(config);
+        install_send_reply_recorders(&env);
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_msg(
+                "did:ma:runtime#alice",
+                "did:ma:runtime#construct",
+            )),
+        );
+
+        eval_all(
+            r#"
+                        (define (ctx-term-value term key)
+                            (let loop ((pairs (car (cdr term))))
+                                (cond ((null? pairs) #f)
+                                            ((equal? (car (car pairs)) key) (car (cdr (car pairs))))
+                                            (else (loop (cdr pairs))))))
+            (define (ma-entity-exists? actor) #t)
+            (set-prop! "name" "The Garden")
+            (define bob "did:ma:runtime#bob")
+            (set-label! bob "Bob")
+            (add-avatar-presence! bob)
+            ((find-method :enter) (list "did:ma:runtime#alice" #f "Alice") msg)
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 2);
+        assert_eq!(eval_str("(get-prop \"sent-target:1\")", &env), "did:ma:runtime#bob");
+        assert_eq!(
+            eval_all("(get-prop \"sent-term:1\")", &env).unwrap(),
+            Value::list(vec![Value::symbol(":print"), Value::str("Alice arrives.")])
+        );
+        assert_eq!(eval_str("(get-prop \"sent-target:2\")", &env), "did:ma:runtime#alice");
+        assert_eq!(
+            eval_str("(ctx-term-value (get-prop \"sent-term:2\") :text)", &env),
+            "The Garden"
+        );
+    }
+
+    #[test]
     fn room_ignores_foreign_legacy_avatar_entry() {
         let env = room_env();
         let mut config = std::collections::HashMap::new();
@@ -440,9 +531,67 @@ mod tests {
     }
 
     #[test]
+    fn room_cross_runtime_avatar_ctx_requests_local_avatar() {
+        let env = room_env();
+        let user = "did:ma:user";
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:ma".to_string());
+        config.insert("self".to_string(), "did:ma:ma#cloud".to_string());
+        crate::state::set_config(config);
+
+        eval_all(
+            r#"
+                        (define (ma-entity-exists? actor) #f)
+                        (define (ma-create-actor kind init behaviour fragment)
+                            (set-prop! "created-kind" kind)
+                            (set-prop! "created-init" init)
+                            (set-prop! "created-fragment" fragment)
+                            (entity-url fragment))
+                        "#,
+            &env,
+        )
+        .unwrap();
+
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_msg("did:ma:sky#avatar", "did:ma:ma#cloud")),
+        );
+        eval_all(
+            r#"
+                        ((find-method :enter)
+                            (list (map-set
+                                            (map-set
+                                                (map-set
+                                                    (map-set
+                                                        (map-set (make-map) "actor" "did:ma:user")
+                                                        "avatar" "did:ma:sky#avatar")
+                                                    "kind" "avatar")
+                                                "room" "did:ma:ma#cloud")
+                                            "nick" "Lars"))
+                            msg)
+                        "#,
+            &env,
+        )
+        .unwrap();
+
+        let expected_fragment = eval_str(&format!(r#"(avatar-fragment "{user}")"#), &env);
+        assert_eq!(
+            eval_str("(get-prop \"created-kind\")", &env),
+            "/ma/avatar/0.0.1"
+        );
+        assert_eq!(
+            eval_str("(get-prop \"created-fragment\")", &env),
+            expected_fragment
+        );
+        assert_eq!(eval_str("(occupants-text)", &env), "Occupants: none.");
+    }
+
+    #[test]
     fn room_look_includes_exits() {
         let env = room_env();
 
+        assert!(eval_str("(room-text)", &env).starts_with("“This is the Construct."));
+        assert!(!eval_str("(room-text)", &env).starts_with("Construct\n"));
         assert!(eval_str("(room-text)", &env).ends_with("\nExits: none."));
 
         eval_all("(put-exit! \"north\" \"did:ma:runtime#north-exit\")", &env).unwrap();
@@ -529,6 +678,41 @@ mod tests {
         ));
         assert!(eval_bool(r##"(did-url? "did:ma:runtime#room")"##, &env));
         assert!(!eval_bool(r##"(did-url? "did:ma:runtime")"##, &env));
+    }
+
+    #[test]
+    fn stdlib_validates_ctx_maps() {
+        let env = new_root_env();
+        eval_all(include_str!("../stdlib.ma"), &env).unwrap();
+
+        assert!(eval_bool(
+            r#"(valid-ctx? (map-set (map-set (make-map) "kind" "avatar") "room" "did:ma:runtime#room"))"#,
+            &env
+        ));
+        assert!(eval_bool(
+            r#"(valid-ctx? (map-set (map-set (make-map) "kind" "agent") "text" "You arrive."))"#,
+            &env
+        ));
+        assert!(!eval_bool(
+            r#"(valid-ctx? (map-set (make-map) "kind" "dragon"))"#,
+            &env
+        ));
+        assert!(!eval_bool(
+            r#"(actor-ctx? (map-set (map-set (map-set (make-map) "kind" "thing") "name" "stone") "nick" "stone"))"#,
+            &env
+        ));
+        assert!(eval_bool(
+            r#"(thing-ctx? (map-set (map-set (map-set (map-set (make-map) "kind" "thing") "name" "stone") "nick" "stone") "description" "A small stone."))"#,
+            &env
+        ));
+        assert!(eval_bool(
+            r#"(room-ctx? (map-set (map-set (make-map) "kind" "avatar") "room" "did:ma:runtime#room"))"#,
+            &env
+        ));
+        assert!(!eval_bool(
+            r#"(agent-ctx? (map-set (map-set (map-set (map-set (make-map) "kind" "thing") "name" "stone") "nick" "stone") "description" "A small stone."))"#,
+            &env
+        ));
     }
 
     #[test]
@@ -1382,11 +1566,11 @@ mod tests {
         eval_all("(on-message msg)", &env).unwrap();
 
         assert_eq!(
-            eval_str("(get-prop \"sent-target:3\")", &env),
+            eval_str("(get-prop \"sent-target:2\")", &env),
             "did:ma:runtime#north-exit"
         );
         assert_eq!(
-            eval_all("(get-prop \"sent-term:3\")", &env).unwrap(),
+            eval_all("(get-prop \"sent-term:2\")", &env).unwrap(),
             Value::list(vec![Value::symbol(":unlock")]),
         );
     }
@@ -1426,6 +1610,13 @@ mod tests {
                 "(ctx-text (car (cdr (get-prop \"sent-term:1\"))) \"actor\")",
                 &env
             ),
+            "did:ma:user"
+        );
+        assert_eq!(
+            eval_str(
+                "(ctx-text (car (cdr (get-prop \"sent-term:1\"))) \"avatar\")",
+                &env
+            ),
             "did:ma:runtime#avatar"
         );
         assert_eq!(
@@ -1437,10 +1628,165 @@ mod tests {
         );
         assert_eq!(
             eval_str(
-                "(ctx-text (car (cdr (get-prop \"sent-term:1\"))) \"user\")",
+                "(ctx-text (car (cdr (get-prop \"sent-term:1\"))) \"kind\")",
                 &env
             ),
-            "did:ma:user"
+            "avatar"
+        );
+    }
+
+    #[test]
+    fn room_go_from_direct_user_did_moves_the_users_avatar() {
+        let env = room_env();
+        let user = "did:ma:user";
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#room".to_string());
+        crate::state::set_config(config);
+
+        eval_all(
+            r#"
+            (put-exit! "north" "did:ma:other#north-exit")
+            (define (ma-send! target term)
+              (inc-prop! "sent-count" 1)
+              (set-prop! (string-append "sent-target:" (number->string (get-prop "sent-count"))) target)
+              (set-prop! (string-append "sent-term:" (number->string (get-prop "sent-count"))) term))
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_term_msg(
+                user,
+                "did:ma:runtime#room",
+                Value::list(vec![Value::symbol(":go"), Value::str("north")]),
+            )),
+        );
+        eval_all("(on-message msg)", &env).unwrap();
+
+        let expected_avatar = eval_str(&format!(r#"(avatar-for-user "{user}")"#), &env);
+        assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 1);
+        assert_eq!(
+            eval_str("(get-prop \"sent-target:1\")", &env),
+            "did:ma:other#north-exit"
+        );
+        assert!(eval_bool(
+            "(equal? (car (get-prop \"sent-term:1\")) :traverse)",
+            &env
+        ));
+        assert_eq!(
+            eval_str(
+                "(ctx-text (car (cdr (get-prop \"sent-term:1\"))) \"actor\")",
+                &env
+            ),
+            user
+        );
+        assert_eq!(
+            eval_str(
+                "(ctx-text (car (cdr (get-prop \"sent-term:1\"))) \"avatar\")",
+                &env
+            ),
+            expected_avatar
+        );
+        assert_eq!(
+            eval_str(
+                "(ctx-text (car (cdr (get-prop \"sent-term:1\"))) \"kind\")",
+                &env
+            ),
+            "avatar"
+        );
+    }
+
+    #[test]
+    fn room_go_rejects_foreign_delegated_avatar_call() {
+        let env = room_env();
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:target".to_string());
+        config.insert("self".to_string(), "did:ma:target#room".to_string());
+        crate::state::set_config(config);
+
+        eval_all(
+            r#"
+            (put-exit! "cloud" "did:ma:target#cloud-exit")
+            (define (ma-send! target term)
+              (inc-prop! "sent-count" 1)
+              (set-prop! (string-append "sent-target:" (number->string (get-prop "sent-count"))) target)
+              (set-prop! (string-append "sent-term:" (number->string (get-prop "sent-count"))) term))
+            (define (ma-reply! msg term)
+              (inc-prop! "reply-count" 1)
+              (set-prop! (string-append "reply-term:" (number->string (get-prop "reply-count"))) term))
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:source#avatar",
+                "did:ma:target#room",
+                Value::list(vec![
+                    Value::symbol(":go"),
+                    Value::str("did:ma:user"),
+                    Value::str("cloud"),
+                ]),
+            )),
+        );
+        eval_all("(on-message msg)", &env).unwrap();
+
+        assert!(eval_bool("(not (has-prop? \"sent-count\"))", &env));
+        assert_eq!(eval_int("(get-prop \"reply-count\")", &env), 1);
+        assert!(eval_bool(
+            "(equal? (car (get-prop \"reply-term:1\")) :ok)",
+            &env
+        ));
+    }
+
+    #[test]
+    fn room_go_no_exit_acknowledges_direct_user_call() {
+        let env = room_env();
+        let user = "did:ma:user";
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#room".to_string());
+        crate::state::set_config(config);
+
+        eval_all(
+            r#"
+            (define (ma-send! target term)
+              (inc-prop! "sent-count" 1)
+              (set-prop! (string-append "sent-target:" (number->string (get-prop "sent-count"))) target)
+              (set-prop! (string-append "sent-term:" (number->string (get-prop "sent-count"))) term))
+            (define (ma-reply! msg term)
+              (inc-prop! "reply-count" 1)
+              (set-prop! (string-append "reply-term:" (number->string (get-prop "reply-count"))) term))
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_term_msg(
+                user,
+                "did:ma:runtime#room",
+                Value::list(vec![Value::symbol(":go"), Value::str("cloud")]),
+            )),
+        );
+        eval_all("(on-message msg)", &env).unwrap();
+
+        let expected_avatar = eval_str(&format!(r#"(avatar-for-user "{user}")"#), &env);
+        assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 1);
+        assert_eq!(
+            eval_str("(get-prop \"sent-target:1\")", &env),
+            expected_avatar
+        );
+        assert_eq!(eval_int("(get-prop \"reply-count\")", &env), 1);
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
+            Value::list(vec![Value::symbol(":ok"), Value::str("")])
         );
     }
 
@@ -1516,6 +1862,9 @@ mod tests {
             (define (ma-send! target term)
               (set-prop! "sent-target" target)
               (set-prop! "sent-term" term))
+                        (define (ma-reply! msg term)
+                            (inc-prop! "reply-count" 1)
+                            (set-prop! (string-append "reply-term:" (number->string (get-prop "reply-count"))) term))
             "#,
             &env,
         )
@@ -1585,10 +1934,15 @@ mod tests {
             ),
             "did:ma:runtime#north-exit"
         );
+        assert_eq!(eval_int("(get-prop \"reply-count\")", &env), 1);
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
+            Value::list(vec![Value::symbol(":ok"), Value::str("")])
+        );
     }
 
     #[test]
-    fn avatar_ctx_enters_target_room_itself() {
+    fn avatar_ctx_forwards_movement_ctx_to_user() {
         let env = avatar_env();
         let user = "did:ma:user";
         let mut config = std::collections::HashMap::new();
@@ -1612,7 +1966,7 @@ mod tests {
 
         env.define(
             Rc::from("msg"),
-                        Value::Msg(sample_msg("did:ma:runtime#room", &avatar)),
+            Value::Msg(sample_msg("did:ma:runtime#room", &avatar)),
         );
         eval_all(
             r#"
@@ -1621,9 +1975,9 @@ mod tests {
                                                                             (map-set
                                                                                 (map-set
                                                                                     (map-set
-                                                                                        (map-set (make-map) "actor" (local-self))
+                                                                                        (map-set (make-map) "actor" "did:ma:user")
                                                                                         "kind" "avatar")
-                                                                                    "user" "did:ma:user")
+                                                                                    "avatar" (local-self))
                                                                                 "room" "did:ma:runtime#kitchen")
                                                                             "text" "You pass through the oak door."))
               msg)
@@ -1641,12 +1995,9 @@ mod tests {
                 Value::str("You pass through the oak door.")
             ]),
         );
-        assert_eq!(
-            eval_str("(get-prop \"sent-target:2\")", &env),
-            "did:ma:runtime#kitchen"
-        );
+        assert_eq!(eval_str("(get-prop \"sent-target:2\")", &env), user);
         assert!(eval_bool(
-            "(equal? (car (get-prop \"sent-term:2\")) :enter)",
+            "(equal? (car (get-prop \"sent-term:2\")) :ctx)",
             &env
         ));
         assert_eq!(
@@ -1654,7 +2005,7 @@ mod tests {
                 "(ctx-text (car (cdr (get-prop \"sent-term:2\"))) \"actor\")",
                 &env
             ),
-            avatar
+            user
         );
         assert_eq!(
             eval_str(
@@ -1665,6 +2016,13 @@ mod tests {
         );
         assert_eq!(
             eval_str(
+                "(ctx-text (car (cdr (get-prop \"sent-term:2\"))) \"avatar\")",
+                &env
+            ),
+            avatar
+        );
+        assert_eq!(
+            eval_str(
                 "(ctx-text (car (cdr (get-prop \"sent-term:2\"))) \"room\")",
                 &env
             ),
@@ -1672,14 +2030,89 @@ mod tests {
         );
         assert_eq!(
             eval_str(
-                "(ctx-text (car (cdr (get-prop \"sent-term:2\"))) \"user\")",
+                "(ctx-text (car (cdr (get-prop \"sent-term:2\"))) \"text\")",
+                &env
+            ),
+            "You pass through the oak door."
+        );
+        assert_eq!(
+            eval_str("(get-prop \"pending-room\")", &env),
+            "did:ma:runtime#kitchen"
+        );
+    }
+
+    #[test]
+    fn avatar_ctx_forwards_cross_runtime_movement_ctx_to_user() {
+        let env = avatar_env();
+        let user = "did:ma:user";
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:sky".to_string());
+        crate::state::set_config(config.clone());
+
+        let avatar_id = eval_str(&format!(r#"(avatar-fragment "{user}")"#), &env);
+        let avatar = format!("did:ma:sky#{avatar_id}");
+        config.insert("self".to_string(), avatar.clone());
+        config.insert("id".to_string(), avatar_id);
+        crate::state::set_config(config);
+
+        eval_all(
+            r#"
+            (set-prop! "did" "did:ma:user")
+            (set-prop! "room" "did:ma:sky#construct")
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_msg("did:ma:sky#construct", &avatar)),
+        );
+        eval_all(
+            r#"
+                        (let ((ctx (map-set
+                                                 (map-set
+                                                     (map-set
+                                                         (map-set (make-map) "actor" "did:ma:user")
+                                                         "avatar" (local-self))
+                                                     "kind" "avatar")
+                                                 "room" "did:ma:ma#cloud")))
+                            ((find-method :ctx) (list ctx) msg))
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 1);
+        assert_eq!(eval_str("(get-prop \"sent-target:1\")", &env), user);
+        assert!(eval_bool(
+            "(equal? (car (get-prop \"sent-term:1\")) :ctx)",
+            &env
+        ));
+        assert_eq!(
+            eval_str(
+                "(ctx-text (car (cdr (get-prop \"sent-term:1\"))) \"actor\")",
                 &env
             ),
             user
         );
         assert_eq!(
+            eval_str(
+                "(ctx-text (car (cdr (get-prop \"sent-term:1\"))) \"avatar\")",
+                &env
+            ),
+            avatar
+        );
+        assert_eq!(
+            eval_str(
+                "(ctx-text (car (cdr (get-prop \"sent-term:1\"))) \"room\")",
+                &env
+            ),
+            "did:ma:ma#cloud"
+        );
+        assert_eq!(
             eval_str("(get-prop \"pending-room\")", &env),
-            "did:ma:runtime#kitchen"
+            "did:ma:ma#cloud"
         );
     }
 
@@ -1826,7 +2259,7 @@ mod tests {
             (define owner-avatar (avatar-for-user "did:ma:user"))
             (set-label! owner-avatar "me")
             (add-avatar-presence! owner-avatar)
-            (define (ma-entity-exists? actor) #f)
+                        (define (ma-entity-exists? actor) (same-actor? actor owner-avatar))
             (define (ma-create-actor kind behaviour init fragment)
               (inc-prop! "created-count" 1)
               (set-prop! (string-append "created-kind:" (number->string (get-prop "created-count"))) kind)
@@ -1861,8 +2294,7 @@ mod tests {
             &env
         ));
         assert!(eval_bool("(not (exit-target \"dør\"))", &env));
-        assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 1);
-        assert_eq!(eval_str("(get-prop \"sent-target:1\")", &env), owner_avatar);
+        assert!(eval_bool("(not (has-prop? \"sent-count\"))", &env));
         let target_room = eval_str("(get-prop \"pending-new-room:dør\")", &env);
         assert!(target_room.starts_with("did:ma:runtime#"));
         assert!(eval_str("(get-prop \"created-init:1\")", &env).contains("child-alive-nonce"));
@@ -1942,7 +2374,7 @@ mod tests {
         (cond ((null? pairs) #f)
                     ((equal? (car (car pairs)) key) (car (cdr (car pairs))))
                     (else (loop (cdr pairs))))))
-(define avatar-ctx (avatar-room-ctx "#alice" "Alice" "You arrive."))"##,
+(define avatar-ctx (avatar-room-ctx "#alice" "Alice" ""))"##,
             &env,
         )
         .unwrap();

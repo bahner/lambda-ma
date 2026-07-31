@@ -115,8 +115,7 @@
         (kind (ctx-text ctx "kind"))
         (target-room (ctx-text ctx "room")))
     (and (map? ctx)
-         (or (same-actor? actor (local-self))
-             (equal? actor (did)))
+         (equal? actor (did))
          (or (equal? kind "avatar")
              (equal? kind "user"))
          (qualified-ctx-actor? target-room))))
@@ -263,7 +262,7 @@
                      #f
                      (begin
                        (set-pending-move! target-room old-room)
-                       (ma-send! (canonical-actor target-room) (list :enter payload)))))))
+                       (ma-send! (did) (list :ctx payload)))))))
             (else #f))))))
 
 (set-method! :ctx?
@@ -298,15 +297,15 @@
         (cond ((null? args)
                (begin
                  (send-did-text (avatar-help-text))
-                 (ma-reply! msg (list :ok "help"))))
+                 (reply-ok-silent msg)))
               ((equal? (car args) "here")
                (begin
                  (send-room :help '())
-                 (ma-reply! msg (list :ok "help here"))))
+                 (reply-ok-silent msg)))
               (else
                (begin
                  (send-did-text (unknown-help-text (car args)))
-                 (ma-reply! msg (list :ok "help")))))))))
+                 (reply-ok-silent msg))))))))
 
 (set-method! :nick
   (lambda (args msg)

@@ -140,9 +140,15 @@
             ((not (valid-movement-ctx? ctx))
              (reply-error msg "traverse requires ctx with actor, kind, and current room"))
             ((locked?)
-             (ma-send! (canonical-actor (source-room)) (list :traversed (blocked-ctx ctx))))
+             (begin
+               (ma-send! (canonical-actor (source-room)) (list :traversed (blocked-ctx ctx)))
+               (reply-ok msg "")))
             ((target-room)
-             (ma-send! (canonical-actor (source-room)) (list :traversed (target-ctx ctx))))
+             (begin
+               (ma-send! (canonical-actor (source-room)) (list :traversed (target-ctx ctx)))
+               (reply-ok msg "")))
             (else
-             (ma-send! (canonical-actor (source-room))
-                       (list :traversed (annotate-movement-ctx ctx (source-room) "This exit leads nowhere."))))))))
+             (begin
+               (ma-send! (canonical-actor (source-room))
+                         (list :traversed (annotate-movement-ctx ctx (source-room) "This exit leads nowhere.")))
+               (reply-ok msg "")))))))
