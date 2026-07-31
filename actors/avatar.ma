@@ -196,10 +196,64 @@
         (set-inventory-map! (map-set (inventory-map) (canonical-actor actor) ctx)))
       #f))
 
-(define (forget-inventory! token)
-  (if (non-empty-string? token)
-      (set-inventory-map! (map-delete (inventory-map) token))
+(define (inventory-label-matches? token label)
+  (and (non-empty-string? token)
+       (non-empty-string? label)
+       (equal? (string-downcase token) (string-downcase label))))
+
+(define (inventory-entry-actor entry)
+  (let* ((actor (canonical-actor (car entry)))
+         (ctx (cdr entry))
+         (ctx-actor (canonical-actor (ctx-text ctx "actor"))))
+    (cond ((valid-did-url? ctx-actor) ctx-actor)
+          ((valid-did-url? actor) actor)
+          (else #f))))
+
+(define (inventory-entry-matches? token entry)
+  (let* ((actor (canonical-actor (car entry)))
+         (ctx (cdr entry))
+         (ctx-actor (canonical-actor (ctx-text ctx "actor"))))
+    (or (same-actor? token actor)
+        (same-actor? token ctx-actor)
+        (inventory-label-matches? token (child-label ctx))
+        (inventory-label-matches? token (ctx-text ctx "name"))
+        (inventory-label-matches? token (ctx-text ctx "nick")))))
+
+(define (inventory-ref-resolved token)
+  (let loop ((entries (map->alist (inventory-map))))
+    (cond ((null? entries) #f)
+          ((and (inventory-entry-actor (car entries))
+                (inventory-entry-matches? token (car entries)))
+           (car entries))
+          (else (loop (cdr entries))))))
+
+(define (inventory-ref-any token)
+  (let loop ((entries (map->alist (inventory-map))))
+    (cond ((null? entries) #f)
+          ((inventory-entry-matches? token (car entries)) (car entries))
+          (else (loop (cdr entries))))))
+
+(define (inventory-ref token)
+  (let ((resolved (inventory-ref-resolved token)))
+    (if resolved resolved (inventory-ref-any token))))
+
+(define (forget-inventory! actor)
+  (if (non-empty-string? actor)
+      (set-inventory-map! (map-delete (inventory-map) (canonical-actor actor)))
       #f))
+
+(define (forget-inventory-token! token)
+  (let ((entry (inventory-ref-any token)))
+    (if entry
+        (forget-inventory! (car entry))
+        #f)))
+
+(define (forget-inventory-ctx-labels! ctx)
+  (begin
+    (forget-inventory-token! (ctx-text ctx "actor"))
+    (forget-inventory-token! (ctx-text ctx "name"))
+    (forget-inventory-token! (ctx-text ctx "nick"))
+    (forget-inventory-token! (child-label ctx))))
 
 (define (entry-lines xs)
   (cond ((null? xs) "")
@@ -236,6 +290,7 @@
          (reply-error msg "children ctx actor must match sender"))
         (else
          (begin
+           (forget-inventory-ctx-labels! (car args))
            (remember-child! (car args))
            (reply-ok msg)))))
 
@@ -580,9 +635,15 @@
     (require-did msg
       (lambda ()
         (if (null? args)
-            #f
-            (forget-inventory! (car args)))
-        (send-room-as-did :drop args)
+            (send-room-as-did :drop args)
+            (let* ((entry (inventory-ref (car args)))
+                   (actor (if entry (canonical-actor (car entry)) #f))
+                   (ctx (if entry (cdr entry) #f)))
+              (if actor
+                  (begin
+                    (forget-inventory! actor)
+                    (send-room-as-did :drop (list actor ctx)))
+                  (send-did-text (string-append "Unknown carried agent or thing: " (car args))))))
         (reply-ok-silent msg)))))
 
 (set-method! :where?
@@ -602,7 +663,7 @@
 ; Room-mediated drop helper for carried things/agents.
 (set-method! :drop-thing
   (lambda (args msg)
-    (if (room-caller? msg)
+    (if (room? msg)
         (if (or (null? args) (null? (cdr args)) (null? (cdr (cdr args))))
             #f
             (let ((did (car args))

@@ -479,6 +479,30 @@
            (set-thing! token actor)
            (ma-reply! msg (list :ok "entered"))))))
 
+(define (child-parent-target ctx)
+  (let ((parent (ctx-text ctx "parent")))
+    (if (non-empty-string? parent)
+        parent
+        (ctx-text ctx "room"))))
+
+(define (child-announcement-valid? ctx msg)
+  (and (actor-ctx? ctx)
+       (same-actor? (ctx-text ctx "actor") (msg-from msg))
+       (same-actor? (child-parent-target ctx) (self))))
+
+(define (handle-child-announcement! msg ctx)
+  (let ((kind (ctx-text ctx "kind"))
+        (actor (ctx-text ctx "actor"))
+        (name (ctx-text ctx "name")))
+    (cond ((not (child-announcement-valid? ctx msg))
+           (reply-error msg "children ctx actor and parent must match sender and room"))
+          ((and (agent-kind? kind) (enter-direct-ctx-valid? ctx "agent"))
+           (handle-agent-enter! msg actor ctx))
+          ((and (thing-kind? kind) (enter-direct-ctx-valid? ctx "thing"))
+           (handle-thing-enter! msg actor ctx name))
+          (else
+           (reply-error msg "children ctx must include actor, kind, name, nick, description")))))
+
 (define (agent-kind? kind) (equal? kind "agent"))
 (define (thing-kind? kind) (equal? kind "thing"))
 (define (movable-kind? kind)
@@ -507,6 +531,15 @@
 (define (movable-ref token)
   (let ((thing (thing-ref token)))
     (if thing thing (occupant-ref token))))
+
+(define (remove-movable! token actor)
+  (begin
+    (if (same-actor? (thing-ref token) actor)
+        (remove-thing! token)
+        #f)
+    (remove-occupant! actor)
+    (remove-avatar-occupant! actor)
+    (ma-save-state!)))
 
 (define (set-thing! token did)
   (set-things-map! (map-set (things-map) token did)))
@@ -691,16 +724,10 @@
   (map-keys (things-map)))
 
 (define (occupants-text)
-  (let ((actors (occupants))
-        (tokens (thing-token-names)))
-    (cond ((and (null? actors) (null? tokens))
-           "Occupants: none.")
-          ((null? actors)
-         (string-append "Occupants: " (names-of tokens)))
-        ((null? tokens)
-         (string-append "Occupants: " (names-of actors)))
-        (else
-         (string-append "Occupants: " (names-of actors) ", " (names-of tokens))))))
+  (let ((actors (occupants)))
+    (if (null? actors)
+        "Occupants: none."
+        (string-append "Occupants: " (names-of actors)))))
 
 (define (room-help-text)
   (string-append
@@ -708,11 +735,11 @@
     "  look              look around\n"
     "  exits?            list exits\n"
     "  who?              show people here\n"
-    "  occupants?        show all occupants (avatars + room locals)\n"
-    "  things?           list known non-avatar occupants\n"
+    "  occupants?        show all occupants (avatars, agents, DIDs)\n"
+    "  things?           list known things\n"
     "  did? [kind] <name> show the DID for a visible occupant, thing, or exit\n"
     "  owner? <name>     show who owns a visible occupant, thing, or exit\n"
-    "  take <thing>      ask an occupant to bind to you\n"
+    "  take <thing>      ask an agent or thing to bind to you\n"
     "  drop <thing>      ask an occupant to set this room as parent\n"
     "  where? <thing>    ask where an occupant says it is\n"
     "  say <text>        speak here\n"
@@ -1303,6 +1330,7 @@
             (actor
              (begin
                (ma-send! (canonical-actor actor) (list :take did (canonical-actor avatar) (claim-ctx actor)))
+               (remove-movable! token actor)
                (reply-to-sender msg (string-append "You take " token "."))))
             (else
              (reply-to-sender msg (string-append "Unknown agent or thing: " token)))))))
@@ -1313,13 +1341,20 @@
            (avatar (msg-from msg))
            (drop-args (command-args args msg))
            (token (if (null? drop-args) #f (car drop-args)))
-           (actor (if token (movable-ref token) #f)))
+             (ctx (if (or (null? drop-args)
+                  (null? (cdr drop-args))
+                  (not (map? (car (cdr drop-args)))))
+                #f
+                (car (cdr drop-args))))
+           (actor (if token (if (valid-did-url? token) token (movable-ref token)) #f))
+           (drop-ctx (if ctx ctx (if actor (claim-ctx actor) #f)))
+           (label (if ctx (child-label ctx) token)))
       (cond ((not token)
              (reply-to-sender msg "Usage: drop <agent-or-thing>"))
             (actor
              (begin
-               (ma-send! (canonical-actor avatar) (list :drop-thing did (canonical-actor actor) (canonical-actor (self)) token (claim-ctx actor)))
-               (reply-to-sender msg (string-append "You drop " token "."))))
+               (ma-send! (canonical-actor avatar) (list :drop-thing did (canonical-actor actor) (canonical-actor (self)) drop-ctx))
+               (reply-to-sender msg (string-append "You drop " label "."))))
             (else
              (reply-to-sender msg (string-append "Unknown agent or thing: " token)))))))
 
@@ -1633,6 +1668,15 @@
               (broadcast (string-append old-nick " is now known as " new-nick "."))
                 (reply-ok msg)))
         (reply-error msg "nick sender must be an avatar"))))
+
+(set-method! :children
+  (lambda (args msg)
+    (cond ((null? args)
+           (reply-error msg "usage: :children <ctx>"))
+          ((not (null? (cdr args)))
+           (reply-error msg "usage: :children <ctx>"))
+          (else
+           (handle-child-announcement! msg (car args))))))
 
 (set-method! :enter
   (lambda (args msg)

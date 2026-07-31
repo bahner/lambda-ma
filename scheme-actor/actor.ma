@@ -111,6 +111,14 @@
   (let ((value (get-prop key)))
     (if (and value (not (equal? value ""))) value "(none)")))
 
+(define (actor-config-or-none key)
+  (let ((value (ma-get-config-key key)))
+    (if (and value (not (equal? value ""))) value "(none)")))
+
+(define (actor-name) (actor-prop-or-none "name"))
+(define (actor-description) (actor-prop-or-none "description"))
+(define (actor-kind) (actor-config-or-none "kind"))
+
 (define (actor-owner) (actor-prop-or-none "owner"))
 (define (actor-parent) (actor-prop-or-none "parent"))
 
@@ -160,20 +168,41 @@
   (let ((owner (get-prop "owner")))
     (and owner (msg-from-owner? owner msg))))
 
-(define (handle-actor-owner msg args)
+(define (handle-actor-owner args msg)
   (reply-ok-with msg (actor-owner)))
 
-(define (handle-actor-owner? msg args)
+(define (handle-actor-text-prop! key getter args msg)
+  (if (null? args)
+      (reply-ok-with msg (getter))
+      (if (owner-authorised? msg)
+          (begin
+            (set-prop! key (join-words args))
+            (ma-save-state!)
+            (reply-ok-with msg (getter)))
+          (reply-error msg (string-append "only owner may set " key)))))
+
+(define (handle-actor-name args msg)
+  (handle-actor-text-prop! "name" actor-name args msg))
+
+(define (handle-actor-description args msg)
+  (handle-actor-text-prop! "description" actor-description args msg))
+
+(define (handle-actor-kind args msg)
+  (if (null? args)
+  (reply-ok-with msg (actor-kind))
+      (reply-error msg "kind is read-only")))
+
+(define (handle-actor-owner? args msg)
   (if (null? args)
       (reply-ok-with msg (string-append "Owner: " (actor-owner)))
       (begin
         (ma-send! (canonical-actor (car args)) (list :print (string-append "Owner: " (actor-owner))))
         (reply-ok msg))))
 
-(define (handle-actor-parent msg args)
+(define (handle-actor-parent args msg)
   (reply-ok-with msg (actor-parent)))
 
-(define (handle-actor-parent? msg args)
+(define (handle-actor-parent? args msg)
   (reply-ok-with msg (string-append "Parent: " (actor-parent))))
 
 (define (handle-actor-children args msg)
@@ -192,7 +221,7 @@
            (remember-child! (car args))
            (reply-ok msg)))))
 
-(define (handle-actor-behaviour! msg args)
+(define (handle-actor-behaviour! args msg)
   (cond ((null? args)
          (let ((current (ma-get-config-key "behaviour")))
            (if current
@@ -220,6 +249,9 @@
 (define (set-method! verb fn)
   (set! *methods* (cons (cons verb fn) *methods*)))
 
+(set-method! :name handle-actor-name)
+(set-method! :description handle-actor-description)
+(set-method! :kind handle-actor-kind)
 (set-method! :owner handle-actor-owner)
 (set-method! :owner? handle-actor-owner?)
 (set-method! :parent handle-actor-parent)
