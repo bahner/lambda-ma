@@ -226,6 +226,9 @@ All Scheme-backed lambda-ma actors inherit the generic actor method below from
 | Verb | Args | Notes |
 | --- | --- | --- |
 | `:behaviour` | `[ /ipfs/<cid> ]` | No args returns this actor's current per-entity behaviour reference, if any. With one IPFS reference, the caller must match the actor's `owner` prop; on success this queues a reload of this actor's own extra behaviour layer. |
+| `:owner` / `:owner?` | `[printer]` | Generic prop-based owner inspection. `:owner` returns the raw owner DID or `(none)`. `:owner?` returns display text, or sends it to `printer` via `:print` when a target is supplied. Kind-specific actors may override this with stricter policy. |
+| `:parent` / `:parent?` | none | Generic prop-based parent inspection. `:parent` returns the raw parent actor or `(none)`; `:parent?` returns display text. |
+| `:where` / `:where?` / `:here` / `:here?` | none | Aliases for generic parent inspection, so every actor has a minimal location answer even before kind-specific behaviour is loaded. |
 
 ### 5.1 root actor
 
@@ -252,6 +255,7 @@ Key verbs:
 | `:ctx?` | none | DID principal only | Returns context term. |
 | `:help` | `[topic]` | DID principal only | `help here` asks room `:help`. |
 | `:nick` | `[nick]` | DID principal only | No args returns current nick; with args forwards to room. |
+| `:make` | `<kind> <init...>` | DID principal only | Requests a new actor of `kind` using `ma-create-actor` with no behaviour override and all args after `kind` joined as the creation payload. The avatar does not inject owner, parent, or room props; the init text owns initial state. `thing` is accepted as shorthand for `/ma/thing/0.0.1`. Creation is queued; the returned DID-URL may not be live until the runtime loads the entity. |
 | `:look`/`:l` `:exits?` `:who?` `:did?` `:owner?` `:say` `:emote` `:go` | varies | DID principal only | Delegates to room. |
 | `:claim` `:owner` `:dig` `:fill` `:prop` | varies | DID principal only | Delegates to room without owner-authority arguments; rooms recognise the owner DID or deterministic owner avatar from `msg-from`. |
 | `:drop-thing` | `<did> <thing> <target-parent> [token] [ctx]` | room caller only | Parent-mediated drop helper; forwards optional DID principal ctx map. |
@@ -327,7 +331,7 @@ Purpose: first-class inspectable traversal object.
 | `:report-parent` | `<room> <tick> <nonce>` | Machine presence request; replies to the requesting room with `:parent-report <self> <source-room> <tick> <nonce>`. |
 | `:locked?` | none | Returns `true` or `false`. |
 | `:lock` / `:unlock` | none | Source-room-only mutation. Avatar/DID principal `lock <direction>` and direct room `:exit <direction> :lock` resolve through the source room. |
-| `:message` | `<traveller|source|target|blocked> <text>` | Source-room-only traversal-message update. Avatar/DID principal `exit-message <direction> ...` and direct room `:exit <direction> :message ...` resolve through the source room; the exit actor keeps canonical message state. |
+| `:message` | `traveller`, `source`, `target`, or `blocked`, plus `text` | Source-room-only traversal-message update. Avatar/DID principal `exit-message <direction> ...` and direct room `:exit <direction> :message ...` resolve through the source room; the exit actor keeps canonical message state. |
 | `:traverse` | `<ctx-map>` | Source-room-only traversal request. If unlocked, returns `:traversed <ctx>` to the source room with `ctx.room` set to the target. If locked, returns `:traversed <ctx>` with `ctx.room` still set to the source room and `ctx.text` set to the blocked message. |
 
 Movement ctx is ordinary actor/entity state, not a separate signed or protocol
@@ -388,6 +392,7 @@ Purpose: movable passive object with owner/parent authority.
 | `:about` | none | Name, description, owner, parent summary. |
 | `:where?` | none | Current parent. |
 | `:owner` | none | Current owner. |
+| `:prop` | `<name\|nick\|description> [value]` | Owner only. Sets an editable presentation prop; no value resets the prop to the kind default. Does not edit `owner` or `parent`. |
 | `:set-recovery-secret` | `[text]` | Owner only. |
 | `:claim` | `<secret>` | Recovery-path ownership claim. |
 | `:report-parent` | `<room> <tick> <nonce>` | Machine presence request; replies to the requesting room with `:parent-report <self> <parent> <tick> <nonce>`. |

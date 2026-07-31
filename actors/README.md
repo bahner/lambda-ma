@@ -47,6 +47,15 @@ The minimal structural props for a movable actor are:
 - `owner` — DID allowed to perform protected owner operations.
 - `parent` — DID-URL of the thing's immediate location/container.
 
+Avatar-mediated creation uses the avatar verb `make <kind> <init...>`. The
+avatar calls `ma-create-actor` directly with all arguments after `kind` joined
+as the init text; the room is not the factory, and Zion does not own the make
+grammar. The init text is authoritative for the new actor's initial props,
+including `owner` and `parent`. To create a thing for someone else, set `owner`
+to that bare DID in the init text. To create a thing the avatar is holding, set
+`parent` to the avatar DID-URL; to create it in the room, set `parent` to the
+room DID-URL.
+
 `parent` is location. If a duck is inside a chest, the duck stores the chest as
 its parent. If that chest is in a room, the chest stores the room as its parent.
 Location is found by walking upward from child to parent until a room or other

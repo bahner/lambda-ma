@@ -107,6 +107,29 @@
 (define (reply-error msg text)
   (ma-reply! msg (list :error text)))
 
+(define (actor-prop-or-none key)
+  (let ((value (get-prop key)))
+    (if (and value (not (equal? value ""))) value "(none)")))
+
+(define (actor-owner) (actor-prop-or-none "owner"))
+(define (actor-parent) (actor-prop-or-none "parent"))
+
+(define (handle-actor-owner msg args)
+  (reply-ok-with msg (actor-owner)))
+
+(define (handle-actor-owner? msg args)
+  (if (null? args)
+      (reply-ok-with msg (string-append "Owner: " (actor-owner)))
+      (begin
+        (ma-send! (canonical-actor (car args)) (list :print (string-append "Owner: " (actor-owner))))
+        (reply-ok msg))))
+
+(define (handle-actor-parent msg args)
+  (reply-ok-with msg (actor-parent)))
+
+(define (handle-actor-parent? msg args)
+  (reply-ok-with msg (string-append "Parent: " (actor-parent))))
+
 (define (handle-actor-behaviour! msg args)
   (cond ((null? args)
          (let ((current (ma-get-config-key "behaviour")))
@@ -135,6 +158,14 @@
 (define (set-method! verb fn)
   (set! *methods* (cons (cons verb fn) *methods*)))
 
+(set-method! :owner handle-actor-owner)
+(set-method! :owner? handle-actor-owner?)
+(set-method! :parent handle-actor-parent)
+(set-method! :parent? handle-actor-parent?)
+(set-method! :where handle-actor-parent)
+(set-method! :where? handle-actor-parent)
+(set-method! :here handle-actor-parent)
+(set-method! :here? handle-actor-parent)
 (set-method! :behaviour handle-actor-behaviour!)
 
 (define (set-default-method! fn)

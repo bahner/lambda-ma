@@ -207,6 +207,21 @@ mod tests {
         sample_term_msg(from, to, Value::symbol(":test"))
     }
 
+    fn actor_env() -> Rc<Env> {
+        crate::state::load_from_cbor(&empty_state_cbor()).unwrap();
+        let env = new_root_env();
+        crate::state::install(&env);
+        crate::msg::install(&env);
+        eval_all(include_str!("../stdlib.ma"), &env).unwrap();
+        eval_all(include_str!("../actor.ma"), &env).unwrap();
+        eval_all(
+            "(define (ma-send! target term) #f) (define (ma-reply! msg term) #f) (define (ma-save-state!) #f)",
+            &env,
+        )
+        .unwrap();
+        env
+    }
+
     fn eval_str(src: &str, env: &Rc<Env>) -> String {
         match eval_all(src, env).unwrap() {
             Value::Str(s) => s.to_string(),
@@ -252,6 +267,59 @@ mod tests {
         let source = include_str!("../actor.ma");
         assert!(source.contains("(get-prop \"owner\")"));
         assert!(source.contains("(msg-from-owner? actor-owner msg)"));
+    }
+
+    #[test]
+    fn actor_introspection_methods_are_generic() {
+        let env = actor_env();
+        install_send_reply_recorders(&env);
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_msg("did:ma:owner", "did:ma:runtime#lamp")),
+        );
+
+        eval_all(
+            r#"
+            (set-prop! "owner" "did:ma:owner")
+            (set-prop! "parent" "did:ma:runtime#construct")
+            ((find-method :parent) '() msg)
+            ((find-method :parent?) '() msg)
+            ((find-method :where) '() msg)
+            ((find-method :here?) '() msg)
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        assert_eq!(eval_int("(get-prop \"reply-count\")", &env), 4);
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
+            Value::list(vec![
+                Value::symbol(":ok"),
+                Value::str("did:ma:runtime#construct")
+            ])
+        );
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:2\")", &env).unwrap(),
+            Value::list(vec![
+                Value::symbol(":ok"),
+                Value::str("Parent: did:ma:runtime#construct")
+            ])
+        );
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:3\")", &env).unwrap(),
+            Value::list(vec![
+                Value::symbol(":ok"),
+                Value::str("did:ma:runtime#construct")
+            ])
+        );
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:4\")", &env).unwrap(),
+            Value::list(vec![
+                Value::symbol(":ok"),
+                Value::str("did:ma:runtime#construct")
+            ])
+        );
     }
 
     #[test]
@@ -1570,6 +1638,70 @@ mod tests {
         assert_eq!(
             eval_all("(get-prop \"sent-term:1\")", &env).unwrap(),
             Value::list(vec![Value::symbol(":owner?"), Value::str("Shrugger")]),
+        );
+    }
+
+    #[test]
+    fn avatar_inventory_tracks_take_and_drop_tokens() {
+        let env = avatar_env();
+        let did = "did:ma:did";
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        crate::state::set_config(config.clone());
+
+        let avatar_id = eval_str(&format!(r#"(avatar-fragment "{did}")"#), &env);
+        config.insert("self".to_string(), format!("did:ma:runtime#{avatar_id}"));
+        config.insert("id".to_string(), avatar_id);
+        crate::state::set_config(config);
+
+        eval_all(
+            r#"
+            (set-prop! "did" "did:ma:did")
+            (set-prop! "room" "did:ma:runtime#room")
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        env.define(
+            Rc::from("take_msg"),
+            Value::Msg(sample_term_msg(
+                did,
+                "did:ma:runtime#avatar",
+                Value::list(vec![Value::symbol(":take"), Value::str("lamp")]),
+            )),
+        );
+        eval_all("(on-message take_msg)", &env).unwrap();
+
+        env.define(
+            Rc::from("inventory_msg"),
+            Value::Msg(sample_term_msg(
+                did,
+                "did:ma:runtime#avatar",
+                Value::list(vec![Value::symbol(":i")]),
+            )),
+        );
+        eval_all("(on-message inventory_msg)", &env).unwrap();
+
+        assert_eq!(
+            eval_all("(get-prop \"sent-term:2\")", &env).unwrap(),
+            Value::list(vec![Value::symbol(":print"), Value::str("Inventory:\nlamp")]),
+        );
+
+        env.define(
+            Rc::from("drop_msg"),
+            Value::Msg(sample_term_msg(
+                did,
+                "did:ma:runtime#avatar",
+                Value::list(vec![Value::symbol(":drop"), Value::str("lamp")]),
+            )),
+        );
+        eval_all("(on-message drop_msg)", &env).unwrap();
+        eval_all("(on-message inventory_msg)", &env).unwrap();
+
+        assert_eq!(
+            eval_all("(get-prop \"sent-term:4\")", &env).unwrap(),
+            Value::list(vec![Value::symbol(":print"), Value::str("Inventory: empty.")]),
         );
     }
 

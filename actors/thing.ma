@@ -86,6 +86,29 @@
   (let ((p (parent)))
     (and (not (equal? p "")) (same-actor? (msg-from msg) p))))
 
+(define (editable-prop? key)
+  (or (equal? key "name")
+      (equal? key "nick")
+      (equal? key "description")))
+
+(define (set-thing-prop! key value)
+  (if (equal? value "")
+      (del-prop! key)
+      (set-prop! key value))
+  (ma-save-state!))
+
+(define (handle-thing-prop! msg args)
+  (cond ((not (owner-caller? msg))
+         (reply-error msg "only owner may edit thing props"))
+        ((null? args)
+         (reply-error msg "usage: :prop <name|nick|description> [value]"))
+        ((not (editable-prop? (car args)))
+         (reply-error msg "editable thing props: name, nick, description"))
+        (else
+         (begin
+           (set-thing-prop! (car args) (join-words (cdr args)))
+           (reply-ok-with msg "prop updated")))))
+
 ; Public methods.
 (set-method! :about
   (lambda (args msg)
@@ -118,6 +141,10 @@
         (begin
           (ma-send! (canonical-actor (car args)) (list :print (string-append "Owner: " (if (owner) (owner) "(none)"))))
           (reply-ok msg)))))
+
+(set-method! :prop
+  (lambda (args msg)
+    (handle-thing-prop! msg args)))
 
 (set-method! :set-recovery-secret
   (lambda (args msg)

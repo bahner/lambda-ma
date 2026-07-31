@@ -248,6 +248,8 @@ help here              show what this room says is possible
 claim                  claim an unowned room
 owner                  show the current room owner
 owner did:ma:<target>  transfer the room to another bare DID
+make thing <.my.things.lamp
+                       create a thing through your avatar; the init string sets owner and location
 did? [kind] lamp       show the DID for a visible occupant, thing, or exit
 owner? lamp            show who owns a visible occupant, thing, or exit
 dig north to Name      create an exit and a new room
@@ -266,6 +268,13 @@ exit-message north source Someone slips through the green door.
 :prop description      reset the focused room description
 prop name Name         shorthand for setting the focused room name
 ```
+
+`make` is avatar-owned. Zion only expands the command text, and the current room
+is not the factory. The init text is the new actor's creation payload; set
+`owner` and `parent` there. Use `parent` equal to the avatar DID-URL when the
+avatar is holding the thing, or the room DID-URL when it should appear in the
+room immediately. A convenient flow is to edit the init text with
+`.my.things.lamp!edit`, then run `make thing <.my.things.lamp`.
 
 Digging an existing direction replaces that exit. Filling a direction removes
 the exit from the current room and asks the exit actor to terminate itself; it
