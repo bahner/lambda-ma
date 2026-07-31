@@ -227,7 +227,8 @@ All Scheme-backed lambda-ma actors inherit the generic actor method below from
 | --- | --- | --- |
 | `:behaviour` | `[ /ipfs/<cid> ]` | No args returns this actor's current per-entity behaviour reference, if any. With one IPFS reference, the caller must match the actor's `owner` prop; on success this queues a reload of this actor's own extra behaviour layer. |
 | `:owner` / `:owner?` | `[printer]` | Generic prop-based owner inspection. `:owner` returns the raw owner DID or `(none)`. `:owner?` returns display text, or sends it to `printer` via `:print` when a target is supplied. Kind-specific actors may override this with stricter policy. |
-| `:parent` / `:parent?` | none | Generic prop-based parent inspection. `:parent` returns the raw parent actor or `(none)`; `:parent?` returns display text. |
+| `:parent` / `:parent?` | none, or kind-specific `[ctx]` | Generic prop-based parent inspection. `:parent` returns the raw parent actor or `(none)`; `:parent?` returns display text. Movable actors override `:parent <ctx>` as a current-parent-gated parent push: the current parent sends a ctx map naming the new parent in `parent` (or `room` as a movement fallback), the child updates its authoritative parent state, then announces its own ctx to the new parent with `:children <ctx>`. The received ctx is intentionally accepted broadly for now; filtering can be tightened later. |
+| `:children` | `[ctx]` | With no args, owner-gated child-cache listing. With one ctx map, registers or updates a child cache entry when `ctx.actor` is a full DID-URL, `ctx` is an actor ctx, and `msg-from` matches `ctx.actor`. The child cache is derived state; the child's own `parent` prop remains authoritative. |
 | `:where` / `:where?` / `:here` / `:here?` | none | Aliases for generic parent inspection, so every actor has a minimal location answer even before kind-specific behaviour is loaded. |
 
 ### 5.1 root actor
@@ -253,6 +254,7 @@ Key verbs:
 | `:sync-ctx` | none | root only | Emits current `:ctx` to DID principal without changing avatar state. |
 | `:ctx` | `<ctx-map>` | current room, root, or controlling DID | With no args, returns current context to authorised callers. With a movement ctx-map, validates ordinary movement ctx, optionally prints `ctx.text`, then asks `ctx.room` to admit the avatar. The avatar forwards no new `:ctx` to the DID principal until the target room commits one. |
 | `:ctx?` | none | DID principal only | Returns context term. |
+| `:children` | `[ctx]` | no args: DID principal only; ctx: child actor only | `inventory` storage surface. With child ctx, accepts only sender-matching actor ctx and stores it in the avatar's child cache. With no args, returns the child-cache listing. |
 | `:help` | `[topic]` | DID principal only | `help here` asks room `:help`. |
 | `:nick` | `[nick]` | DID principal only | No args returns current nick; with args forwards to room. |
 | `:make` | `<kind> <init...>` | DID principal only | Requests a new actor of `kind` using `ma-create-actor` with no behaviour override and all args after `kind` joined as the creation payload. The avatar does not inject owner, parent, or room props; the init text owns initial state. `thing` is accepted as shorthand for `/ma/thing/0.0.1`. Creation is queued; the returned DID-URL may not be live until the runtime loads the entity. |
@@ -355,6 +357,8 @@ Key helpers and verbs:
 | Verb/helper | Args | Notes |
 | --- | --- | --- |
 | `agent-ctx` | none | Builds `ctx` with `kind=agent`, `name`, `nick`, `description`. |
+| `:children` | `[ctx]` | Inherited generic child-cache contract. Agents announce their own ctx to their current parent on lifecycle `:start`, after successful `:take` parent changes, and after committed room ctx movement. |
+| `:parent` | `[ctx]` | Current-parent-gated parent push. Accepts a ctx map from the current parent, reads the new parent from `ctx.parent` or `ctx.room`, updates local parent state, persists optional presentation fields from the ctx, and announces to the new parent with `:children <ctx>`. |
 | `:about` `:where?` `:owner` | none | Generic state summary. |
 | `:exits?` | none | Asks the current parent room for exits and stores the printed reply as `last-message`. |
 | `:go` | `<direction>` | Free-agent or owner movement through a named room exit; no exit creation. |
@@ -392,6 +396,8 @@ Purpose: movable passive object with owner/parent authority.
 | `:about` | none | Name, description, owner, parent summary. |
 | `:where?` | none | Current parent. |
 | `:owner` | none | Current owner. |
+| `:children` | `[ctx]` | Inherited generic child-cache contract. Things announce their own ctx to their current parent on lifecycle `:start` and after successful `:take`/`:drop` parent changes. |
+| `:parent` | `[ctx]` | Current-parent-gated parent push. Accepts a ctx map from the current parent, reads the new parent from `ctx.parent` or `ctx.room`, updates local parent state, persists optional presentation fields from the ctx, and announces to the new parent with `:children <ctx>`. |
 | `:prop` | `<name\|nick\|description> [value]` | Owner only. Sets an editable presentation prop; no value resets the prop to the kind default. Does not edit `owner` or `parent`. |
 | `:set-recovery-secret` | `[text]` | Owner only. |
 | `:claim` | `<secret>` | Recovery-path ownership claim. |

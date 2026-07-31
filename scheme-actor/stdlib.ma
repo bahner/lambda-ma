@@ -57,6 +57,7 @@
        (ctx-optional-text-valid? ctx "avatar")
        (ctx-optional-text-valid? ctx "did")
        (ctx-optional-text-valid? ctx "root")
+      (ctx-optional-text-valid? ctx "parent")
        (ctx-optional-text-valid? ctx "room")
        (ctx-optional-text-valid? ctx "name")
        (ctx-optional-text-valid? ctx "nick")

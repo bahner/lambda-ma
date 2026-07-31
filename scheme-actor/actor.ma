@@ -114,6 +114,52 @@
 (define (actor-owner) (actor-prop-or-none "owner"))
 (define (actor-parent) (actor-prop-or-none "parent"))
 
+(define (children-map)
+  (prop-map "children"))
+
+(define (set-children-map! children)
+  (set-prop-map! "children" children)
+  (ma-save-state!))
+
+(define (child-ctx-valid? ctx)
+  (and (actor-ctx? ctx)
+       (valid-did-url? (ctx-text ctx "actor"))))
+
+(define (remember-child! ctx)
+  (set-children-map! (map-set (children-map) (canonical-actor (ctx-text ctx "actor")) ctx)))
+
+(define (child-label ctx)
+  (let ((nick (ctx-text ctx "nick"))
+        (name (ctx-text ctx "name"))
+        (actor (ctx-text ctx "actor")))
+    (cond ((non-empty-string? nick) nick)
+          ((non-empty-string? name) name)
+          (else actor))))
+
+(define (child-line entry)
+  (let ((actor (car entry))
+        (ctx (cdr entry)))
+    (string-append (child-label ctx) " = " (canonical-actor actor))))
+
+(define (actor-entry-lines xs)
+  (cond ((null? xs) "")
+        ((null? (cdr xs)) (car xs))
+        (else (string-append (car xs) "\n" (actor-entry-lines (cdr xs))))))
+
+(define (child-lines entries)
+  (cond ((null? entries) '())
+        (else (cons (child-line (car entries)) (child-lines (cdr entries))))))
+
+(define (children-text)
+  (let ((lines (child-lines (map->alist (children-map)))))
+    (if (null? lines)
+        "Children: none."
+        (string-append "Children:\n" (actor-entry-lines lines)))))
+
+(define (owner-authorised? msg)
+  (let ((owner (get-prop "owner")))
+    (and owner (msg-from-owner? owner msg))))
+
 (define (handle-actor-owner msg args)
   (reply-ok-with msg (actor-owner)))
 
@@ -129,6 +175,22 @@
 
 (define (handle-actor-parent? msg args)
   (reply-ok-with msg (string-append "Parent: " (actor-parent))))
+
+(define (handle-actor-children args msg)
+  (cond ((null? args)
+         (if (owner-authorised? msg)
+             (reply-ok-with msg (children-text))
+             (reply-error msg "only owner may list children")))
+        ((not (null? (cdr args)))
+         (reply-error msg "usage: :children [ctx]"))
+        ((not (child-ctx-valid? (car args)))
+         (reply-error msg "children ctx must include actor, kind, name, nick, description"))
+        ((not (same-actor? (msg-from msg) (ctx-text (car args) "actor")))
+         (reply-error msg "children ctx actor must match sender"))
+        (else
+         (begin
+           (remember-child! (car args))
+           (reply-ok msg)))))
 
 (define (handle-actor-behaviour! msg args)
   (cond ((null? args)
@@ -162,6 +224,7 @@
 (set-method! :owner? handle-actor-owner?)
 (set-method! :parent handle-actor-parent)
 (set-method! :parent? handle-actor-parent?)
+(set-method! :children handle-actor-children)
 (set-method! :where handle-actor-parent)
 (set-method! :where? handle-actor-parent)
 (set-method! :here handle-actor-parent)

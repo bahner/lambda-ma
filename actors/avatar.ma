@@ -179,15 +179,21 @@
   (ma-send! (did) (list :print text)))
 
 (define (inventory-map)
-  (prop-map "inventory"))
+  (children-map))
 
 (define (set-inventory-map! m)
-  (set-prop-map! "inventory" m)
-  (ma-save-state!))
+  (set-children-map! m))
 
 (define (remember-inventory! token actor)
   (if (and (non-empty-string? token) (non-empty-string? actor))
-      (set-inventory-map! (map-set (inventory-map) token (canonical-actor actor)))
+      (let ((ctx (map-set
+                   (map-set
+                     (map-set
+                       (map-set (make-map) "actor" (canonical-actor actor))
+                       "kind" "thing")
+                     "name" token)
+                   "nick" token)))
+        (set-inventory-map! (map-set (inventory-map) (canonical-actor actor) ctx)))
       #f))
 
 (define (forget-inventory! token)
@@ -201,11 +207,11 @@
         (else (string-append (car xs) "\n" (entry-lines (cdr xs))))))
 
 (define (inventory-line entry)
-  (let ((token (car entry))
-        (actor (cdr entry)))
-    (if (equal? token actor)
-        token
-        (string-append token " = " (canonical-actor actor)))))
+  (let ((actor (car entry))
+        (label (child-label (cdr entry))))
+    (if (equal? actor label)
+        label
+        (string-append label " = " (canonical-actor actor)))))
 
 (define (inventory-lines entries)
   (cond ((null? entries) '())
@@ -216,6 +222,22 @@
     (if (null? lines)
         "Inventory: empty."
         (string-append "Inventory:\n" (entry-lines lines)))))
+
+(define (handle-avatar-children args msg)
+  (cond ((null? args)
+         (require-did msg
+           (lambda ()
+             (ma-reply! msg (list :ok (children-text))))))
+        ((not (null? (cdr args)))
+         (reply-error msg "usage: :children [ctx]"))
+        ((not (child-ctx-valid? (car args)))
+         (reply-error msg "children ctx must include actor, kind, name, nick, description"))
+        ((not (same-actor? (msg-from msg) (ctx-text (car args) "actor")))
+         (reply-error msg "children ctx actor must match sender"))
+        (else
+         (begin
+           (remember-child! (car args))
+           (reply-ok msg)))))
 
 (define (make-kind kind)
   (if (equal? kind "thing") THING_KIND kind))
@@ -477,6 +499,9 @@
 
 (set-method! :make
   avatar-make)
+
+(set-method! :children
+  handle-avatar-children)
 
 (set-method! :inventory
   (lambda (args msg)

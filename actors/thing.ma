@@ -15,6 +15,10 @@
   (let ((d (get-prop "description")))
     (if d d "A small movable thing.")))
 
+(define (nick)
+  (let ((n (get-prop "nick")))
+    (if n n (name))))
+
 (define (recovery-secret) (get-prop "recovery-secret"))
 
 (define (set-owner! did)
@@ -78,6 +82,51 @@
   (and (actor-ctx? ctx)
        (valid-transfer-kind? (ctx-text ctx "kind"))))
 
+(define (thing-ctx)
+  (map-set
+    (map-set
+      (map-set
+        (map-set
+          (map-set
+            (map-set (make-map) "actor" (canonical-actor (self)))
+            "kind" "thing")
+          "parent" (parent))
+        "name" (name))
+      "nick" (nick))
+    "description" (description)))
+
+(define (announce-parent!)
+  (let ((p (parent)))
+    (if (equal? p "")
+        #f
+        (ma-send! (canonical-actor p) (list :children (thing-ctx))))))
+
+(define (parent-target-from-ctx ctx)
+  (let ((target (ctx-text ctx "parent")))
+    (if (non-empty-string? target)
+        target
+        (ctx-text ctx "room"))))
+
+(define (valid-parent-ctx? ctx)
+  (let ((target-parent (parent-target-from-ctx ctx)))
+    (and (map? ctx)
+         (valid-parent-ref? target-parent))))
+
+(define (set-prop-from-ctx! ctx key)
+  (let ((value (ctx-text ctx key)))
+    (if (non-empty-string? value)
+        (set-prop! key value)
+        #f)))
+
+(define (apply-parent-ctx! ctx)
+  (begin
+    (set-parent! (parent-target-from-ctx ctx))
+    (set-prop-from-ctx! ctx "name")
+    (set-prop-from-ctx! ctx "nick")
+    (set-prop-from-ctx! ctx "description")
+    (ma-save-state!)
+    (announce-parent!)))
+
 (define (owner-or-unowned? did)
   (let ((o (owner)))
     (or (not o) (equal? o did))))
@@ -122,6 +171,23 @@
 (set-method! :where?
   (lambda (args msg)
     (reply-ok-with msg (if (equal? (parent) "") "(none)" (parent)))))
+
+(set-method! :parent
+  (lambda (args msg)
+    (cond ((null? args)
+           (if (owner-caller? msg)
+               (reply-ok-with msg (if (equal? (parent) "") "(none)" (parent)))
+               (reply-error msg "only owner may inspect parent")))
+          ((not (null? (cdr args)))
+           (reply-error msg "usage: :parent [ctx]"))
+          ((not (caller-is-parent? msg))
+           (reply-error msg "parent ctx must come from current parent"))
+          ((not (valid-parent-ctx? (car args)))
+           (reply-error msg "parent ctx must include target parent"))
+          (else
+           (begin
+             (apply-parent-ctx! (car args))
+             (reply-ok msg))))))
 
 (set-method! :report-parent
   (lambda (args msg)
@@ -195,6 +261,7 @@
                (if (and (not (null? (cdr rest))) (valid-transfer-ctx? (car (cdr rest))))
                    (set-claim! did (car (cdr rest)))
                    #f)
+               (announce-parent!)
                  (reply-ok-with msg "taken")))))))
 
 (set-method! :drop
@@ -222,4 +289,12 @@
                (if (and (not (null? (cdr rest))) (valid-transfer-ctx? (car (cdr rest))))
                    (set-claim! did (car (cdr rest)))
                    #f)
+               (announce-parent!)
                  (reply-ok-with msg "dropped")))))))
+
+(define (on-signal term)
+  (cond ((equal? (verb-of term) :start)
+         (announce-parent!))
+        ((equal? (verb-of term) :shutdown)
+         (ma-save-state!))
+        (else #f)))

@@ -45,6 +45,12 @@
   (set-prop! "last-message" text)
   (ma-save-state!))
 
+(define (announce-parent!)
+  (let ((p (parent)))
+    (if (equal? p "")
+        #f
+        (ma-send! (canonical-actor p) (list :children (agent-ctx))))))
+
 (define (enter room)
   (begin
     (set-pending-room! (canonical-actor room))
@@ -150,10 +156,40 @@
   (map-set
     (map-set
       (map-set
-        (map-set (make-map) "kind" "agent")
+        (map-set
+          (map-set
+            (map-set (make-map) "actor" (canonical-actor (self)))
+            "kind" "agent")
+          "parent" (parent))
         "name" (name))
       "nick" (nick))
     "description" (description)))
+
+(define (parent-target-from-ctx ctx)
+  (let ((target (ctx-text ctx "parent")))
+    (if (non-empty-string? target)
+        target
+        (ctx-text ctx "room"))))
+
+(define (valid-parent-ctx? ctx)
+  (let ((target-parent (parent-target-from-ctx ctx)))
+    (and (map? ctx)
+         (valid-parent-ref? target-parent))))
+
+(define (set-prop-from-ctx! ctx key)
+  (let ((value (ctx-text ctx key)))
+    (if (non-empty-string? value)
+        (set-prop! key value)
+        #f)))
+
+(define (apply-parent-ctx! ctx)
+  (begin
+    (set-parent! (parent-target-from-ctx ctx))
+    (set-prop-from-ctx! ctx "name")
+    (set-prop-from-ctx! ctx "nick")
+    (set-prop-from-ctx! ctx "description")
+    (ma-save-state!)
+    (announce-parent!)))
 
 (define (send-parent-room! msg term)
   (let ((p (parent)))
@@ -250,7 +286,9 @@
             ((and (valid-room-ctx? ctx)
                (same-actor? (msg-from msg) (ctx-alist-ref ctx :room))
                (authorised-room-ctx? (ctx-alist-ref ctx :room)))
-             (set-parent! (ctx-alist-ref ctx :room)))
+             (begin
+               (set-parent! (ctx-alist-ref ctx :room))
+               (announce-parent!)))
             ((and (valid-move-ctx? ctx)
                   (or (caller-is-parent? msg) (owner-caller? msg)))
              (begin
@@ -316,6 +354,7 @@
                (if (and (not (null? (cdr rest))) (valid-transfer-ctx? (car (cdr rest))))
                    (set-claim! did (car (cdr rest)))
                    #f)
+               (announce-parent!)
                  (reply-ok-with msg "taken")))))))
 
 (set-method! :drop
@@ -344,3 +383,27 @@
                    (set-claim! did (car (cdr rest)))
                    #f)
                  (reply-ok-with msg "dropped")))))))
+
+(set-method! :parent
+  (lambda (args msg)
+    (cond ((null? args)
+           (if (owner-caller? msg)
+               (reply-ok-with msg (if (equal? (parent) "") "(none)" (parent)))
+               (reply-error msg "only owner may inspect parent")))
+          ((not (null? (cdr args)))
+           (reply-error msg "usage: :parent [ctx]"))
+          ((not (caller-is-parent? msg))
+           (reply-error msg "parent ctx must come from current parent"))
+          ((not (valid-parent-ctx? (car args)))
+           (reply-error msg "parent ctx must include target parent"))
+          (else
+           (begin
+             (apply-parent-ctx! (car args))
+             (reply-ok msg))))))
+
+(define (on-signal term)
+  (cond ((equal? (verb-of term) :start)
+         (announce-parent!))
+        ((equal? (verb-of term) :shutdown)
+         (ma-save-state!))
+        (else #f)))
