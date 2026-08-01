@@ -1,6 +1,8 @@
 ; Generic free movable Scheme agent.
 ; Concrete agents extend this behaviour and keep their own parent state.
 
+(define AGENT_PROTOCOL "/ma/scheme/agent/0.0.1")
+
 ; Persistent state accessors.
 (define (owner) (get-prop "owner"))
 (define (parent)
@@ -49,12 +51,12 @@
   (let ((p (parent)))
     (if (equal? p "")
         #f
-        (ma-send! (canonical-actor p) (list :children (agent-ctx))))))
+        (ma-send! (canonical-actor p) (list :child (agent-ctx))))))
 
 (define (enter room)
   (begin
     (set-pending-room! (canonical-actor room))
-    (ma-send! (canonical-actor room) (list :enter (agent-ctx)))))
+    (ma-send! (canonical-actor room) (list :enter (agent-ctx-for-parent room)))))
 
 (define (leave-current-parent!)
   (let ((p (parent)))
@@ -82,6 +84,10 @@
 (define (owner-caller? msg)
   (let ((o (owner)))
     (and o (equal? (msg-from msg) o))))
+
+(define (owner-did? did)
+  (let ((o (owner)))
+    (and o (equal? did o))))
 
 (define (movement-caller? msg)
   (or
@@ -141,7 +147,9 @@
 (define (valid-transfer-kind? kind)
   (or (equal? kind "avatar")
       (equal? kind "thing")
-      (equal? kind "agent")))
+  (equal? kind "agent")
+  (equal? kind "container")
+  (equal? kind "actor")))
 
 (define (valid-transfer-ctx? ctx)
   (and (actor-ctx? ctx)
@@ -151,19 +159,30 @@
   (let ((p (parent)))
     (and (not (equal? p "")) (same-actor? (msg-from msg) p))))
 
+(define (orphan-owner-recovery? did)
+  (and (equal? (parent) "") (owner-did? did)))
+
+(define (transfer-caller-authorised? did msg)
+  (or (caller-is-parent? msg) (orphan-owner-recovery? did)))
+
 ; Room context and movement helpers.
-(define (agent-ctx)
+(define (agent-ctx-for-parent target-parent)
   (map-set
     (map-set
       (map-set
         (map-set
           (map-set
-            (map-set (make-map) "actor" (canonical-actor (self)))
-            "kind" "agent")
-          "parent" (parent))
+            (map-set
+              (map-set (make-map) "actor" (canonical-actor (self)))
+              "kind" "agent")
+            "protocol" AGENT_PROTOCOL)
+          "parent" (canonical-actor target-parent))
         "name" (name))
       "nick" (nick))
     "description" (description)))
+
+(define (agent-ctx)
+  (agent-ctx-for-parent (parent)))
 
 (define (parent-target-from-ctx ctx)
   (let ((target (ctx-text ctx "parent")))
@@ -183,13 +202,21 @@
         #f)))
 
 (define (apply-parent-ctx! ctx)
+  (let ((old-parent (parent))
+        (target-parent (parent-target-from-ctx ctx)))
   (begin
-    (set-parent! (parent-target-from-ctx ctx))
+    (set-parent! target-parent)
     (set-prop-from-ctx! ctx "name")
     (set-prop-from-ctx! ctx "nick")
     (set-prop-from-ctx! ctx "description")
     (ma-save-state!)
-    (announce-parent!)))
+    (if (and (non-empty-string? old-parent)
+             (not (same-actor? old-parent target-parent)))
+        (ma-send! (canonical-actor old-parent) (list :child (agent-ctx)))
+        #f))))
+
+(define (propose-parent-change! target-parent)
+  (ma-send! (canonical-actor target-parent) (list :child (agent-ctx-for-parent target-parent))))
 
 (define (send-parent-room! msg term)
   (let ((p (parent)))
@@ -203,7 +230,6 @@
   (if (and (not (movement-pending?))
            (same-actor? source-room (parent)))
       (begin
-        (leave-current-parent!)
         (enter (canonical-actor target-room)))
       #f))
 
@@ -286,9 +312,14 @@
             ((and (valid-room-ctx? ctx)
                (same-actor? (msg-from msg) (ctx-alist-ref ctx :room))
                (authorised-room-ctx? (ctx-alist-ref ctx :room)))
-             (begin
-               (set-parent! (ctx-alist-ref ctx :room))
-               (announce-parent!)))
+             (let ((old-parent (parent))
+                   (target-parent (ctx-alist-ref ctx :room)))
+               (begin
+                 (set-parent! target-parent)
+                 (if (and (non-empty-string? old-parent)
+                          (not (same-actor? old-parent target-parent)))
+                     (ma-send! (canonical-actor old-parent) (list :child (agent-ctx)))
+                     #f))))
             ((and (valid-move-ctx? ctx)
                   (or (caller-is-parent? msg) (owner-caller? msg)))
              (begin
@@ -332,7 +363,8 @@
   (lambda (args msg)
     (let ((did (effective-did args msg))
           (rest (effective-args args msg)))
-      (cond ((not (caller-is-parent? msg))
+  (cond ((handle-parent-take did rest msg) #t)
+    ((not (transfer-caller-authorised? did msg))
              (reply-error msg "take must be requested by current parent"))
             ((not (valid-did? did))
              (reply-error msg "take requires DID with did:ma: prefix"))
@@ -345,23 +377,21 @@
             ((and (not (null? (cdr rest))) (not (null? (cdr (cdr rest)))))
              (reply-error msg "take accepts at most one optional ctx-map"))
             ((and (not (null? (cdr rest))) (not (valid-transfer-ctx? (car (cdr rest)))))
-             (reply-error msg "ctx-map must include non-empty kind, name, nick, description"))
+             (reply-error msg "ctx-map must include non-empty parent, kind, protocol, name, nick, description"))
             (else
              (let ((target-parent (car rest)))
                (if (not (owner)) (set-owner! did) #f)
-               (leave-current-parent!)
-               (set-parent! target-parent)
                (if (and (not (null? (cdr rest))) (valid-transfer-ctx? (car (cdr rest))))
                    (set-claim! did (car (cdr rest)))
                    #f)
-               (announce-parent!)
-                 (reply-ok-with msg "taken")))))))
+               (propose-parent-change! target-parent)
+                 (reply-ok-with msg "take requested")))))))
 
 (set-cmd-method! :drop
   (lambda (args msg)
     (let ((did (effective-did args msg))
           (rest (effective-args args msg)))
-      (cond ((not (caller-is-parent? msg))
+      (cond ((not (transfer-caller-authorised? did msg))
              (reply-error msg "drop must be requested by current parent"))
             ((not (valid-did? did))
              (reply-error msg "drop requires DID with did:ma: prefix"))
@@ -374,15 +404,15 @@
             ((and (not (null? (cdr rest))) (not (null? (cdr (cdr rest)))))
              (reply-error msg "drop accepts at most one optional ctx-map"))
             ((and (not (null? (cdr rest))) (not (valid-transfer-ctx? (car (cdr rest)))))
-             (reply-error msg "ctx-map must include non-empty kind, name, nick, description"))
+             (reply-error msg "ctx-map must include non-empty parent, kind, protocol, name, nick, description"))
             (else
              (let ((target-parent (car rest)))
                (if (not (owner)) (set-owner! did) #f)
-               (enter target-parent)
                (if (and (not (null? (cdr rest))) (valid-transfer-ctx? (car (cdr rest))))
                    (set-claim! did (car (cdr rest)))
                    #f)
-                 (reply-ok-with msg "dropped")))))))
+               (enter target-parent)
+                 (reply-ok-with msg "drop requested")))))))
 
 (set-meta-method! :parent
   (lambda (args msg)
@@ -392,10 +422,10 @@
                (reply-error msg "only owner may inspect parent")))
           ((not (null? (cdr args)))
            (reply-error msg "usage: :parent [ctx]"))
-          ((not (caller-is-parent? msg))
-           (reply-error msg "parent ctx must come from current parent"))
           ((not (valid-parent-ctx? (car args)))
            (reply-error msg "parent ctx must include target parent"))
+          ((not (same-actor? (msg-from msg) (parent-target-from-ctx (car args))))
+           (reply-error msg "parent ctx must come from target parent"))
           (else
            (begin
              (apply-parent-ctx! (car args))

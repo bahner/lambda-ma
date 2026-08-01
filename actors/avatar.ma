@@ -163,6 +163,114 @@
 (define (send-room-as-did verb args)
   (send-room verb (cons (did) args)))
 
+(define (take-source args)
+  (if (and (not (null? args))
+           (not (null? (cdr args)))
+           (equal? (car (cdr args)) "from")
+           (not (null? (cdr (cdr args))))
+           (null? (cdr (cdr (cdr args)))))
+   (let* ((token (car (cdr (cdr args))))
+       (entry (inventory-ref token)))
+     (if entry (inventory-entry-actor entry) token))
+      (room)))
+
+(define (take-token args)
+  (if (null? args) #f (car args)))
+
+(define (take-has-source? args)
+  (and (not (null? args))
+       (not (null? (cdr args)))
+       (equal? (car (cdr args)) "from")
+       (not (null? (cdr (cdr args))))
+       (null? (cdr (cdr (cdr args))))))
+
+(define (take-args-valid? args)
+  (or (and (not (null? args)) (null? (cdr args)))
+      (and (not (null? args))
+           (not (null? (cdr args)))
+           (equal? (car (cdr args)) "from")
+           (not (null? (cdr (cdr args))))
+           (null? (cdr (cdr (cdr args)))))))
+
+(define (send-take args)
+  (let ((source (take-source args))
+        (token (take-token args)))
+  (cond ((and (valid-did-url? token) (not (take-has-source? args)))
+     (ma-send! (canonical-actor token) (list :take (did) (avatar-for-did (did)))))
+      (source
+         (ma-send! (canonical-actor source) (list :take (did) token)))
+      (else
+       (send-did-text "You are nowhere.")))))
+
+(define (put-args-valid? args)
+  (and (not (null? args))
+       (not (null? (cdr args)))
+       (equal? (car (cdr args)) "in")
+       (not (null? (cdr (cdr args))))
+       (null? (cdr (cdr (cdr args))))))
+
+(define (put-item-token args)
+  (if (null? args) #f (car args)))
+
+(define (put-container-token args)
+  (if (or (null? args) (null? (cdr args)) (null? (cdr (cdr args))))
+      #f
+      (car (cdr (cdr args)))))
+
+(define (send-put-via-room args item-ctx)
+  (if item-ctx
+      (send-room-as-did :put (list-append args (list item-ctx)))
+      (send-room-as-did :put args)))
+
+(define (put-carried! did item-actor container-actor item-ctx)
+  (ma-send! (canonical-actor item-actor) (list :drop did (canonical-actor container-actor) item-ctx)))
+
+(define (put-visible! did item-actor container-actor item-ctx)
+  (begin
+    (ma-send! (canonical-actor item-actor) (list :drop did (canonical-actor container-actor) item-ctx))))
+
+(define (send-put args)
+  (let* ((item-token (put-item-token args))
+         (container-token (put-container-token args))
+         (item-entry (inventory-ref item-token))
+         (container-entry (inventory-ref container-token))
+         (item-actor (if item-entry (inventory-entry-actor item-entry) #f))
+         (container-actor (if container-entry (inventory-entry-actor container-entry) #f))
+         (item-ctx (if item-entry (cdr item-entry) #f)))
+    (cond ((and item-actor container-actor)
+           (if (same-actor? item-actor container-actor)
+               (send-did-text "You cannot put something inside itself.")
+               (if (child-ctx-valid? item-ctx)
+                   (put-carried! (did) item-actor container-actor item-ctx)
+                   (send-did-text (string-append "Still waiting for carried item details: " item-token)))))
+          ((and item-entry (not (child-ctx-valid? item-ctx)))
+           (send-did-text (string-append "Still waiting for carried item details: " item-token)))
+          (else
+           (send-put-via-room args item-ctx)))))
+
+(define (handle-put-thing args msg)
+  (if (room? msg)
+      (if (or (null? args)
+              (null? (cdr args))
+              (null? (cdr (cdr args)))
+              (null? (cdr (cdr (cdr args)))))
+          #f
+          (let* ((did (car args))
+                 (item-actor (car (cdr args)))
+                 (container-actor (car (cdr (cdr args))))
+                 (item-ctx (car (cdr (cdr (cdr args)))))
+                 (carried-entry (inventory-ref item-actor)))
+            (cond ((not (child-ctx-valid? item-ctx)) #f)
+                  ((not (valid-did-url? item-actor)) #f)
+                  ((not (valid-did-url? container-actor)) #f)
+                  ((same-actor? item-actor container-actor)
+                   (send-did-text "You cannot put something inside itself."))
+                  (carried-entry
+                   (put-carried! did item-actor container-actor item-ctx))
+                  (else
+                   (put-visible! did item-actor container-actor item-ctx)))))
+      #f))
+
 (define (avatar-look args msg)
   (require-did msg
     (lambda ()
@@ -283,15 +391,20 @@
            (lambda ()
              (ma-reply! msg (list :ok (children-text))))))
         ((not (null? (cdr args)))
-         (reply-error msg "usage: :children [ctx]"))
+          (reply-error msg "usage: :child [ctx]"))
         ((not (child-ctx-valid? (car args)))
-         (reply-error msg "children ctx must include actor, kind, name, nick, description"))
+          (reply-error msg "child ctx must include actor, parent, kind, protocol, name, nick, description"))
         ((not (same-actor? (msg-from msg) (ctx-text (car args) "actor")))
-         (reply-error msg "children ctx actor must match sender"))
+          (reply-error msg "child ctx actor must match sender"))
+        ((not (same-actor? (ctx-text (car args) "parent") (local-self)))
+         (begin
+           (forget-inventory-ctx-labels! (car args))
+           (reply-ok msg)))
         (else
          (begin
            (forget-inventory-ctx-labels! (car args))
            (remember-child! (car args))
+           (ma-send! (canonical-actor (ctx-text (car args) "actor")) (list :parent (car args)))
            (reply-ok msg)))))
 
 (define (make-kind kind)
@@ -332,6 +445,7 @@
     "  l                 alias for look\n"
     "  look <exit>       inspect an exit\n"
     "  exits?            list exits\n"
+    "  here?             show where you are\n"
     "  who?              show who is here\n"
     "  things?           list local non-avatar occupants\n"
     "  did? [kind] <name> show the DID for a visible occupant, thing, or exit\n"
@@ -339,7 +453,8 @@
     "  make <kind> <init...> create an actor from init text\n"
     "  inventory         show what you are carrying\n"
     "  i                 alias for inventory\n"
-    "  take <thing>      ask a local occupant to bind to you\n"
+    "  take <thing> [from <parent>] pick something up\n"
+    "  put <thing> in <container> put a thing into a visible container\n"
     "  drop <thing>      ask a carried occupant to enter this room\n"
     "  where? <thing>    ask where a local occupant says it is\n"
     "  say <text>        speak here\n"
@@ -498,6 +613,16 @@
         (send-room :things? '())
         (reply-ok-silent msg)))))
 
+(set-cmd-method! :here?
+  (lambda (args msg)
+    (require-did msg
+      (lambda ()
+        (let ((current (room)))
+          (if current
+              (send-did-text (string-append "You are in " (qualified-actor current) "."))
+              (send-did-text "You are nowhere.")))
+        (reply-ok-silent msg)))))
+
 (set-rpc-method! :did?
   (lambda (args msg)
     (require-did msg
@@ -541,7 +666,7 @@
 (set-cmd-method! :make
   avatar-make)
 
-(set-meta-method! :children
+(set-meta-method! :child
   handle-avatar-children)
 
 (set-cmd-method! :inventory
@@ -601,10 +726,22 @@
   (lambda (args msg)
     (require-did msg
       (lambda ()
-        (if (null? args)
-            #f
-            (remember-inventory! (car args) (car args)))
-        (send-room-as-did :take args)
+        (if (not (take-args-valid? args))
+            (send-did-text "Usage: take <thing> [from <parent>]")
+            (begin
+              (if (valid-did-url? (take-token args))
+                  #f
+                  (remember-inventory! (take-token args) (take-token args)))
+              (send-take args)))
+        (reply-ok-silent msg)))))
+
+(set-cmd-method! :put
+  (lambda (args msg)
+    (require-did msg
+      (lambda ()
+        (if (not (put-args-valid? args))
+            (send-did-text "Usage: put <thing> in <container>")
+            (send-put args))
         (reply-ok-silent msg)))))
 
 (set-cmd-method! :drop
@@ -618,7 +755,6 @@
                    (ctx (if entry (cdr entry) #f)))
               (if actor
                   (begin
-                    (forget-inventory! actor)
                     (send-room-as-did :drop (list actor ctx)))
                   (send-did-text (string-append "Unknown carried agent or thing: " (car args))))))
         (reply-ok-silent msg)))))
@@ -651,6 +787,10 @@
           (ma-send! (canonical-actor thing) (list :drop did (canonical-actor target-parent) ctx))
           (ma-send! (canonical-actor thing) (list :drop did (canonical-actor target-parent))))))
         #f)))
+
+(set-internal-rpc-method! :put-thing
+  (lambda (args msg)
+    (handle-put-thing args msg)))
 
 ; Unknown DID commands are treated as room verbs so room-specific behaviours
 ; can add commands without changing the avatar proxy.

@@ -245,6 +245,7 @@ Useful room-building commands:
 ```text
 help                   show avatar/avatar-mediated commands
 help here              show what this room says is possible
+here?                  show where you are
 claim                  claim an unowned room
 :owner?                show the current room owner
 owner did:ma:<target>  transfer the room to another bare DID through your avatar

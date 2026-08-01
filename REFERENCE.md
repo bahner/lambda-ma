@@ -22,13 +22,14 @@ all ma worlds.
 
 1. Routing contract
 2. Enter contract
-3. Authority model
-4. Movement and arrival flows
-5. Actor interfaces
-6. State keys and authority boundaries
-7. Wire/value conventions
-8. Build and bootstrap quick reference
-9. Cross references
+3. Actor ctx agreement
+4. Authority model
+5. Movement and arrival flows
+6. Actor interfaces
+7. State keys and authority boundaries
+8. Wire/value conventions
+9. Build and bootstrap quick reference
+10. Cross references
 
 ---
 
@@ -36,7 +37,7 @@ all ma worlds.
 
 Zion focus shorthand is split by leading colon:
 
-- No leading `:`: avatar-mediated avatar-mediated command.
+- No leading `:`: avatar-mediated command.
 - Leading `:`: direct method on focused room/target.
 
 Examples:
@@ -90,7 +91,9 @@ kind is an avatar.
 
 Direct non-avatar occupants MUST identify themselves with a strict `ctx` map:
 
+- `parent`
 - `kind` (`agent` or `thing`)
+- `protocol`
 - `name`
 - `nick`
 - `description`
@@ -137,34 +140,152 @@ Client-side focus/context commit is acknowledgment-driven.
 
 ---
 
-## 3. Authority model
+## 3. Actor ctx agreement
 
-### 3.1 Rooms
+Actor `ctx` is the portable relation contract for lambda-ma world actors. It is
+not the actor's private state. Private state remains actor-owned persistence;
+ctx is a map of relation attributes and self-declared presentation hints that
+can be sent to parents, rooms, containers, clients, and other actors.
+
+Ctx has no internal lifecycle state. Words such as proposed, accepted, or
+current describe the message role and actor decision, not fields inside ctx.
+
+### 3.1 Base actor ctx shape
+
+Base actor ctx MUST contain these fields:
+
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `parent` | DID-URL | Immediate parent, location, or container actor. |
+| `kind` | text | Broad actor category. |
+| `protocol` | text | Precise versioned behaviour protocol. |
+
+The initial `kind` vocabulary is:
+
+- `thing`
+- `agent`
+- `avatar`
+- `room`
+- `container`
+- `actor`
+
+`kind` and `protocol` are related but not equivalent. `kind` is a small,
+stable, broad category used for initial presentation and local policy.
+`protocol` identifies the precise behaviour contract, for example
+`/ma/container/0.0.1`.
+
+Recommended presentation hints:
+
+- `name`
+- `nick`
+- `description`
+
+Presentation hints are self-declared and non-rule-bearing. They let rooms,
+parents, and containers populate local presentation without asking the actor
+first. They MUST NOT grant authority or encode rule-sensitive state such as hit
+points, damage, access rights, or ownership.
+
+Flow-specific ctx attributes MAY be present, including `actor`, `avatar`,
+`root`, `room`, `text`, `exit`, and `direction`. Unknown keys MUST NOT cause
+rejection by themselves.
+
+All actor references crossing actor, client, or runtime message boundaries MUST
+be full DIDs or DID-URLs. Runtime-local `#fragment` shorthand MUST NOT be sent
+or persisted in ctx.
+
+### 3.2 Ctx truth and category policy
+
+The actor described by ctx is the only authority that can make that ctx current
+for itself.
+
+A ctx announcement is self-authenticating when `msg.from` is the actor described
+by the ctx. Receivers may trust that the actor is presenting itself with those
+relation and category attributes. A ctx forwarded by any other actor is input to
+a decision, not the described actor's current ctx.
+
+`kind` is not capability-bearing by itself. A room, parent, or container MAY use
+a self-authenticating `kind` for presentation, but local policy decides what
+that category means. Receivers MAY accept, ignore, reinterpret, or reject a ctx
+category according to their own rules.
+
+Avatar ctx is authoritative as avatar self-description only when sent by the
+avatar actor itself. A bare DID principal sending `kind = "avatar"` is not
+equivalent to the deterministic avatar actor sending that ctx.
+
+### 3.3 Actor tree and DID boundary
+
+Only actors are nodes in the parent tree. Bare DID principals are controllers,
+owners, and authorisation subjects; they are not embodied world actors and MUST
+NOT be used as `parent` values.
+
+Embodied user presence is represented by an avatar actor. A user DID may own,
+control, or authorise actions, but the avatar is the world body whose ctx can be
+admitted by rooms and parents.
+
+### 3.4 Parent change flow
+
+Parent changes are target-accepted and forward-moving:
+
+1. Self has `parent = old_parent`.
+2. Self decides to move, or receives an authorised request to move.
+3. Self builds ctx with `parent = new_parent` and relevant presentation hints.
+4. Self sends that ctx to `new_parent` for admission.
+5. `new_parent` rejects, or returns/acknowledges accepted ctx.
+6. On acceptance, self commits `parent = new_parent` in its own state/model.
+7. Self sends a departure or ctx update to `old_parent`.
+8. `old_parent` clears derived caches. It has no ordinary veto after commit.
+
+Requiring acceptance from both old and new parent is deliberately out of the
+ordinary parent-change flow. Protocols MAY define stricter protected flows, but
+the base world model is: new parent controls admission, self controls commit,
+old parent receives cleanup.
+
+### 3.5 Derived caches
+
+Parent `children`, container `contents`, room `occupants`, room
+`avatar-occupants`, labels, and similar indexes are derived state. If such a
+cache disagrees with the child actor's self-authenticating ctx or own state, the
+child actor wins.
+
+A previous parent that receives a self-authenticating ctx where `parent` is no
+longer itself MUST treat its local cache entry for that actor as stale.
+
+---
+
+## 4. Authority model
+
+### 4.1 Rooms
 
 - Room ownership is a bare DID in room `owner` prop.
 - Avatar is a delegate for display commands, not the owner identity.
 - Direct room RPC uses message sender identity (`msg.from`).
 
-### 3.2 Things and agents
+### 4.2 Parent and child actors
 
-- A movable entity is authoritative for its own `owner` and `parent`.
-- `parent` is location/container authority.
-- Parent-mediated transfer model applies to `take` and `drop`.
+- A movable actor is authoritative for its own `owner` and `parent`.
+- `parent` is the actor's immediate location/container relation.
+- Parent changes follow the target-accepted ctx flow in section 3.4.
+- Any actor may be both parent and child when it implements the generic
+   `:child` parent surface and the movable `:take`/`:drop` child surface.
 - Rooms currently present agents and things through one local non-avatar
    occupant cache; the `ctx.kind` remains useful protocol context, not a demand
    for separate room-side policy.
 
 Rules:
 
-1. Current parent is the caller that may request transfer.
-2. Target parent is payload data for new parent assignment.
-3. Current parent and target parent do not perform direct peer negotiation.
+1. A parent may request or initiate transfer, but only the child actor commits
+   its own parent change.
+2. Target parent admission is required before child commit.
+3. The old parent receives cleanup after commit and has no ordinary veto.
+4. The owner may recover an empty-parent orphan by direct child call, including
+   through its local avatar delegate.
+5. Current parent and target parent do not perform direct peer negotiation.
 
 ---
 
-## 4. Movement and arrival flows
+## 5. Movement and arrival flows
 
-### 4.1 DID enter via room ctx
+### 5.1 DID enter via room ctx
 
 1. Caller sends `:enter <ctx>` to the target room.
 2. Room derives the deterministic avatar fragment from the caller DID.
@@ -174,7 +295,7 @@ Rules:
 5. Room registers entry and sends committed `:ctx` to avatar; avatar persists
    room state and forwards the ctx to DID principal.
 
-### 4.2 Room-to-room movement via exit
+### 5.2 Room-to-room movement via exit
 
 1. Avatar sends `:go <direction>` to current room.
 2. Room resolves `<direction>` to a first-class exit actor and sends
@@ -191,7 +312,7 @@ Rules:
 7. Only the target room's committed `:ctx` updates actor/avatar state and is
    forwarded to the DID principal.
 
-### 4.3 Dig/link to existing room
+### 5.3 Dig/link to existing room
 
 For named new-room digs such as `dig dør to kjøkken`, the source room derives
 deterministic room and exit fragments with `blake3`. The derivation is scoped
@@ -216,7 +337,7 @@ For existing-room link targets:
 
 ---
 
-## 5. Actor interfaces
+## 6. Actor interfaces
 
 All terms are CBOR-style actor terms, typically `:verb` or `[":verb", ...]`.
 
@@ -228,11 +349,11 @@ All Scheme-backed lambda-ma actors inherit the generic actor method below from
 | `:behaviour` | `[ /ipfs/<cid> ]` | No args returns this actor's current per-entity behaviour reference, if any. With one IPFS reference, the caller must match the actor's `owner` prop; on success this queues a reload of this actor's own extra behaviour layer. |
 | `:name` / `:description` / `:kind?` | `[text...]` for `:name` and `:description`; none for `:kind?` | Generic metadata inspection. With no args, `:name` returns the `name` prop, `:description` returns the `description` prop, and `:kind?` returns the runtime kind. With args, `:name` and `:description` are owner-gated setters that persist the joined text and return the new prop value. `:kind?` is read-only. |
 | `:owner` / `:owner?` | none | Generic prop-based owner inspection. `:owner` returns the raw owner DID or `(none)`. `:owner?` returns display text. Both are dry RPC replies and never send `:print`; avatar/proxy code may present the reply to a user. Kind-specific actors may override this with stricter policy. |
-| `:parent` / `:parent?` | none generically; `[ctx]` on movable actors | Generic dry parent query. Returns the raw current `parent` actor reference or `(none)`, making `:parent` the relation-query counterpart to `:children`. Movable actors override `:parent` with the stable parent-transfer mechanism: the current parent sends a ctx map naming the new parent in `parent` (or `room` as a movement fallback), the child updates its authoritative parent state, then announces its own ctx to the new parent with `:children <ctx>`. |
-| `:children` | `[ctx]` | With no args, owner-gated child-cache listing. With one ctx map, registers or updates a child cache entry when `ctx.actor` is a full DID-URL, `ctx` is an actor ctx, and `msg-from` matches `ctx.actor`. The child cache is derived state; the child's own `parent` prop remains authoritative. |
-| `:rpcs?` / `:cmds?` / `:metas?` / `:api?` | none | Generic public API inspection. These introspection verbs are themselves dry public RPCs and appear in `:rpcs?`. `:rpcs?` returns public RPC verbs, `:cmds?` returns avatar and world command verbs, `:metas?` returns explicit relation/repair helpers such as `:parent` or `:children`, and `:api?` returns a grouped view keyed by `:rpcs?`, `:cmds?`, and `:metas?`. Hidden actor-to-actor protocol handlers are not part of this surface. |
+| `:parent` / `:parent?` | none generically; `[ctx]` on movable actors | Generic dry parent query. Returns the raw current `parent` actor reference or `(none)`, making `:parent` the relation-query counterpart to `:child`. Movable actors override `:parent` with the stable parent-change mechanism: self asks the new parent for admission with ctx, commits only after acceptance, then notifies the old parent for cleanup. |
+| `:child` | `[ctx]` | With no args, owner-gated child-cache listing. With one ctx map, registers or updates a child cache entry when `ctx.actor` is a full DID-URL, `ctx` is an actor ctx, and `msg-from` matches `ctx.actor`. The child cache is derived state; the child's own `parent` prop remains authoritative. |
+| `:rpcs?` / `:cmds?` / `:metas?` / `:api?` | none | Generic public API inspection. These introspection verbs are themselves dry public RPCs and appear in `:rpcs?`. `:rpcs?` returns public RPC verbs, `:cmds?` returns avatar and world command verbs, `:metas?` returns explicit relation/repair helpers such as `:parent` or `:child`, and `:api?` returns a grouped view keyed by `:rpcs?`, `:cmds?`, and `:metas?`. Hidden actor-to-actor protocol handlers are not part of this surface. |
 
-### 5.1 root actor
+### 6.1 root actor
 
 Purpose: deterministic avatar factory.
 
@@ -243,7 +364,7 @@ Key verbs:
 | `:enter` | `[room? nick?]` | Compatibility path when no concrete room target is available. Creates caller avatar if absent, or asks an existing avatar to send its current ctx to the DID principal. Root does not message rooms. |
 | `:avatar?` | none | Returns caller avatar, creating if needed in the configured start room. |
 
-### 5.2 avatar actor
+### 6.2 avatar actor
 
 Purpose: avatar-mediated command endpoint and context emitter.
 
@@ -255,18 +376,19 @@ Key verbs:
 | `:sync-ctx` | none | root only | Emits current `:ctx` to DID principal without changing avatar state. |
 | `:ctx` | `<ctx-map>` | current room, root, or controlling DID | With no args, returns current context to authorised callers. With a movement ctx-map, validates ordinary movement ctx, optionally prints `ctx.text`, then asks `ctx.room` to admit the avatar. The avatar forwards no new `:ctx` to the DID principal until the target room commits one. |
 | `:ctx?` | none | DID principal only | Returns context term. |
-| `:children` | `[ctx]` | no args: DID principal only; ctx: child actor only | `inventory` storage surface. With child ctx, accepts only sender-matching actor ctx and stores it in the avatar's child cache. With no args, returns the child-cache listing. |
+| `:child` | `[ctx]` | no args: DID principal only; ctx: child actor only | `inventory` storage surface. With child ctx, accepts only sender-matching actor ctx and stores it in the avatar's child cache. With no args, returns the child-cache listing. |
 | `:help` | `[topic]` | DID principal only | `help here` asks room `:help`. |
 | `:nick` | `[nick]` | DID principal only | No args returns current nick; with args forwards to room. |
 | `:make` | `<kind> <init...>` | DID principal only | Requests a new actor of `kind` using `ma-create-actor` with no behaviour override and all args after `kind` joined as the creation payload. The avatar does not inject owner, parent, or room props; the init text owns initial state. `thing` is accepted as shorthand for `/ma/thing/0.0.1`. Creation is queued; the returned DID-URL may not be live until the runtime loads the entity. |
 | `:owner?` | none | DID principal, room, or root | Returns the avatar's owner DID. This is fixed avatar identity metadata, not a setter. Avatars do not expose `:owner`. |
 | `:did?` / `:dids?` / `:prop` | varies | DID principal only | RPC proxy to the current room for direct metadata lookup or room prop mutation; these are not avatar commands. |
-| `:look`/`:l` `:exits?` `:who?` `:say` `:emote` `:go` | varies | DID principal only | Avatar-mediated room commands. |
+| `:look`/`:l` `:here?` `:exits?` `:who?` `:say` `:emote` `:go` | varies | DID principal only | Avatar-mediated room commands. `here?` reports the avatar's current room DID-URL from its saved context. |
+| `:take` | `<thing> [from <parent>]` | DID principal only | Picks something up. If `from` is omitted, the avatar's current room is the source parent. Explicit `from` may name any parent actor that implements the parent-mediated `:take` contract; carried parent names are resolved through inventory. Inventory display waits for the child actor's `:child` ctx before showing a DID-URL by name. |
 | `:claim` `:dig` `:fill` | varies | DID principal only | Delegates to room without owner-authority arguments; rooms recognise the owner DID or deterministic owner avatar from `msg-from`. `:owner` is mediated by the avatar's default room forwarding; it is not an avatar method and does not mutate avatar ownership. |
 | `:drop-thing` | `<did> <thing> <target-parent> [token] [ctx]` | room caller only | Parent-mediated drop helper; forwards optional DID principal ctx map. |
 | `:report-parent` | `<room> <tick> <nonce>` | room caller | Machine presence request; replies with `:parent-report <self> <room> <tick> <nonce>` using the avatar's persisted room. |
 
-### 5.3 room actor
+### 6.3 room actor
 
 Purpose: local room policy, exits, ownership, occupant presentation.
 
@@ -286,7 +408,7 @@ Key verbs:
 | `:dids?` | none | Owner-gated full reference listing for visible occupants, room-local things, and exits. |
 | `:go` / `:move` | `<direction>` / none | `:go` traverses a named exit. `:move` chooses one currently available room exit for the caller. |
 | `:thing` | `<name> [did-or-empty]` | Local occupant alias list/get/set/delete; owner-gated for write. |
-| `:take` / `:drop` / `:where?` | `[DID principal?] [token]` | Uses movable actor parent-authority contract. |
+| `:take` / `:drop` / `:where?` | `[DID principal?] [token]` | Room implementation of the movable actor parent-authority contract. |
 | `:claim` / `:owner` / `:prop` | direct args | Room ownership controls write operations; owner authority is checked against `msg-from` or the deterministic owner avatar. |
 | `:dig` | direct args | Owner-gated exit creation/linking; newly-created rooms are assigned to the stored owner DID. |
 | `:fill` | direct args | Owner-gated exit removal. Removes the direction from the room and asks the exit actor to terminate itself; target rooms are not deleted. |
@@ -325,7 +447,7 @@ Room presence cache rules:
    from local occupant caches. The child may re-enter later through normal
    `:enter` flow.
 
-### 5.4 exit actor
+### 6.4 exit actor
 
 Purpose: first-class inspectable traversal object.
 
@@ -349,7 +471,7 @@ The exit actor is the canonical store for first-class exit metadata and policy.
 The room stores topology only: direction to exit actor, and the target room used
 to recreate a local exit if the local actor is missing.
 
-### 5.5 Scheme agent parent kind
+### 6.5 Scheme agent parent kind
 
 Kind: `/ma/scheme/agent/0.0.1`, extending `/ma/scheme/state/0.0.1`.
 
@@ -360,9 +482,9 @@ Key helpers and verbs:
 
 | Verb/helper | Args | Notes |
 | --- | --- | --- |
-| `agent-ctx` | none | Builds `ctx` with `kind=agent`, `name`, `nick`, `description`. |
-| `:children` | `[ctx]` | Inherited generic child-cache contract. Agents announce their own ctx to their current parent on lifecycle `:start`, after successful `:take` parent changes, and after committed room ctx movement. |
-| `:parent` | `[ctx]` | Current-parent-gated parent push. Accepts a ctx map from the current parent, reads the new parent from `ctx.parent` or `ctx.room`, updates local parent state, persists optional presentation fields from the ctx, and announces to the new parent with `:children <ctx>`. |
+| `agent-ctx` | none | Builds actor ctx with `parent`, `kind=agent`, `protocol`, and presentation hints. |
+| `:child` | `[ctx]` | Inherited generic child-cache contract. Agents announce their own ctx to their current parent on lifecycle `:start`, after successful `:take` parent changes, and after committed room ctx movement. |
+| `:parent` | `[ctx]` | Parent-change helper. Validates ctx, asks the target parent for admission, commits only after acceptance, then sends cleanup to the old parent. Owner recovery is limited to an empty-parent orphan. |
 | `:about` `:where?` `:owner` | none | Generic state summary. |
 | `:exits?` | none | Asks the current parent room for exits and stores the printed reply as `last-message`. |
 | `:go` | `<direction>` | Free-agent or owner movement through a named room exit; no exit creation. |
@@ -371,10 +493,10 @@ Key helpers and verbs:
 | `:enter-room` | `<target-room-did-url> <source-room-did-url>` | Root/room movement helper retained for direct room-driven entry flows. |
 | `:report-parent` | `<room> <tick> <nonce>` | Machine presence request; replies to the requesting room with `:parent-report <self> <parent> <tick> <nonce>`. |
 | `:claim` | `<secret>` | Recovery-path ownership claim. |
-| `:take` | `<did> <carrier-parent> [ctx]` | Caller must be current parent. |
-| `:drop` | `<did> <target-parent> [ctx]` | Caller must be current parent. |
+| `:take` | `<did> <carrier-parent> [ctx]` | Pick-up request. Caller must be current parent; the agent still commits its own parent only after target admission. Owner may recover an empty-parent orphan. |
+| `:drop` | `<did> <target-parent> [ctx]` | Drop request. Caller must be current parent; the agent still commits its own parent only after target admission. Owner may recover an empty-parent orphan. |
 
-### 5.6 rms actor
+### 6.6 rms actor
 
 Kind: `/ma/scheme/agent/0.0.1` with rms-specific per-entity behaviour.
 
@@ -391,7 +513,7 @@ instead of stacking duplicate jobs.
 | `:help` | none | rms command summary and schedule note. |
 | `:fortune` | none | Sends `:say <fortune>` to current parent room. |
 
-### 5.7 thing actor
+### 6.7 thing actor
 
 Purpose: movable passive object with owner/parent authority.
 
@@ -400,27 +522,53 @@ Purpose: movable passive object with owner/parent authority.
 | `:about` | none | Name, description, owner, parent summary. |
 | `:where?` | none | Current parent. |
 | `:owner` | none | Current owner. |
-| `:children` | `[ctx]` | Inherited generic child-cache contract. Things announce their own ctx to their current parent on lifecycle `:start` and after successful `:take`/`:drop` parent changes. |
-| `:parent` | `[ctx]` | Current-parent-gated parent push. Accepts a ctx map from the current parent, reads the new parent from `ctx.parent` or `ctx.room`, updates local parent state, persists optional presentation fields from the ctx, and announces to the new parent with `:children <ctx>`. |
+| `:child` | `[ctx]` | Inherited generic child-cache contract. Things announce their own ctx to their current parent on lifecycle `:start` and after successful `:take`/`:drop` parent changes. |
+| `:parent` | `[ctx]` | Parent-change helper. Validates ctx, asks the target parent for admission, commits only after acceptance, then sends cleanup to the old parent. |
 | `:prop` | `<name\|nick\|description> [value]` | Owner only. Sets an editable presentation prop; no value resets the prop to the kind default. Does not edit `owner` or `parent`. |
 | `:set-recovery-secret` | `[text]` | Owner only. |
 | `:claim` | `<secret>` | Recovery-path ownership claim. |
 | `:report-parent` | `<room> <tick> <nonce>` | Machine presence request; replies to the requesting room with `:parent-report <self> <parent> <tick> <nonce>`. |
-| `:take` | `<did> <carrier-parent> [ctx]` | Caller must be current parent; optional ctx map is accepted and persisted. |
-| `:drop` | `<did> <target-parent> [ctx]` | Caller must be current parent; optional ctx map is accepted and persisted. |
+| `:take` | `<did> <carrier-parent> [ctx]` | Pick-up request. Caller must be current parent; the thing still commits its own parent only after target admission. Owner may recover only an empty-parent orphan. Optional ctx map may contribute presentation hints. |
+| `:drop` | `<did> <target-parent> [ctx]` | Drop request. Caller must be current parent; the thing still commits its own parent only after target admission. Owner may recover only an empty-parent orphan. Optional ctx map may contribute presentation hints. |
+
+### 6.8 container actor
+
+Kind: `/ma/container/0.0.1`.
+
+Purpose: movable passive object that can hold other movable actor ctx maps. A
+container is a parent actor with `kind=container` and protocol
+`/ma/container/0.0.1`; whole-container movement follows the same target-accepted
+parent-change flow as things and agents.
+
+The v1 contents model deliberately trusts supplied ctx while the container is
+unlocked. Room locality and parent graph proof are not enforced by the container
+yet. The active object policy is the lock: locked containers reject contents
+listing, putting in, and taking out.
+
+| Verb | Args | Notes |
+| --- | --- | --- |
+| `:about` | none | Name, description, owner, parent, and locked summary. |
+| `:contents?` | none | Lists stored contents when unlocked. If locked, replies with the lock message as an error. |
+| `:put-in` | `<ctx-map>` | Admission request for a child ctx when unlocked. Accepted children still become current only when the child self commits `parent` to this container. |
+| `:take-from` | `<child>` | Container-content extraction. Removes a child by DID-URL or label and returns the stored ctx when unlocked. Does not pick up or move the child actor itself. |
+| `:lock` | `[message]` | Owner or unowned caller. Sets `locked=true`; with text, also updates `locked-message`. |
+| `:unlock` | none | Owner or unowned caller. Sets `locked=false` and keeps `locked-message`. |
+| `:take` | `<did> <carrier-parent> [ctx]` | Pick-up request for the whole container. Caller must be current parent; the container still commits its own parent only after target admission. Owner may recover only an empty-parent orphan. |
+| `:drop` | `<did> <target-parent> [ctx]` | Drop request for the whole container. Caller must be current parent; the container still commits its own parent only after target admission. Owner may recover only an empty-parent orphan. |
+| `:child` | `[ctx]` | Contents alias. No args lists contents using the same lock rule as `:contents?`; with ctx, behaves like `:put-in`. |
 
 ---
 
-## 6. State keys and authority boundaries
+## 7. State keys and authority boundaries
 
-### 6.1 root keys
+### 7.1 root keys
 
 Root stores no avatar registry. Avatar DID-URLs are derived from the caller DID
 by the root/room/avatar actor code with `blake3`, scoped by runtime DID and
 caller DID. Runtime validates requested fragments but does not derive these
 world-level actor names.
 
-### 6.2 room keys
+### 7.2 room keys
 
 | Key | Type | Authority |
 | --- | --- | --- |
@@ -440,7 +588,7 @@ world-level actor names.
 | `presence:nonce:<actor>` | string | pending parent-report nonce |
 | `presence:last-parent:<actor>` | string | last parent reported by actor, for debugging |
 
-### 6.3 avatar keys
+### 7.3 avatar keys
 
 | Key | Meaning |
 | --- | --- |
@@ -448,7 +596,7 @@ world-level actor names.
 | `room` | current room DID-URL |
 | `nick` | current display nick |
 
-### 6.4 thing/agent keys
+### 7.4 thing/agent keys
 
 | Key | Meaning |
 | --- | --- |
@@ -457,32 +605,42 @@ world-level actor names.
 | `name`, `description` | display metadata |
 | `recovery-secret` | optional recovery claim secret |
 
+Containers use the same movable keys, plus:
+
+| Key | Meaning |
+| --- | --- |
+| `locked` | string boolean, `true` when contents are closed |
+| `locked-message` | reusable message returned while locked |
+| `children` | contents map keyed by child DID-URL, with ctx-map values |
+
 ---
 
-## 7. Wire/value conventions
+## 8. Wire/value conventions
 
 1. Actor message payloads are ma-scheme terms serialised through runtime RPC.
 2. Verb dispatch follows `:verb` or tuple/list forms with `:verb` head.
-3. Enter `ctx` is an optional map value. Missing `ctx.kind` means client/session
+3. Actor ctx is a map with required `parent`, `kind`, and `protocol` fields.
+   Recommended presentation hints are `name`, `nick`, and `description`.
+4. Enter `ctx` is an optional map value. Missing `ctx.kind` means client/session
    entry: the client waits for committed context. Direct `agent`/`thing` entry
    MUST carry required string fields listed in section 2.2.
-4. DID values crossing actor, zion, or runtime message boundaries MUST be full
+5. DID values crossing actor, zion, or runtime message boundaries MUST be full
    DID or DID-URL values, not runtime-local shorthand. Committed ctx actor
    references MUST be full DID-URLs.
-5. Committed client context uses `/ma/lambda/ctx/0.0.1` and includes the
+6. Committed client context uses `/ma/lambda/ctx/0.0.1` and includes the
    effective `kind` chosen by the world.
-6. Room `:enter` dispatch is kind-driven: absent kind or explicit `avatar`
+7. Room `:enter` dispatch is kind-driven: absent kind or explicit `avatar`
    ensures the caller's deterministic avatar locally and sends no `:ok`; `thing`
    and `agent` require explicit kind and are admitted into the same room-local
    non-avatar occupant cache for now.
-7. Thing transfer validation is strict by default: DID principal MUST be `did:ma:...`;
+8. Thing transfer validation is strict by default: DID principal MUST be `did:ma:...`;
    non-ctx parent arguments MUST be DID-URLs. Optional
-   transfer ctx MUST include non-empty `kind`, `name`, `nick`, and `description`
-   fields. Any actor references inside ctx MUST be full DID-URLs.
+   transfer ctx MUST include non-empty `parent`, `kind`, and `protocol` fields.
+   Any actor references inside ctx MUST be full DID-URLs.
 
 ---
 
-## 8. Build and bootstrap quick reference
+## 9. Build and bootstrap quick reference
 
 Build world artifacts:
 
@@ -508,7 +666,7 @@ Typical zion wiring after runtime is up:
 
 ---
 
-## 9. Cross references
+## 10. Cross references
 
 - Project overview and developer workflow: README.md
 - First-run bootstrap walkthrough: HOWTO.md

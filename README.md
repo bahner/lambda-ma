@@ -135,6 +135,7 @@ forwards the DID principal's DID to the room; direct room RPCs still use the mes
 ```text
 help                   show avatar/avatar-mediated commands
 help here              ask the current room what is possible here
+here?                  show where you are
 claim                  claim an unowned room through your avatar
 owner                  show the current room owner through your avatar
 owner did:ma:<target>  transfer the room to another bare DID through your avatar

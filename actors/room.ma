@@ -314,6 +314,8 @@
 (define (enter-ctx-valid? ctx)
   (and (map? ctx)
        (non-empty-string? (ctx-text ctx "kind"))
+  (non-empty-string? (ctx-text ctx "parent"))
+  (non-empty-string? (ctx-text ctx "protocol"))
        (non-empty-string? (ctx-text ctx "name"))
        (non-empty-string? (ctx-text ctx "nick"))
        (non-empty-string? (ctx-text ctx "description"))))
@@ -459,6 +461,7 @@
           (broadcast-except actor (string-append (speaker-name actor) " arrives.")))
         #f)
     (ma-save-state!)
+    (ma-send! (canonical-actor actor) (list :parent ctx))
     (ma-send! (canonical-actor actor) (direct-room-ctx "agent" nick (arrival-text)))
     (ma-reply! msg (list :ok "entered"))))
 
@@ -477,6 +480,7 @@
            (set-claim! actor ctx)
            (set-label! actor label)
            (set-thing! token actor)
+           (ma-send! (canonical-actor actor) (list :parent ctx))
            (ma-reply! msg (list :ok "entered"))))))
 
 (define (child-parent-target ctx)
@@ -488,25 +492,34 @@
 (define (child-announcement-valid? ctx msg)
   (and (actor-ctx? ctx)
        (same-actor? (ctx-text ctx "actor") (msg-from msg))
-       (same-actor? (child-parent-target ctx) (self))))
+       (or (same-actor? (child-parent-target ctx) (self))
+           (not (same-actor? (child-parent-target ctx) (self))))))
 
 (define (handle-child-announcement! msg ctx)
   (let ((kind (ctx-text ctx "kind"))
         (actor (ctx-text ctx "actor"))
         (name (ctx-text ctx "name")))
     (cond ((not (child-announcement-valid? ctx msg))
-           (reply-error msg "children ctx actor and parent must match sender and room"))
+           (reply-error msg "child ctx actor must match sender"))
+          ((not (same-actor? (child-parent-target ctx) (self)))
+           (begin
+             (remove-occupant! actor)
+             (remove-avatar-occupant! actor)
+             (remove-thing! name)
+             (ma-save-state!)
+             (reply-ok msg)))
           ((and (agent-kind? kind) (enter-direct-ctx-valid? ctx "agent"))
            (handle-agent-enter! msg actor ctx))
-          ((and (thing-kind? kind) (enter-direct-ctx-valid? ctx "thing"))
+          ((and (or (thing-kind? kind) (container-kind? kind)) (enter-ctx-valid? ctx))
            (handle-thing-enter! msg actor ctx name))
           (else
-           (reply-error msg "children ctx must include actor, kind, name, nick, description")))))
+           (reply-error msg "child ctx must include actor, parent, kind, protocol, name, nick, description")))))
 
 (define (agent-kind? kind) (equal? kind "agent"))
 (define (thing-kind? kind) (equal? kind "thing"))
+(define (container-kind? kind) (equal? kind "container"))
 (define (movable-kind? kind)
-  (or (agent-kind? kind) (thing-kind? kind)))
+  (or (agent-kind? kind) (thing-kind? kind) (container-kind? kind)))
 
 ; Movable occupant lookup: local token aliases first, then visible agent labels.
 (define (movable-occupant? actor)
@@ -874,6 +887,34 @@
   (cond ((go-delegated-call? args msg) (canonical-actor (msg-from msg)))
         ((valid-did? (msg-from msg)) (avatar-for-did (msg-from msg)))
         (else (canonical-actor (msg-from msg)))))
+
+(define (put-args-valid? args)
+  (and (not (null? args))
+       (not (null? (cdr args)))
+       (equal? (car (cdr args)) "in")
+       (not (null? (cdr (cdr args))))
+       (or (null? (cdr (cdr (cdr args))))
+           (and (map? (car (cdr (cdr (cdr args)))))
+                (null? (cdr (cdr (cdr (cdr args)))))))))
+
+(define (put-item-token args)
+  (if (null? args) #f (car args)))
+
+(define (put-container-token args)
+  (if (or (null? args) (null? (cdr args)) (null? (cdr (cdr args))))
+      #f
+      (car (cdr (cdr args)))))
+
+(define (put-supplied-ctx args)
+  (if (or (null? args)
+          (null? (cdr args))
+          (null? (cdr (cdr args)))
+          (null? (cdr (cdr (cdr args)))))
+      #f
+      (car (cdr (cdr (cdr args))))))
+
+(define (put-visible-error msg token)
+  (reply-to-sender msg (string-append "You cannot see " token ".")))
 
 (define (reject-foreign-delegated-go? args msg)
   (and (delegated-did-arg? args)
@@ -1330,8 +1371,7 @@
             (actor
              (begin
                (ma-send! (canonical-actor actor) (list :take did (canonical-actor avatar) (claim-ctx actor)))
-               (remove-movable! token actor)
-               (reply-to-sender msg (string-append "You take " token "."))))
+               (reply-to-sender msg (string-append "You try to take " token "."))))
             (else
              (reply-to-sender msg (string-append "Unknown agent or thing: " token)))))))
 
@@ -1357,6 +1397,34 @@
                (reply-to-sender msg (string-append "You drop " label "."))))
             (else
              (reply-to-sender msg (string-append "Unknown agent or thing: " token)))))))
+
+(set-cmd-method! :put
+  (lambda (args msg)
+    (let* ((did (caller-did args msg))
+           (avatar (msg-from msg))
+           (put-args (command-args args msg))
+           (item-token (put-item-token put-args))
+           (container-token (put-container-token put-args))
+           (supplied-ctx (put-supplied-ctx put-args))
+           (item-actor (if supplied-ctx
+                           (ctx-text supplied-ctx "actor")
+                           (if item-token (movable-ref item-token) #f)))
+           (container-actor (if container-token (movable-ref container-token) #f))
+           (item-ctx (if supplied-ctx supplied-ctx (if item-actor (claim-ctx item-actor) #f))))
+      (cond ((not (put-args-valid? put-args))
+             (reply-to-sender msg "Usage: put <agent-or-thing> in <container>"))
+            ((not item-actor)
+              (put-visible-error msg item-token))
+            ((not container-actor)
+              (put-visible-error msg container-token))
+            ((same-actor? item-actor container-actor)
+             (reply-to-sender msg "You cannot put something inside itself."))
+            ((not (child-ctx-valid? item-ctx))
+             (reply-to-sender msg (string-append "Missing details for agent or thing: " item-token)))
+            (else
+             (begin
+               (ma-send! (canonical-actor item-actor) (list :drop did (canonical-actor container-actor) item-ctx))
+               (reply-to-sender msg (string-append "You try to put " item-token " in " container-token "."))))))))
 
 (set-cmd-method! :where?
   (lambda (args msg)
@@ -1671,12 +1739,12 @@
                 (reply-ok msg)))
         (reply-error msg "nick sender must be an avatar"))))
 
-(set-meta-method! :children
+(set-meta-method! :child
   (lambda (args msg)
     (cond ((null? args)
-           (reply-error msg "usage: :children <ctx>"))
+           (reply-error msg "usage: :child <ctx>"))
           ((not (null? (cdr args)))
-           (reply-error msg "usage: :children <ctx>"))
+           (reply-error msg "usage: :child <ctx>"))
           (else
            (handle-child-announcement! msg (car args))))))
 

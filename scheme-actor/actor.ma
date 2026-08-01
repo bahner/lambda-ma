@@ -133,8 +133,21 @@
   (and (actor-ctx? ctx)
        (valid-did-url? (ctx-text ctx "actor"))))
 
+(define (child-ctx-self-authentic? ctx msg)
+  (and (child-ctx-valid? ctx)
+       (same-actor? (msg-from msg) (ctx-text ctx "actor"))))
+
+(define (child-ctx-parent-is-self? ctx)
+  (same-actor? (ctx-text ctx "parent") (self)))
+
 (define (remember-child! ctx)
   (set-children-map! (map-set (children-map) (canonical-actor (ctx-text ctx "actor")) ctx)))
+
+(define (forget-child! actor)
+  (set-children-map! (map-delete (children-map) (canonical-actor actor))))
+
+(define (child-ctx actor)
+  (map-ref (children-map) (canonical-actor actor) #f))
 
 (define (child-label ctx)
   (let ((nick (ctx-text ctx "nick"))
@@ -163,6 +176,42 @@
     (if (null? lines)
         "Children: none."
         (string-append "Children:\n" (actor-entry-lines lines)))))
+
+(define (child-token-text-matches? token text)
+  (and (non-empty-string? token)
+       (non-empty-string? text)
+       (equal? (string-downcase token) (string-downcase text))))
+
+(define (child-token-matches? token ctx)
+  (and (non-empty-string? token)
+       (or (same-actor? token (ctx-text ctx "actor"))
+           (child-token-text-matches? token (child-label ctx))
+           (child-token-text-matches? token (ctx-text ctx "name"))
+           (child-token-text-matches? token (ctx-text ctx "nick")))))
+
+(define (child-ref token)
+  (if (valid-did-url? token)
+      (if (child-ctx token) (canonical-actor token) #f)
+      (let loop ((entries (map->alist (children-map))))
+        (cond ((null? entries) #f)
+              ((child-token-matches? token (cdr (car entries)))
+               (canonical-actor (car (car entries))))
+              (else (loop (cdr entries)))))))
+
+(define (handle-parent-take did rest msg)
+  (if (null? rest)
+      #f
+      (let* ((token (car rest))
+             (actor (child-ref token)))
+        (if actor
+            (let ((ctx (child-ctx actor)))
+              (begin
+                (forget-child! actor)
+                (ma-send! (canonical-actor actor) (list :take did (canonical-actor (msg-from msg)) ctx))
+                (ma-send! (canonical-actor (msg-from msg)) (list :print (string-append "You take " (child-label ctx) ".")))
+                (reply-ok msg)
+                #t))
+            #f))))
 
 (define (owner-authority)
   (let ((owner (get-prop "owner")))
@@ -215,14 +264,19 @@
              (reply-ok-with msg (children-text))
              (reply-error msg "only owner may list children")))
         ((not (null? (cdr args)))
-         (reply-error msg "usage: :children [ctx]"))
+         (reply-error msg "usage: :child [ctx]"))
         ((not (child-ctx-valid? (car args)))
-         (reply-error msg "children ctx must include actor, kind, name, nick, description"))
-        ((not (same-actor? (msg-from msg) (ctx-text (car args) "actor")))
-         (reply-error msg "children ctx actor must match sender"))
+         (reply-error msg "child ctx must include actor, parent, kind, protocol, name, nick, description"))
+        ((not (child-ctx-self-authentic? (car args) msg))
+         (reply-error msg "child ctx actor must match sender"))
+        ((not (child-ctx-parent-is-self? (car args)))
+         (begin
+           (forget-child! (ctx-text (car args) "actor"))
+           (reply-ok msg)))
         (else
          (begin
            (remember-child! (car args))
+           (ma-send! (canonical-actor (ctx-text (car args) "actor")) (list :parent (car args)))
            (reply-ok msg)))))
 
 (define (handle-actor-behaviour! args msg)
@@ -337,7 +391,7 @@
 (set-rpc-method! :owner? handle-actor-owner?)
 (set-meta-method! :parent handle-actor-parent)
 (set-rpc-method! :parent? handle-actor-parent?)
-(set-meta-method! :children handle-actor-children)
+(set-meta-method! :child handle-actor-children)
 (set-rpc-method! :behaviour handle-actor-behaviour!)
 (set-rpc-method! :rpcs? handle-actor-rpcs?)
 (set-rpc-method! :cmds? handle-actor-cmds?)

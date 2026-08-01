@@ -15,9 +15,15 @@ Actors do not have to be root-tracked occupants to speak. Any actor that knows
 the room DID-URL can send `:say` or `:emote`; the room broadcasts the text to
 the current room-local occupants.
 
+Only actors are nodes in the parent tree. A bare DID principal is a controller,
+owner, and authorisation subject, not an embodied world actor. User presence in
+the world is through the deterministic avatar actor; the DID controls the
+avatar, but the avatar is the body whose ctx can be admitted by rooms and
+parents.
+
 ## Actor categories
 
-Actors use three starting categories:
+Actors use these starting categories:
 
 - `avatar` — a DID delegate. Avatars represent people and participate in the
    room's social occupant flow.
@@ -25,6 +31,27 @@ Actors use three starting categories:
    that moves or quacks on its own is an agent, not room code and not an avatar.
 - `thing` — a passive object with state, ownership, and location, but no agenda
    of its own.
+- `room` — a place actor that can be a parent and local presentation surface.
+- `container` — a movable parent actor that can admit or reject children.
+- `actor` — a generic actor such as a counter, register, variable, or set.
+
+Actor ctx uses `kind` for this broad category and `protocol` for the precise
+versioned behaviour contract, such as `/ma/container/0.0.1`. `kind` is useful
+for initial presentation and local policy, but it is not capability-bearing by
+itself. If an avatar sends ctx with `kind=thing`, then the avatar is presenting
+itself as a thing in that context; the receiving room or container decides what
+that means locally.
+
+Base actor ctx contains:
+
+- `parent` — immediate parent/location/container actor DID-URL.
+- `kind` — broad category.
+- `protocol` — precise versioned behaviour protocol.
+
+Recommended presentation hints are `name`, `nick`, and `description`. They are
+self-declared, non-rule-bearing hints so rooms and containers can show actors
+without querying them first. They are not a place to encode rule-sensitive state
+such as hit points, damage, access rights, or ownership.
 
 Rooms accept the category in `:enter ctx`, but clients may omit `kind` when they
 do not know their effective world kind yet. Missing `kind` means session/avatar
@@ -66,21 +93,34 @@ or search, but those caches are derived presentation state only. If a container
 claims it contains a thing and the thing's own `parent` disagrees, the thing's
 state wins.
 
-Moving a thing means asking the thing to update its `parent`, not editing two
-competing container lists. A thing may update its own parent when it moves by
-itself. A carrier may ask it to update parent during `take` or `drop`, but the
-thing remains the state owner.
+Moving an actor means asking that actor to change its own `parent`, not editing
+two competing container lists. The target parent must accept admission first;
+then the moving actor commits its new parent and notifies the old parent for
+cleanup. The old parent has no ordinary veto after self commits.
 
 Transfer requests may include an optional `ctx` map as a trailing argument
 (`:take <did> <carrier-parent> [ctx]`, `:drop <did> <target-parent> [ctx]`).
-When provided, that `ctx` is forwarded with the transfer and can be persisted
-as claim context by the movable actor.
+When provided, that `ctx` is input to the movable actor's parent-change flow.
 
 Agents remain responsible for their own room presence during transfer. After a
 successful `:take`, an agent notifies its old room that it left; after a
 successful `:drop`, it sends that room `:enter` with its current agent ctx. The
 agent commits its new `parent` only after receiving a valid room-origin `:ctx`
 for that entry.
+
+Canonical parent-change flow:
+
+1. Self has `parent = old_parent`.
+2. Self decides to move, or receives an authorised request to move.
+3. Self sends ctx with `parent = new_parent` to the new parent for admission.
+4. New parent rejects, or returns/acknowledges accepted ctx.
+5. On acceptance, self commits `parent = new_parent`.
+6. Self sends departure or ctx cleanup to old parent.
+7. Old parent clears derived caches.
+
+A ctx announcement is self-authenticating when `msg.from` is the actor described
+by the ctx. Ctx forwarded by a different actor is input, not proof of self's
+current ctx.
 
 Protected operations check caller DID against `owner`:
 
@@ -146,7 +186,7 @@ prop to the joined text value, and deletes that prop when no value is supplied.
 
 ## Help
 
-`help` is an avatar-mediated avatar-mediated command. It shows the avatar's general command
+`help` is an avatar-mediated command. It shows the avatar's general command
 index: movement, speech, ownership, building, nickname, and `help here`.
 
 `help here` asks the current room/place for its own `:help`. The avatar does not
