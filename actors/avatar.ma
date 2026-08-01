@@ -2,8 +2,6 @@
 ; Root owns protected state. The controlling DID may call exposed command methods only.
 
 ; Avatar identity and address helpers.
-(define ROOM_CTX_PROTOCOL "/ma/ctx/room/0.0.1")
-(define CONTAINER_CTX_PROTOCOL "/ma/ctx/container/0.0.1")
 (define ROOM_KIND "/ma/room/0.0.1")
 (define CONTAINER_KIND "/ma/container/0.0.1")
 (define INVENTORY_LABEL "Inventory")
@@ -74,18 +72,63 @@
     (set-prop! "inventory" (canonical-actor actor))
     (ma-save-state!)))
 
+(define (inventory-parent-ctx actor)
+  (map-set
+    (map-set
+      (map-set
+        (map-set
+          (map-set
+            (map-set
+              (map-set (make-map) "actor" (canonical-actor actor))
+              "kind" "container")
+            "protocol" CONTAINER_KIND)
+          "parent" (qualified-actor (local-self)))
+        "name" INVENTORY_LABEL)
+      "nick" "inventory")
+    "description" "A personal inventory container."))
+
+(define (adopt-inventory! actor)
+  (if (valid-did-url? actor)
+      (let ((current (inventory-actor))
+            (adopted (canonical-actor actor)))
+        (begin
+          (if (and current (not (same-actor? current adopted)))
+              (begin
+                (set-prop! "inventory-ctx" "")
+                (set-inventory-map! (make-map)))
+              #f)
+          (set-inventory-actor! adopted)
+          (ma-send! adopted (list :parent (inventory-parent-ctx adopted)))))
+      #f))
+
+(define (ensure-inventory-ref!)
+  (let ((owner-did (did)))
+    (if (valid-did? owner-did)
+        (let ((configured (inventory-actor)))
+          (if configured
+              configured
+              (let ((actor (inventory-for-did owner-did)))
+                (begin
+                  (set-inventory-actor! actor)
+                  (if (entity-live? actor)
+                      #f
+                      (ma-create-actor CONTAINER_KIND #f (inventory-init owner-did (local-self)) (inventory-fragment owner-did)))
+                  actor))))
+        #f)))
+
 (define (ensure-inventory!)
   (let ((owner-did (did)))
     (if (valid-did? owner-did)
-        (let ((actor (inventory-for-did owner-did)))
-          (begin
-            (if (same-actor? (inventory-actor) actor)
-                #f
-                (set-inventory-actor! actor))
-            (if (entity-live? actor)
-                (ma-send! (canonical-actor actor) (list :sync-ctx))
-                (ma-create-actor CONTAINER_KIND #f (inventory-init owner-did (local-self)) (inventory-fragment owner-did)))
-            actor))
+        (let ((configured (inventory-actor)))
+          (if configured
+              configured
+              (let ((actor (inventory-for-did owner-did)))
+                (begin
+                  (set-inventory-actor! actor)
+                  (if (entity-live? actor)
+                      #f
+                      (ma-create-actor CONTAINER_KIND #f (inventory-init owner-did (local-self)) (inventory-fragment owner-did)))
+                  actor))))
         #f)))
 
 (define (inventory-parent)
@@ -99,26 +142,67 @@
 ; Context terms sent to the controlling did. These must contain fully
 ; qualified actor references, never runtime-local #fragment shorthand.
 (define (ctx-term text)
-  (list :ctx
-    (list (list :protocol LAMBDA_CTX_PROTOCOL)
-          (list :kind "avatar")
-          (list :root (qualified-actor (root)))
-          (list :avatar (qualified-actor (local-self)))
-          (list :inventory (qualified-actor (inventory-actor)))
-          (list :nick (nick))
-          (list :room (qualified-actor (room)))
-          (list :text text))))
+  (let ((inventory (ensure-inventory-ref!)))
+    (list :ctx
+      (list (list :kind "avatar")
+            (list :did (did))
+            (list :root (qualified-actor (root)))
+            (list :avatar (qualified-actor (local-self)))
+            (list :inv (qualified-actor inventory))
+            (list :nick (nick))
+            (list :room (qualified-actor (room)))
+            (list :text text)))))
 
 (define (ctx-term-room r text)
-  (list :ctx
-    (list (list :protocol LAMBDA_CTX_PROTOCOL)
-          (list :kind "avatar")
-          (list :root (qualified-actor (root)))
-          (list :avatar (qualified-actor (local-self)))
-          (list :inventory (qualified-actor (inventory-actor)))
-          (list :nick (nick))
-          (list :room (qualified-actor r))
-          (list :text text))))
+  (let ((inventory (ensure-inventory-ref!)))
+    (list :ctx
+      (list (list :kind "avatar")
+            (list :did (did))
+            (list :root (qualified-actor (root)))
+            (list :avatar (qualified-actor (local-self)))
+            (list :inv (qualified-actor inventory))
+            (list :nick (nick))
+            (list :room (qualified-actor r))
+            (list :text text)))))
+
+(define (avatar-ctx-map r text)
+  (let ((inventory (ensure-inventory-ref!)))
+    (map-set
+      (map-set
+        (map-set
+          (map-set
+            (map-set
+              (map-set
+                (map-set
+                  (make-map)
+                  "kind" "avatar")
+                "did" (did))
+              "root" (qualified-actor (root)))
+            "avatar" (qualified-actor (local-self)))
+          "inv" (qualified-actor inventory))
+        "nick" (nick))
+      "room" (qualified-actor r))))
+
+(define (avatar-child-ctx)
+  (map-set
+    (map-set
+      (map-set
+        (map-set
+          (map-set
+            (map-set
+              (map-set (make-map) "actor" (local-self))
+              "kind" "avatar")
+            "protocol" "/ma/avatar/0.0.1")
+          "parent" (qualified-actor (room)))
+        "name" (nick))
+      "nick" (nick))
+    "description" "An avatar."))
+
+(define (notify-old-room-after-commit! old-room)
+  (if (and (non-empty-string? old-room)
+           (not (same-actor? old-room (room))))
+  (ma-send! (canonical-actor old-room) (list :parent (avatar-child-ctx)))
+      #f))
 
 (define (start-room) (ma-get-config-key "start"))
 (define THING_KIND "/ma/thing/0.0.1")
@@ -126,7 +210,10 @@
 (define (send-ctx text)
   (begin
     (ensure-inventory!)
-    (ma-send! (did) (ctx-term text))))
+    (ma-send! (did) (ctx-term text))
+    (if (room)
+      (ma-send! (canonical-actor (room)) (list :parent (avatar-child-ctx)))
+        #f)))
 
 (define (did? msg) (ensure-msg-did! msg))
 (define (root? msg) (same-actor? (msg-from msg) (root)))
@@ -150,13 +237,11 @@
 
 (define (avatar-ctx-valid? payload msg)
   (if (pair? payload)
-      (let ((protocol (ctx-value payload :protocol))
-            (kind (ctx-value payload :kind))
+      (let ((kind (ctx-value payload :kind))
             (root (ctx-value payload :root))
             (avatar (ctx-value payload :avatar))
             (target-room (ctx-value payload :room)))
-        (and (equal? protocol LAMBDA_CTX_PROTOCOL)
-             (equal? kind "avatar")
+        (and (equal? kind "avatar")
              (qualified-ctx-actor? root)
              (qualified-ctx-actor? avatar)
              (qualified-ctx-actor? target-room)
@@ -166,7 +251,6 @@
 
 (define (room-ctx-valid? payload msg)
   (and (map? payload)
-       (equal? (ctx-text payload "ctx") ROOM_CTX_PROTOCOL)
        (equal? (ctx-text payload "protocol") ROOM_KIND)
        (equal? (ctx-text payload "kind") "room")
        (qualified-ctx-actor? (ctx-text payload "actor"))
@@ -193,7 +277,6 @@
 
 (define (container-ctx-valid? payload msg)
   (and (map? payload)
-       (equal? (ctx-text payload "ctx") CONTAINER_CTX_PROTOCOL)
        (equal? (ctx-text payload "protocol") CONTAINER_KIND)
        (equal? (ctx-text payload "kind") "container")
        (qualified-ctx-actor? (ctx-text payload "actor"))
@@ -221,18 +304,17 @@
             (if (map? contents)
                 (set-inventory-map! contents)
                 #f))
-          (ma-save-state!))
+          (ma-save-state!)
+          #t)
         #f)))
 
-(define (move-ctx-valid? ctx)
-  (let ((actor (ctx-text ctx "actor"))
-        (kind (ctx-text ctx "kind"))
-        (target-room (ctx-text ctx "room")))
-    (and (map? ctx)
-         (equal? actor (did))
-         (or (equal? kind "avatar")
-             (equal? kind "did"))
-         (qualified-ctx-actor? target-room))))
+(define (exit-avatar-ctx-valid? payload msg)
+  (and (map? payload)
+       (equal? (ctx-text payload "kind") "avatar")
+       (equal? (ctx-text payload "did") (did))
+       (same-actor? (ctx-text payload "avatar") (local-self))
+       (qualified-ctx-actor? (ctx-text payload "room"))
+      (exit-ctx-caller? payload msg)))
 
 (define (set-pending-move! target-room old-room)
   (begin
@@ -312,9 +394,23 @@
       (source
       (if (take-has-source? args)
          (ma-send! (canonical-actor source) (list :take (did) token carrier))
-         (send-room :take (list (did) token carrier))))
+         (let ((entry (room-ctx-ref token)))
+           (if entry
+               (ma-send! (canonical-actor (ctx-text entry "actor")) (list :take (did) carrier entry))
+               (send-did-text (string-append "Unknown visible agent or thing: " token))))))
       (else
        (send-did-text "You are nowhere.")))))
+
+(define (send-recycle args)
+  (let* ((token (take-token args))
+         (entry (if token (inventory-ref token) #f))
+         (actor (if entry (canonical-actor (car entry)) #f)))
+    (cond (entry
+           (ma-send! (canonical-actor (inventory-parent)) (list :recycle-from (did) actor)))
+          ((room)
+           (send-room :recycle (list (did) token)))
+          (else
+           (send-did-text "You are nowhere.")))))
 
 (define (put-args-valid? args)
   (and (not (null? args))
@@ -429,6 +525,39 @@
         (room-ctx-find-entry token ctx (list "things" "agents" "who" "exits"))
         #f)))
 
+(define (room-ctx-exit-ref token)
+  (let ((ctx (stored-room-ctx)))
+    (if ctx
+        (let ((entry (room-ctx-find-entry token ctx (list "exits"))))
+          (if (and entry
+                   (equal? (ctx-text entry "kind") "exit")
+                   (valid-did-url? (ctx-text entry "actor")))
+              entry
+              #f))
+        #f)))
+
+(define (room-ctx-exit-actor? actor)
+  (let ((entry (room-ctx-exit-ref actor)))
+    (and entry (same-actor? actor (ctx-text entry "actor")))))
+
+(define (exit-ctx-caller? ctx msg)
+  (let ((exit (ctx-text ctx "exit")))
+    (and (non-empty-string? exit)
+         (same-actor? exit (msg-from msg))
+         (room-ctx-exit-actor? exit))))
+
+(define (avatar-go! args msg)
+  (let ((direction (if (null? args) #f (car args))))
+    (cond ((not direction)
+           (send-did-text "Usage: go <direction>"))
+          ((get-prop "pending-room")
+           (send-did-text "Movement already pending."))
+          (else
+           (let ((entry (room-ctx-exit-ref direction)))
+             (if entry
+                 (ma-send! (canonical-actor (ctx-text entry "actor")) (list :ctx (avatar-ctx-map (room) #f)))
+                 (send-did-text (string-append "No exit " direction "."))))))))
+
 (define (look-room-ctx-entry entry token)
   (let ((actor (ctx-text entry "actor")))
     (if (valid-did-url? actor)
@@ -529,6 +658,12 @@
   (let ((resolved (inventory-ref-resolved token)))
     (if resolved resolved (inventory-ref-any token))))
 
+(define (inventory-lookup-did-url token)
+  (cond ((valid-did-url? token) (canonical-actor token))
+        (else
+         (let ((entry (inventory-ref token)))
+           (if entry (inventory-entry-actor entry) #f)))))
+
 (define (forget-inventory! actor)
   (if (non-empty-string? actor)
       (set-inventory-map! (map-delete (inventory-map) (canonical-actor actor)))
@@ -588,7 +723,7 @@
          (begin
            (forget-inventory-ctx-labels! (car args))
            (remember-child! (car args))
-           (ma-send! (canonical-actor (ctx-text (car args) "actor")) (list :parent (car args)))
+           (ma-send! (canonical-actor (ctx-text (car args) "actor")) (list :child (car args)))
            (reply-ok msg)))))
 
 (define (make-kind kind)
@@ -659,27 +794,33 @@
   (string-append "No help topic: " topic "\nTry help or help here."))
 
 ; Root and room callbacks.
-(set-internal-rpc-method! :sync-ctx
-  (lambda (args msg)
-    (if (root? msg)
-        (send-ctx #f)
-        #f)))
+
+(define (avatar-arg-at args index)
+  (cond ((null? args) #f)
+        ((= index 0) (car args))
+        (else (avatar-arg-at (cdr args) (- index 1)))))
 
 (set-internal-rpc-method! :enter-room
   (lambda (args msg)
     (if (and (enter-room-authorised? args msg) (not (null? args)))
         (let ((target-room (car args))
               (old-room (room))
-                (requested-nick (if (or (null? (cdr args))
-                            (null? (cdr (cdr args))))
-                                  #f
-                          (car (cdr (cdr args))))))
+              (requested-nick (avatar-arg-at args 2))
+              (requested-inventory (avatar-arg-at args 3)))
           (if (non-empty-string? requested-nick)
               (begin
                 (set-prop! "nick" requested-nick)
                 (ma-save-state!))
               #f)
-          (ma-send! (canonical-actor target-room) (list :enter (local-self) (canonical-actor old-room) (nick))))
+          (if (valid-did-url? requested-inventory)
+              (adopt-inventory! requested-inventory)
+              #f)
+          (ma-send! (canonical-actor target-room)
+                    (list :enter
+                          (local-self)
+                          (canonical-actor old-room)
+                          (nick)
+                          (qualified-actor (inventory-actor)))))
         #f)))
 
 (set-internal-rpc-method! :ctx
@@ -691,18 +832,21 @@
         (let ((payload (car args)))
           (cond
             ((avatar-ctx-valid? payload msg)
-             (begin
+             (let ((old-room (room)))
                (clear-pending-move!)
                (set-prop! "room" (canonical-actor (ctx-value payload :room)))
                (set-prop! "nick" (ctx-value payload :nick))
                (ma-save-state!)
-               (ensure-inventory!)
-               (ma-send! (did) (cons :ctx args))))
+                 (if (valid-did-url? (ctx-value payload :inv))
+                   (adopt-inventory! (ctx-value payload :inv))
+                   (ensure-inventory!))
+               (ma-send! (did)
+                         (ctx-term-room (ctx-value payload :room)
+                                        (ctx-value payload :text)))
+               (notify-old-room-after-commit! old-room)))
             ((room-ctx-valid? payload msg)
              (remember-room-ctx! payload))
-            ((container-ctx-valid? payload msg)
-             (remember-inventory-ctx! payload))
-            ((and (move-ctx-valid? payload) (ctx-caller? msg))
+            ((exit-avatar-ctx-valid? payload msg)
              (let* ((target-room (ctx-text payload "room"))
                     (old-room (room))
                     (text (ctx-text payload "text")))
@@ -714,7 +858,7 @@
                      #f
                      (begin
                        (set-pending-move! target-room old-room)
-                       (ma-send! (did) (list :ctx payload)))))))
+                       (ma-send! (canonical-actor target-room) (list :enter payload)))))))
             (else #f))))))
 
 (set-rpc-method! :ctx?
@@ -766,7 +910,6 @@
               (set-prop! "nick" (join-words args))
               (ma-save-state!)
               (send-ctx #f)
-              (send-room :nick args)
               (reply-ok-silent msg)))))))
 
 (set-cmd-method! :look
@@ -859,6 +1002,19 @@
 (set-meta-method! :child
   handle-avatar-children)
 
+(set-meta-method! :parent
+  (lambda (args msg)
+    (cond ((or (null? args) (not (null? (cdr args))))
+           (reply-error msg "usage: :parent <ctx>"))
+          ((container-ctx-valid? (car args) msg)
+           (begin
+             (if (remember-inventory-ctx! (car args))
+                 (ma-send! (did) (ctx-term #f))
+                 #f)
+             (reply-ok msg)))
+          (else
+           (reply-error msg "parent ctx must come from configured inventory container")))))
+
 (set-cmd-method! :inventory
   (lambda (args msg)
     (require-did msg
@@ -939,14 +1095,22 @@
     (require-did msg
       (lambda ()
         (if (null? args)
-            (send-room-as-did :drop args)
-            (let* ((entry (inventory-ref (car args)))
-                   (actor (if entry (canonical-actor (car entry)) #f))
-                   (ctx (if entry (cdr entry) #f)))
+            (send-did-text "Usage: drop <thing>")
+            (let* ((token (join-words args))
+                   (actor (inventory-lookup-did-url token)))
               (if actor
                   (begin
-                    (ma-send! (canonical-actor (inventory-parent)) (list :take (did) actor (canonical-actor (room)))))
-                  (send-did-text (string-append "Unknown carried agent or thing: " (car args))))))
+                    (ma-send! (canonical-actor actor) (list :drop (did) (canonical-actor (room)))))
+                  (send-did-text (string-append "Unknown carried agent or thing: " token)))))
+        (reply-ok-silent msg)))))
+
+(set-cmd-method! :recycle
+  (lambda (args msg)
+    (require-did msg
+      (lambda ()
+        (if (or (null? args) (not (null? (cdr args))))
+            (send-did-text "Usage: recycle <agent-or-thing>")
+            (send-recycle args))
         (reply-ok-silent msg)))))
 
 (set-cmd-method! :where?
@@ -960,23 +1124,8 @@
   (lambda (args msg)
     (require-did msg
       (lambda ()
-        (send-room-as-did :go args)
+        (avatar-go! args msg)
         (reply-ok-silent msg)))))
-
-; Room-mediated drop helper for carried things/agents.
-(set-internal-rpc-method! :drop-thing
-  (lambda (args msg)
-    (if (room? msg)
-        (if (or (null? args) (null? (cdr args)) (null? (cdr (cdr args))))
-            #f
-            (let ((did (car args))
-                  (thing (car (cdr args)))
-          (target-parent (car (cdr (cdr args))))
-          (ctx (if (or (null? (cdr (cdr (cdr args)))) (not (map? (car (cdr (cdr (cdr args))))))) #f (car (cdr (cdr (cdr args)))))))
-        (if ctx
-          (ma-send! (canonical-actor thing) (list :drop did (canonical-actor target-parent) ctx))
-          (ma-send! (canonical-actor thing) (list :drop did (canonical-actor target-parent))))))
-        #f)))
 
 (set-internal-rpc-method! :put-thing
   (lambda (args msg)

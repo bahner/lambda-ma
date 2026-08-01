@@ -56,7 +56,7 @@ such as hit points, damage, access rights, or ownership.
 Rooms accept the category in `:enter ctx`, but clients may omit `kind` when they
 do not know their effective world kind yet. Missing `kind` means session/avatar
 entry: the room creates or finds the deterministic avatar and sends no `:ok`
-itself. The avatar enters the room, receives committed `/ma/lambda/ctx/0.0.1`
+itself. The avatar enters the room, receives committed `/ma/ctx/avatar/0.0.1`
 context from the room, persists that state, and forwards the ctx to the DID principal.
 Direct `agent` and `thing` entry must provide `kind`; without it, the world
 assigns the default session kind and reports that in ctx.
@@ -228,11 +228,11 @@ Genesis actors or other actors with no parent do not emit a child-alive message.
 
 ## Context flow
 
-Zion enters by sending `:enter ctx` to the target room. The room creates or finds
-the deterministic local avatar in the background. The avatar owns the client
-context it reports to Zion: current root, avatar, room, nick, and optional text.
-Zion may cache the room for direct `:` commands, but plain commands are
-addressed to the avatar.
+Zion enters by sending `:enter [nick]` to the target room. This is an entry
+intent, not context. The room creates or finds the deterministic local avatar in
+the background. The avatar owns the client context it reports to Zion: current
+root, avatar, room, nick, and optional text. Zion may cache the room for direct
+`:` commands, but plain commands are addressed to the avatar.
 
 New avatar init is push-based: the live avatar sends room `:enter`. For an
 existing avatar, the target room sends `:enter-room` to the avatar; the avatar
@@ -257,7 +257,7 @@ return point on the next login. DID principal-facing context is sent by avatar.
 
 External entry is room-first:
 
-1. DID principal asks the target room to enter with `:enter ctx`.
+1. DID principal asks the target room to enter with `:enter [nick]`.
 2. Room derives the caller's deterministic avatar URL.
 3. Existing avatar: room asks avatar to enter here; avatar sends room `:enter`.
 4. New avatar: room creates it with bare DID as fragment hint; avatar init sends
@@ -266,28 +266,30 @@ External entry is room-first:
    room state and forwards the ctx to DID principal.
 
 Room-to-room movement uses the same avatar handshake as external entry. The
-source room resolves a direction to a first-class exit actor. The exit
-transforms ordinary movement ctx and returns it to the source room; the moving
-actor then tries to enter the target room itself. The target room creates or
-reuses that DID principal's deterministic local avatar before publishing the new context.
+avatar resolves a direction from its cached room ctx, sends avatar ctx to the
+first-class exit actor's internal `:ctx` handler, and receives annotated avatar
+ctx back directly.
+The moving actor then tries to enter the target room itself. The target room
+creates or reuses that DID principal's deterministic local avatar before
+publishing the new context.
 
-1. Avatar sends `:go <direction>` to its current room.
-2. Room sends `:traverse <ctx>` to the exit, with minimal ctx fields `actor`,
-   `kind`, `room`, and optional `nick`/`text`.
-3. Exit sends `:traversed <ctx>` back to the source room with `ctx.room` set to
-   either the target room or the original room if blocked.
-4. Source room sends `:ctx <ctx>` to `ctx.actor`.
+1. Avatar receives `go <direction>` from its controlling DID.
+2. Avatar finds the named exit in the latest room ctx and sends avatar ctx to
+   the exit, including `protocol`, `kind`, `did`, `avatar`, `room`, and `inv`.
+3. Exit sends `:ctx <ctx>` back to the avatar. If traversal is allowed,
+   `ctx.room` is the target room. If blocked, `ctx.room` remains the source room
+   and `ctx.text` explains why.
+4. Avatar validates the exit against cached room ctx, then performs target-room
+   entry itself.
 5. Target rooms ask the deterministic local avatar for `did` to enter the room.
 
 Agent movement is actor-owned and room-visible:
 
-1. The owner, or any caller while the agent is free/unowned, sends `:move` or
-   `:go <direction>` to the agent.
-2. The agent asks its current parent room to choose an exit for `:move`, or to
-   use the named exit for `:go <direction>`.
-3. The room sends `:traverse <ctx>` to the exit.
-4. The exit returns `:traversed <ctx>` to the source room, and the source room
-   sends `:ctx <ctx>` to the agent.
+1. The owner, or any caller while the agent is free/unowned, sends `:move` to
+   the agent.
+2. The agent asks its current parent room to choose an exit for `:move`.
+3. The room sends ctx to the exit's internal `:ctx` handler.
+4. The exit sends `:ctx <ctx>` to the agent.
 5. The agent sends `:leave-occupant` to the old room, then sends map-shaped
    `:enter` with `agent-ctx` to the target room.
 6. The old room broadcasts `<nick> leaves.` and the target room broadcasts

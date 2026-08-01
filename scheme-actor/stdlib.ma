@@ -61,6 +61,7 @@
        (ctx-optional-text-valid? ctx "actor")
        (ctx-optional-text-valid? ctx "avatar")
        (ctx-optional-text-valid? ctx "did")
+      (ctx-optional-text-valid? ctx "inv")
        (ctx-optional-text-valid? ctx "root")
       (ctx-optional-text-valid? ctx "parent")
        (ctx-optional-text-valid? ctx "protocol")

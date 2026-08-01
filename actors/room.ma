@@ -3,7 +3,6 @@
 
 ; Kinds and timing constants.
 (define ROOM_KIND "/ma/room/0.0.1")
-(define ROOM_CTX_PROTOCOL "/ma/ctx/room/0.0.1")
 (define EXIT_KIND "/ma/exit/0.0.1")
 (define PRESENCE_INTERVAL "30s")
 (define PRESENCE_TIMEOUT_TICKS 10)
@@ -318,7 +317,7 @@
                     (map-set
                       (map-set
                         (map-set
-                          (map-set (make-map) "ctx" ROOM_CTX_PROTOCOL)
+                          (make-map)
                           "protocol" ROOM_KIND)
                         "kind" "room")
                       "actor" (canonical-actor (self)))
@@ -394,6 +393,12 @@
 (define (entry-did-nick args)
   (arg-at-or-false args 3))
 
+(define (entry-did-inventory args)
+  (arg-at-or-false args 4))
+
+(define (entry-inventory args)
+  (arg-at-or-false args 3))
+
 (define (named-room-fragment direction target-name)
   (blake3 (string-append "lambda-ma room v1\n" (canonical-actor (self)) "\n" direction "\n" target-name) 8))
 
@@ -413,6 +418,20 @@
       "(set-prop! \"nick\" \"" n "\")\n"
       "(ma-save-state!)\n"
       "(ma-send! \"" target-room "\" (list :enter \"" avatar "\" #f \"" n "\"))\n")))
+
+(define (avatar-init-with-inventory did nick room inventory)
+  (let ((n (nick-or-default nick))
+        (r (root))
+        (avatar (avatar-for-did did))
+        (target-room (canonical-actor room))
+        (inv (if (valid-did-url? inventory) (canonical-actor inventory) "")))
+    (string-append
+      "(set-prop! \"did\" \"" did "\")\n"
+      "(set-prop! \"root\" \"" r "\")\n"
+      "(set-prop! \"nick\" \"" n "\")\n"
+      "(set-prop! \"inventory\" \"" inv "\")\n"
+      "(ma-save-state!)\n"
+      "(ma-send! \"" target-room "\" (list :enter \"" avatar "\" #f \"" n "\" \"" inv "\"))\n")))
 
 (define (ensure-avatar! did nick)
   (let* ((avatar (avatar-for-did did))
@@ -445,8 +464,7 @@
 
 (define (direct-room-ctx kind nick text)
   (list :ctx
-    (list (list :protocol LAMBDA_CTX_PROTOCOL)
-          (list :kind kind)
+    (list (list :kind kind)
           (list :root (canonical-actor (root)))
           (list :avatar "")
           (list :nick (if nick nick ""))
@@ -455,20 +473,29 @@
 
 (define (avatar-room-ctx avatar nick text)
   (list :ctx
-    (list (list :protocol LAMBDA_CTX_PROTOCOL)
-          (list :kind "avatar")
+    (list (list :kind "avatar")
           (list :root (canonical-actor (root)))
           (list :avatar (canonical-actor avatar))
           (list :nick (nick-or-default nick))
           (list :room (canonical-actor (self)))
           (list :text text))))
 
-(define (request-avatar-entry! did nick)
+(define (avatar-room-ctx-with-inventory avatar nick text inventory)
+  (list :ctx
+    (list (list :kind "avatar")
+          (list :root (canonical-actor (root)))
+          (list :avatar (canonical-actor avatar))
+          (list :inv (if (valid-did-url? inventory) (canonical-actor inventory) ""))
+          (list :nick (nick-or-default nick))
+          (list :room (canonical-actor (self)))
+          (list :text text))))
+
+(define (request-avatar-entry! did nick inventory)
   (let* ((avatar (avatar-for-did did))
          (n (nick-or-default nick)))
     (if (entity-live? avatar)
-      (ma-send! (canonical-actor avatar) (list :enter-room (canonical-actor (self)) did n))
-      (ma-create-actor AVATAR_KIND #f (avatar-init did n (canonical-actor (self))) (avatar-fragment did)))
+      (ma-send! (canonical-actor avatar) (list :enter-room (canonical-actor (self)) did n inventory))
+      (ma-create-actor AVATAR_KIND #f (avatar-init-with-inventory did n (canonical-actor (self)) inventory) (avatar-fragment did)))
     avatar))
 
 (define (expected-avatar? did avatar)
@@ -477,25 +504,25 @@
 ; Avatar entry flows. Same-runtime expected avatars can be admitted directly;
 ; foreign or stale source avatars cause the target room to create/reuse its
 ; deterministic local avatar for the did.
-(define (handle-avatar-arrival! did avatar old-room nick)
+(define (handle-avatar-arrival! did avatar old-room nick inventory)
   (if (and (local-actor-ref? avatar)
            (entity-live? avatar)
            (expected-avatar? did avatar))
-      (ma-send! (canonical-actor avatar) (list :enter-room (canonical-actor (self)) did (nick-or-default nick)))
-      (request-avatar-entry! did nick)))
+  (ma-send! (canonical-actor avatar) (list :enter-room (canonical-actor (self)) did (nick-or-default nick) inventory))
+  (request-avatar-entry! did nick inventory)))
 
 (define (announce-avatar-presence! avatar)
   (if (add-avatar-presence! avatar)
       (broadcast-except avatar (string-append (speaker-name avatar) " arrives."))
       #f))
 
-(define (commit-avatar-entry! avatar old-room nick)
+(define (commit-avatar-entry! avatar old-room nick inventory)
   (begin
     (set-label! avatar nick)
     (announce-avatar-presence! avatar)
     (presence-touch! avatar (presence-tick))
     (ma-save-state!)
-    (ma-send! (canonical-actor avatar) (avatar-room-ctx avatar nick (arrival-text)))
+    (ma-send! (canonical-actor avatar) (avatar-room-ctx-with-inventory avatar nick (arrival-text) inventory))
     (broadcast-room-ctx!)))
 
 (define (record-avatar-presence! avatar old-room)
@@ -507,6 +534,21 @@
 
 (define (enter-empty? args)
   (null? args))
+
+(define (direct-did-enter-args? args msg)
+  (and (valid-did? (msg-from msg))
+       (or (null? args)
+           (and (not (null? args))
+                (string? (car args))
+                (or (null? (cdr args))
+                    (and (string? (car (cdr args)))
+                         (null? (cdr (cdr args)))))))))
+
+(define (direct-did-enter-nick args)
+  (if (null? args) #f (car args)))
+
+(define (direct-did-enter-inventory args)
+  (if (or (null? args) (null? (cdr args))) #f (car (cdr args))))
 
 (define (enter-ctx-args? args)
   (and (not (null? args)) (map? (car args))))
@@ -529,12 +571,13 @@
 ; are token-bound room locals whose own parent state remains authoritative.
 (define (handle-enter-ctx! msg ctx)
   (let* ((actor (ctx-text ctx "actor"))
-         (did (if (valid-did? actor) actor (msg-from msg)))
+         (ctxdid (ctx-did ctx))
+         (did (if (valid-did? ctxdid) ctxdid (if (valid-did? actor) actor (msg-from msg))))
          (kind (ctx-text ctx "kind"))
          (name (ctx-text ctx "name")))
     (cond
       ((and (enter-avatar-kind? kind) (ctx-sender-valid? ctx msg))
-       (request-avatar-entry! did (ctx-text ctx "nick")))
+        (request-avatar-entry! did (ctx-text ctx "nick") (ctx-text ctx "inv")))
       ((enter-avatar-kind? kind)
        (reply-error msg "avatar enter ctx must come from the deterministic avatar for its DID"))
       ((and (agent-kind? kind) (enter-direct-ctx-valid? ctx "agent"))
@@ -551,17 +594,19 @@
 (define (handle-self-avatar-entry! args)
   (let ((avatar (car args))
         (old-room (entry-old-room args))
-        (nick (entry-nick args)))
-    (commit-avatar-entry! avatar old-room nick)))
+    (nick (entry-nick args))
+    (inventory (entry-inventory args)))
+  (commit-avatar-entry! avatar old-room nick inventory)))
 
 (define (handle-did-avatar-entry! args)
   (let* ((did (entry-did args))
          (avatar (entry-avatar args))
          (old-room (entry-did-old-room args))
-         (nick (entry-did-nick args)))
+       (nick (entry-did-nick args))
+       (inventory (entry-did-inventory args)))
     (if (not avatar)
         #f
-        (handle-avatar-arrival! did avatar old-room nick))))
+      (handle-avatar-arrival! did avatar old-room nick inventory))))
 
 (define (handle-legacy-avatar-entry! args)
   (let* ((avatar (car args))
@@ -581,7 +626,7 @@
           (broadcast-except actor (string-append (speaker-name actor) " arrives.")))
         #f)
     (ma-save-state!)
-    (ma-send! (canonical-actor actor) (list :parent ctx))
+    (ma-send! (canonical-actor actor) (list :child ctx))
     (ma-send! (canonical-actor actor) (direct-room-ctx "agent" nick (arrival-text)))
     (broadcast-room-ctx!)
     (ma-reply! msg (list :ok "entered"))))
@@ -601,7 +646,7 @@
            (set-claim! actor ctx)
            (set-label! actor label)
            (set-thing! token actor)
-           (ma-send! (canonical-actor actor) (list :parent ctx))
+           (ma-send! (canonical-actor actor) (list :child ctx))
            (broadcast-room-ctx!)
            (ma-reply! msg (list :ok "entered"))))))
 
@@ -615,6 +660,36 @@
   (and (actor-ctx? ctx msg)
        (or (same-actor? (child-parent-target ctx) (self))
            (not (same-actor? (child-parent-target ctx) (self))))))
+
+(define (handle-avatar-parent! msg ctx)
+  (let* ((actor (ctx-text ctx "actor"))
+         (old-name (speaker-name actor))
+         (new-nick (ctx-text ctx "nick"))
+         (was-present (member-entry? actor (occupants))))
+    (cond ((not (and (enter-direct-ctx-valid? ctx "avatar")
+                     (actor-ctx? ctx msg)))
+           (reply-error msg "avatar parent ctx must include actor, parent, kind, protocol, name, nick, description and match sender"))
+          ((not (same-actor? (child-parent-target ctx) (self)))
+           (begin
+             (remove-occupant! actor)
+             (remove-avatar-occupant! actor)
+             (ma-save-state!)
+             (broadcast-room-ctx!)
+             (reply-ok msg)))
+          (else
+           (begin
+             (set-label! actor new-nick)
+             (add-avatar-presence! actor)
+             (presence-touch! actor (presence-tick))
+             (ma-save-state!)
+             (broadcast-room-ctx!)
+             (if (and was-present
+                      (non-empty-string? old-name)
+                      (non-empty-string? new-nick)
+                      (not (equal? old-name new-nick)))
+                 (broadcast (string-append old-name " is now known as " new-nick "."))
+                 #f)
+             (reply-ok msg))))))
 
 (define (handle-child-announcement! msg ctx)
   (let ((kind (ctx-text ctx "kind"))
@@ -812,12 +887,16 @@
     (cond ((map? claim) (ctx-text claim "kind"))
           (else "actor"))))
 
-(define (movement-ctx actor did)
+(define (avatar-exit-ctx actor did)
   (let* ((actor-ref (if did did (canonical-actor actor)))
+         (base-ctx (map-set (make-map) "actor" actor-ref))
+         (avatar-ctx (if did
+                         (map-set
+                           (map-set base-ctx "did" did)
+                           "avatar" (canonical-actor actor))
+                         base-ctx))
          (ctx (map-set
-                (map-set
-                  (map-set (make-map) "actor" actor-ref)
-                  "kind" (if did "avatar" (movement-kind actor)))
+                (map-set avatar-ctx "kind" (if did "avatar" (movement-kind actor)))
                 "room" (canonical-actor (self)))))
     (let ((with-nick (if (has-label? actor)
                          (map-set ctx "nick" (speaker-name actor))
@@ -838,22 +917,10 @@
         ctx
         (map-set ctx "avatar" caller-ref))))
 
-(define (traverse-exit! actor did direction exit)
+(define (send-exit-ctx! actor did direction exit)
   (let* ((healed-exit (heal-local-exit! direction exit))
          (active-exit (if healed-exit healed-exit exit)))
-    (ma-send! (canonical-actor active-exit) (list :traverse (movement-ctx actor did)))))
-
-(define (traversed-ctx-valid? ctx)
-  (and (map? ctx)
-       (non-empty-string? (ctx-text ctx "actor"))
-       (non-empty-string? (ctx-text ctx "kind"))
-       (non-empty-string? (ctx-text ctx "room"))))
-
-(define (handle-traversed! msg ctx)
-  (let ((recipient (ctx-text ctx "avatar")))
-    (if (and (known-exit? (msg-from msg)) (traversed-ctx-valid? ctx))
-        (ma-send! (canonical-actor (if (non-empty-string? recipient) recipient (ctx-text ctx "actor"))) (list :ctx ctx))
-        #f)))
+    (ma-send! (canonical-actor active-exit) (list :ctx (avatar-exit-ctx actor did)))))
 
 (define (exits-text)
   (let ((directions (exit-directions)))
@@ -889,13 +956,13 @@
     "  owner? <name>     show who owns a visible occupant, thing, or exit\n"
     "  take <thing>      ask an agent or thing to bind to you\n"
     "  drop <thing>      ask an occupant to set this room as parent\n"
+    "  recycle <thing>   remove an owned agent or thing from here\n"
     "  where? <thing>    ask where an occupant says it is\n"
     "  say <text>        speak here\n"
     "  emote <text>      act here\n"
     "  look <exit>       inspect an exit\n"
     "  :leave           stop being shown here until you return\n"
     "  :remove <who>     owner removes an occupant by unique nick or DID\n"
-    "  go <direction>    move through an exit\n"
     "  move              move through one available exit\n"
     "  claim             claim this room if it is unowned\n"
     "  owner [did]       show or transfer ownership\n"
@@ -1432,6 +1499,9 @@
           (print-and-reply-ok msg (room-text))
           (print-and-reply-ok msg "Use your avatar to inspect visible things.")))))
 
+(unset-method! :name)
+(unset-method! :description)
+
 (set-cmd-method! :exits?
   (lambda (args msg)
     (let ((avatar (msg-from msg)))
@@ -1490,43 +1560,18 @@
                (set-thing! (car thing-args) (car (cdr thing-args)))
                (reply-ok-with msg "thing alias set")))))))
 
-(set-cmd-method! :take
+(set-cmd-method! :recycle
   (lambda (args msg)
     (let* ((did (caller-did args msg))
-           (avatar (msg-from msg))
-           (take-args (command-args args msg))
-           (token (if (null? take-args) #f (car take-args)))
-           (carrier (take-carrier-parent take-args avatar))
-           (actor (if token (movable-ref token) #f)))
+           (recycle-args (command-args args msg))
+           (token (if (null? recycle-args) #f (car recycle-args)))
+           (actor (if token (if (valid-did-url? token) token (movable-ref token)) #f)))
       (cond ((not token)
-             (reply-to-sender msg "Usage: take <agent-or-thing>"))
+             (reply-to-sender msg "Usage: recycle <agent-or-thing>"))
             (actor
              (begin
-               (ma-send! (canonical-actor actor) (list :take did carrier (claim-ctx actor)))
-               (reply-to-sender msg (string-append "You try to take " token "."))))
-            (else
-             (reply-to-sender msg (string-append "Unknown agent or thing: " token)))))))
-
-(set-cmd-method! :drop
-  (lambda (args msg)
-    (let* ((did (caller-did args msg))
-           (avatar (msg-from msg))
-           (drop-args (command-args args msg))
-           (token (if (null? drop-args) #f (car drop-args)))
-             (ctx (if (or (null? drop-args)
-                  (null? (cdr drop-args))
-                  (not (map? (car (cdr drop-args)))))
-                #f
-                (car (cdr drop-args))))
-           (actor (if token (if (valid-did-url? token) token (movable-ref token)) #f))
-           (drop-ctx (if ctx ctx (if actor (claim-ctx actor) #f)))
-           (label (if ctx (child-label ctx) token)))
-      (cond ((not token)
-             (reply-to-sender msg "Usage: drop <agent-or-thing>"))
-            (actor
-             (begin
-               (ma-send! (canonical-actor avatar) (list :drop-thing did (canonical-actor actor) (canonical-actor (self)) drop-ctx))
-               (reply-to-sender msg (string-append "You drop " label "."))))
+               (ma-send! (canonical-actor actor) (list :recycle did))
+               (reply-to-sender msg (string-append "You recycle " token "."))))
             (else
              (reply-to-sender msg (string-append "Unknown agent or thing: " token)))))))
 
@@ -1569,12 +1614,6 @@
              (ma-send! (canonical-actor actor) (list :where?)))
             (else
              (reply-to-sender msg (string-append "Unknown agent or thing: " token)))))))
-
-(set-internal-rpc-method! :traversed
-  (lambda (args msg)
-    (if (null? args)
-        #f
-        (handle-traversed! msg (car args)))))
 
 (define (normalise-exit-verb verb)
   (cond ((symbol? verb) verb)
@@ -1830,21 +1869,6 @@
                           (reply-ok msg))
                         (reply-to-sender msg (string-append "No exit " direction "."))))))))))))
 
-(set-cmd-method! :go
-  (lambda (args msg)
-    (if (reject-foreign-delegated-go? args msg)
-      (reply-ok msg)
-        (let* ((actor (go-caller-actor args msg))
-               (did (go-caller-did args msg))
-               (go-args (go-command-args args msg))
-               (direction (if (null? go-args) "out" (car go-args))))
-          (let ((exit (exit-target direction)))
-            (if exit
-                (traverse-exit! actor did direction exit)
-                (begin
-                  (ma-send! (canonical-actor actor) (list :print (string-append "No exit " direction ".")))
-                  (reply-ok msg))))))))
-
 (set-cmd-method! :move
   (lambda (args msg)
     (if (reject-foreign-delegated-go? args msg)
@@ -1853,25 +1877,12 @@
                (did (go-caller-did args msg))
                (direction (random-exit-direction)))
           (if direction
-              (traverse-exit! actor did direction (exit-target direction))
+              (begin
+                (send-exit-ctx! actor did direction (exit-target direction))
+                (reply-ok msg))
               (begin
                 (ma-send! (canonical-actor actor) (list :print "No exits."))
                 (reply-ok msg)))))))
-
-(set-cmd-method! :nick
-  (lambda (args msg)
-    (if (avatar-caller? msg)
-        (if (null? args)
-          (reply-ok-with msg (speaker-name (msg-from msg)))
-            (let ((new-nick (join-words args))
-                  (old-nick (speaker-name (msg-from msg)))
-                  (avatar (msg-from msg)))
-              (set-prop! (label-key avatar) new-nick)
-              (ma-save-state!)
-              (broadcast-room-ctx!)
-              (broadcast (string-append old-nick " is now known as " new-nick "."))
-                (reply-ok msg)))
-        (reply-error msg "nick sender must be an avatar"))))
 
 (set-meta-method! :child
   (lambda (args msg)
@@ -1882,11 +1893,22 @@
           (else
            (handle-child-announcement! msg (car args))))))
 
-(set-internal-rpc-method! :enter
+(set-meta-method! :parent
+  (lambda (args msg)
+    (cond ((null? args)
+           (reply-ok-with msg (actor-parent)))
+          ((not (null? (cdr args)))
+           (reply-error msg "usage: :parent [ctx]"))
+          ((not (equal? (ctx-text (car args) "kind") "avatar"))
+           (handle-child-announcement! msg (car args)))
+          (else
+           (handle-avatar-parent! msg (car args))))))
+
+(set-cmd-method! :enter
   (lambda (args msg)
     (cond
-      ((enter-empty? args)
-       (reply-error msg "avatar entry must come from an avatar actor"))
+      ((direct-did-enter-args? args msg)
+       (request-avatar-entry! (msg-from msg) (direct-did-enter-nick args) (direct-did-enter-inventory args)))
       ((enter-ctx-args? args)
        (handle-enter-ctx! msg (car args)))
       ((self-avatar-entry? args msg)

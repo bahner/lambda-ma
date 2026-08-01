@@ -33,6 +33,11 @@
   (del-prop! "pending-room")
   (ma-save-state!))
 
+(define (clear-parent!)
+  (del-prop! "parent")
+  (del-prop! "pending-room")
+  (ma-save-state!))
+
 (define (pending-room)
   (let ((p (get-prop "pending-room")))
     (if p p "")))
@@ -52,7 +57,7 @@
   (let ((p (parent)))
     (if (equal? p "")
         #f
-        (ma-send! (canonical-actor p) (list :child (agent-ctx))))))
+        (ma-send! (canonical-actor p) (list :parent (agent-ctx))))))
 
 (define (enter room)
   (begin
@@ -132,7 +137,6 @@
       ; Transfer validation keeps take/drop strict at the room boundary.
 (define (valid-room-ctx? ctx)
   (and (pair? ctx)
-       (equal? (ctx-alist-ref ctx :protocol) LAMBDA_CTX_PROTOCOL)
        (equal? (ctx-alist-ref ctx :kind) "agent")
        (non-empty-string? (ctx-alist-ref ctx :room))))
 
@@ -163,8 +167,26 @@
 (define (orphan-owner-recovery? did)
   (and (equal? (parent) "") (owner-did? did)))
 
+(define (owner-avatar-delegation? did msg)
+  (and (owner-did? did) (msg-from-owner? did msg)))
+
 (define (transfer-caller-authorised? did msg)
-  (or (caller-is-parent? msg) (orphan-owner-recovery? did)))
+  (or (caller-is-parent? msg)
+      (orphan-owner-recovery? did)
+      (owner-avatar-delegation? did msg)))
+
+(define (recycle-caller-authorised? did msg)
+  (and (caller-is-parent? msg) (owner-did? did)))
+
+(define (recycle! msg)
+  (let ((old-parent (parent)))
+    (begin
+      (clear-parent!)
+      (if (non-empty-string? old-parent)
+          (ma-send! (canonical-actor old-parent) (list :parent (agent-ctx-for-parent "")))
+          #f)
+      (reply-ok-with msg "recycled")
+      (ma-end))))
 
 ; Room context and movement helpers.
 (define (agent-ctx-for-parent target-parent)
@@ -211,13 +233,14 @@
     (set-prop-from-ctx! ctx "nick")
     (set-prop-from-ctx! ctx "description")
     (ma-save-state!)
+    (announce-parent!)
     (if (and (non-empty-string? old-parent)
              (not (same-actor? old-parent target-parent)))
-        (ma-send! (canonical-actor old-parent) (list :child (agent-ctx)))
+      (ma-send! (canonical-actor old-parent) (list :parent (agent-ctx)))
         #f))))
 
 (define (propose-parent-change! target-parent)
-  (ma-send! (canonical-actor target-parent) (list :child (agent-ctx-for-parent target-parent))))
+  (ma-send! (canonical-actor target-parent) (list :parent (agent-ctx-for-parent target-parent))))
 
 (define (send-parent-room! msg term)
   (let ((p (parent)))
@@ -233,14 +256,6 @@
       (begin
         (enter (canonical-actor target-room)))
       #f))
-
-(define (agent-go! args msg)
-  (cond ((movement-pending?)
-         (reply-error msg "movement already pending"))
-        ((movement-caller? msg)
-         (send-parent-room! msg (cons :go args)))
-        (else
-         (reply-error msg "only a free agent or owner may move this agent"))))
 
 ; Public methods.
 (set-rpc-method! :about
@@ -294,10 +309,6 @@
   (lambda (args msg)
     (send-parent-room! msg (list :exits?))))
 
-(set-cmd-method! :go
-  (lambda (args msg)
-    (agent-go! args msg)))
-
 (set-cmd-method! :move
   (lambda (args msg)
     (cond ((movement-pending?)
@@ -328,10 +339,12 @@
                    (target-parent (ctx-alist-ref ctx :room)))
                (begin
                  (set-parent! target-parent)
+                 (ma-save-state!)
                  (if (and (non-empty-string? old-parent)
                           (not (same-actor? old-parent target-parent)))
-                     (ma-send! (canonical-actor old-parent) (list :child (agent-ctx)))
-                     #f))))
+                   (ma-send! (canonical-actor old-parent) (list :parent (agent-ctx)))
+                             #f)
+                 (announce-parent!))))
             ((and (valid-move-ctx? ctx)
                   (or (caller-is-parent? msg) (owner-caller? msg)))
              (begin
@@ -426,6 +439,19 @@
                (enter target-parent)
                  (reply-ok-with msg "drop requested")))))))
 
+(set-cmd-method! :recycle
+  (lambda (args msg)
+    (let ((did (effective-did args msg))
+          (rest (effective-args args msg)))
+      (cond ((not (null? rest))
+             (reply-error msg "usage: :recycle <did>"))
+            ((not (valid-did? did))
+             (reply-error msg "recycle requires DID with did:ma: prefix"))
+            ((not (recycle-caller-authorised? did msg))
+             (reply-error msg "only owner via current parent may recycle this agent"))
+            (else
+             (recycle! msg))))))
+
 (set-meta-method! :parent
   (lambda (args msg)
     (cond ((null? args)
@@ -434,10 +460,17 @@
                (reply-error msg "only owner may inspect parent")))
           ((not (null? (cdr args)))
            (reply-error msg "usage: :parent [ctx]"))
+          (else
+           (reply-error msg "agent is not a parent for ctx updates")))))
+
+(set-meta-method! :child
+  (lambda (args msg)
+    (cond ((or (null? args) (not (null? (cdr args))))
+           (reply-error msg "usage: :child <ctx>"))
           ((not (valid-parent-ctx? (car args)))
-           (reply-error msg "parent ctx must include target parent"))
+           (reply-error msg "child ctx must include target parent"))
           ((not (same-actor? (msg-from msg) (parent-target-from-ctx (car args))))
-           (reply-error msg "parent ctx must come from target parent"))
+           (reply-error msg "child ctx must come from target parent"))
           (else
            (begin
              (apply-parent-ctx! (car args))

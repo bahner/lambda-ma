@@ -326,14 +326,13 @@ Why this works well:
 - `enter` records the target as pending, sends room `:enter`, and commits the
   new `parent` only after a valid room `:ctx` ack.
 - `:enter` with `agent-ctx` informs the room how to present the occupant.
-- `:move` and `:go` use ordinary room exits. `:go <direction>` names an exit;
-  `:move` asks the current room to choose one of the exits it knows with
-  practical, non-security random choice. The room sends movement ctx to the
-  exit, the exit returns transformed ctx to the room, and the room sends
-  `:ctx` to the agent. The agent then performs the target-room `:enter`
-  itself, so the target room remains responsible for admission.
-- Full init logic stays in the code principals provide at creation time, so principals can
-  adjust it safely when creating entities.
+- `:move` uses ordinary room exits. It asks the current room to choose one of
+  the exits it knows with practical, non-security random choice. The room and
+  exit use implementation-local movement traffic; the moving actor then
+  performs the target-room `:enter` itself, so the target room remains
+  responsible for admission.
+- Full init logic stays in the code principals provide at creation time, so
+  principals can adjust it safely when creating entities.
 Agents can use exits, but they do not expose `:dig`.
 
 ## Add custom code to one actor

@@ -10,7 +10,6 @@
 ; Lambda-ma identity helpers. Room ownership is DID based; an avatar is
 ; recognised by deterministic fragment derivation, not by a forwarded argument.
 (define AVATAR_KIND "/ma/avatar/0.0.1")
-(define LAMBDA_CTX_PROTOCOL "/ma/lambda/ctx/0.0.1")
 
 (define (self) (ma-get-config-key "self"))
 (define (runtime) (ma-get-config-key "runtime"))
@@ -248,6 +247,14 @@
         (canonical-actor candidate)
         (canonical-actor (msg-from msg)))))
 
+(define (take-feedback-verb rest)
+  (let ((hint (if (or (null? rest) (null? (cdr rest)) (null? (cdr (cdr rest)))) #f (car (cdr (cdr rest))))))
+    (if (equal? hint :drop) "drop" "take")))
+
+(define (take-transfer-verb rest)
+  (let ((hint (if (or (null? rest) (null? (cdr rest)) (null? (cdr (cdr rest)))) #f (car (cdr (cdr rest))))))
+    (if (equal? hint :drop) :drop :take)))
+
 (define (handle-parent-take did rest msg)
   (if (null? rest)
       #f
@@ -255,11 +262,13 @@
              (actor (child-ref token)))
         (if actor
             (let ((ctx (child-ctx actor))
-                  (target-parent (take-target-parent rest msg)))
+                  (target-parent (take-target-parent rest msg))
+                  (feedback-verb (take-feedback-verb rest))
+                  (transfer-verb (take-transfer-verb rest)))
               (begin
                 (forget-child! actor)
-                (ma-send! (canonical-actor actor) (list :take did target-parent ctx))
-                (ma-send! (canonical-actor (msg-from msg)) (list :print (string-append "You take " (child-label ctx) ".")))
+                (ma-send! (canonical-actor actor) (list transfer-verb did target-parent ctx))
+                (ma-send! (canonical-actor (msg-from msg)) (list :print (string-append "You " feedback-verb " " (child-label ctx) ".")))
                 (reply-ok msg)
                 #t))
             #f))))
@@ -327,7 +336,7 @@
         (else
          (begin
            (remember-child! (car args))
-           (ma-send! (canonical-actor (ctx-text (car args) "actor")) (list :parent (car args)))
+           (ma-send! (canonical-actor (ctx-text (car args) "actor")) (list :child (car args)))
            (reply-ok msg)))))
 
 (define (handle-actor-behaviour! args msg)

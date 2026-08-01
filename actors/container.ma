@@ -3,7 +3,6 @@
 ; child ctx entries while unlocked.
 
 (define CONTAINER_PROTOCOL "/ma/container/0.0.1")
-(define CONTAINER_CTX_PROTOCOL "/ma/ctx/container/0.0.1")
 
 ; Persistent state accessors.
 (define (owner) (get-prop "owner"))
@@ -38,6 +37,10 @@
 
 (define (set-parent! did)
   (set-prop! "parent" (canonical-actor did))
+  (ma-save-state!))
+
+(define (clear-parent!)
+  (del-prop! "parent")
   (ma-save-state!))
 
 (define (set-locked! value)
@@ -98,7 +101,7 @@
   (let ((value (get-prop "ctx:rev")))
     (if (number? value) value 0)))
 
-(define (container-contents-ctx)
+(define (container-ctx-for-parent target-parent)
   (map-set
     (map-set
       (map-set
@@ -108,11 +111,11 @@
               (map-set
                 (map-set
                   (map-set
-                    (map-set (make-map) "ctx" CONTAINER_CTX_PROTOCOL)
+                    (make-map)
                     "protocol" CONTAINER_PROTOCOL)
                   "kind" "container")
                 "actor" (canonical-actor (self)))
-              "parent" (canonical-actor (parent)))
+              "parent" (canonical-actor target-parent))
             "rev" (container-ctx-rev))
           "name" (name))
         "nick" (nick))
@@ -126,7 +129,7 @@
         (begin
           (inc-prop! "ctx:rev" 1)
           (ma-save-state!)
-          (ma-send! (canonical-actor p) (list :ctx (container-contents-ctx)))))))
+          (ma-send! (canonical-actor p) (list :parent (container-ctx)))))))
 
 ; Caller and reply helpers.
 (define (owner-caller? msg)
@@ -171,21 +174,6 @@
   (and (actor-ctx-shape? ctx)
        (valid-transfer-kind? (ctx-text ctx "kind"))))
 
-(define (container-ctx-for-parent target-parent)
-  (map-set
-    (map-set
-      (map-set
-        (map-set
-          (map-set
-            (map-set
-              (map-set (make-map) "actor" (canonical-actor (self)))
-              "kind" "container")
-            "protocol" CONTAINER_PROTOCOL)
-          "parent" (canonical-actor target-parent))
-        "name" (name))
-      "nick" (nick))
-    "description" (description)))
-
 (define (container-ctx)
   (container-ctx-for-parent (parent)))
 
@@ -193,7 +181,7 @@
   (let ((p (parent)))
     (if (equal? p "")
         #f
-        (ma-send! (canonical-actor p) (list :child (container-ctx))))))
+        (ma-send! (canonical-actor p) (list :parent (container-ctx))))))
 
 (define (parent-target-from-ctx ctx)
   (let ((target (ctx-text ctx "parent")))
@@ -221,13 +209,15 @@
     (set-prop-from-ctx! ctx "nick")
     (set-prop-from-ctx! ctx "description")
     (ma-save-state!)
+    (send-container-ctx!)
     (if (and (non-empty-string? old-parent)
              (not (same-actor? old-parent target-parent)))
-        (ma-send! (canonical-actor old-parent) (list :child (container-ctx)))
-        #f))))
+        (ma-send! (canonical-actor old-parent) (list :parent (container-ctx)))
+      #f)
+    #t)))
 
 (define (propose-parent-change! target-parent)
-  (ma-send! (canonical-actor target-parent) (list :child (container-ctx-for-parent target-parent))))
+  (ma-send! (canonical-actor target-parent) (list :parent (container-ctx-for-parent target-parent))))
 
 (define (owner-or-unowned? did)
   (let ((o (owner)))
@@ -240,8 +230,26 @@
 (define (orphan-owner-recovery? did)
   (and (equal? (parent) "") (owner-did? did)))
 
+(define (owner-avatar-delegation? did msg)
+  (and (owner-did? did) (msg-from-owner? did msg)))
+
 (define (transfer-caller-authorised? did msg)
-  (or (caller-is-parent? msg) (orphan-owner-recovery? did)))
+  (or (caller-is-parent? msg)
+      (orphan-owner-recovery? did)
+      (owner-avatar-delegation? did msg)))
+
+(define (recycle-caller-authorised? did msg)
+  (and (caller-is-parent? msg) (owner-did? did)))
+
+(define (recycle! msg)
+  (let ((old-parent (parent)))
+    (begin
+      (clear-parent!)
+      (if (non-empty-string? old-parent)
+          (ma-send! (canonical-actor old-parent) (list :parent (container-ctx-for-parent "")))
+          #f)
+      (reply-ok-with msg "recycled")
+      (ma-end))))
 
 (define (editable-prop? key)
   (or (equal? key "name")
@@ -254,7 +262,6 @@
       (del-prop! key)
       (set-prop! key value))
   (ma-save-state!)
-  (announce-parent!)
   (send-container-ctx!))
 
 (define (handle-container-prop! msg args)
@@ -319,13 +326,21 @@
                (reply-error msg "only owner may inspect parent")))
           ((not (null? (cdr args)))
            (reply-error msg "usage: :parent [ctx]"))
-          ((not (valid-parent-ctx? (car args)))
-           (reply-error msg "parent ctx must include target parent"))
-          ((not (same-actor? (msg-from msg) (parent-target-from-ctx (car args))))
-           (reply-error msg "parent ctx must come from target parent"))
+          ((locked?)
+           (reply-locked msg))
+          ((not (child-ctx-valid? (car args)))
+           (reply-error msg "parent ctx must include actor, parent, kind, protocol, name, nick, description"))
+          ((not (child-ctx-self-authentic? (car args) msg))
+           (reply-error msg "parent ctx actor must match sender"))
+          ((not (same-actor? (ctx-text (car args) "parent") (self)))
+           (begin
+             (forget-content! (ctx-text (car args) "actor"))
+             (send-container-ctx!)
+             (reply-ok msg)))
           (else
            (begin
-             (apply-parent-ctx! (car args))
+             (remember-content! (car args))
+             (send-container-ctx!)
              (reply-ok msg))))))
 
 (set-meta-method! :child
@@ -336,23 +351,13 @@
                (reply-ok-with msg (contents-text))))
           ((not (null? (cdr args)))
            (reply-error msg "usage: :child [ctx]"))
-          ((locked?)
-           (reply-locked msg))
-          ((not (child-ctx-valid? (car args)))
-           (reply-error msg "child ctx must include actor, parent, kind, protocol, name, nick, description"))
-          ((not (child-ctx-self-authentic? (car args) msg))
-           (reply-error msg "child ctx actor must match sender"))
-          ((not (same-actor? (ctx-text (car args) "parent") (self)))
+          ((and (valid-parent-ctx? (car args))
+                (same-actor? (msg-from msg) (parent-target-from-ctx (car args))))
            (begin
-             (forget-content! (ctx-text (car args) "actor"))
-             (send-container-ctx!)
+             (apply-parent-ctx! (car args))
              (reply-ok msg)))
           (else
-           (begin
-             (remember-content! (car args))
-             (ma-send! (canonical-actor (ctx-text (car args) "actor")) (list :parent (car args)))
-             (send-container-ctx!)
-             (reply-ok msg))))))
+           (reply-error msg "child ctx must come from target parent")))))
 
 (set-internal-rpc-method! :report-parent
   (lambda (args msg)
@@ -452,7 +457,7 @@
           (else
            (begin
              (remember-content! (car args))
-             (ma-send! (canonical-actor (ctx-text (car args) "actor")) (list :parent (car args)))
+             (ma-send! (canonical-actor (ctx-text (car args) "actor")) (list :child (car args)))
              (send-container-ctx!)
              (reply-ok-with msg "put in"))))))
 
@@ -464,7 +469,10 @@
           (rest (effective-args args msg)))
       (cond ((and (not (null? rest)) (child-ref (car rest)) (locked?))
              (reply-locked msg))
-            ((handle-parent-take did rest msg) #t)
+            ((handle-parent-take did rest msg)
+             (begin
+               (send-container-ctx!)
+               #t))
             ((not (transfer-caller-authorised? did msg))
              (reply-error msg "take must be requested by current parent"))
             ((not (valid-did? did))
@@ -515,6 +523,19 @@
                (propose-parent-change! (car rest))
                (reply-ok-with msg "drop requested")))))))
 
+(set-cmd-method! :recycle
+  (lambda (args msg)
+    (let ((did (effective-did args msg))
+          (rest (effective-args args msg)))
+      (cond ((not (null? rest))
+             (reply-error msg "usage: :recycle <did>"))
+            ((not (valid-did? did))
+             (reply-error msg "recycle requires DID with did:ma: prefix"))
+            ((not (recycle-caller-authorised? did msg))
+             (reply-error msg "only owner via current parent may recycle this container"))
+            (else
+             (recycle! msg))))))
+
 (set-cmd-method! :take-from
   (lambda (args msg)
     (cond ((locked?)
@@ -531,17 +552,25 @@
                (send-container-ctx!)
                (reply-ok-with msg ctx)))))))
 
+(set-cmd-method! :recycle-from
+  (lambda (args msg)
+    (let ((did (effective-did args msg))
+          (rest (effective-args args msg)))
+      (cond ((locked?)
+             (reply-locked msg))
+            ((or (null? rest) (not (null? (cdr rest))))
+             (reply-error msg "usage: :recycle-from <child>"))
+            ((not (content-ref (car rest)))
+             (reply-error msg "unknown container content"))
+            (else
+             (let ((actor (content-ref (car rest))))
+               (begin
+                 (ma-send! (canonical-actor actor) (list :recycle did))
+                 (reply-ok-with msg "recycle requested"))))))))
+
 (define (on-signal term)
   (cond ((equal? (verb-of term) :start)
-         (begin
-           (announce-parent!)
-           (send-container-ctx!)))
+         (send-container-ctx!))
         ((equal? (verb-of term) :shutdown)
          (ma-save-state!))
         (else #f)))
-
-(set-internal-rpc-method! :sync-ctx
-  (lambda (args msg)
-    (begin
-      (send-container-ctx!)
-      (reply-ok msg))))

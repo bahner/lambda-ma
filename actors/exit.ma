@@ -29,6 +29,14 @@
 (define (source-room-caller? msg)
   (same-actor? (msg-from msg) (source-room)))
 
+(define (ctx-recipient ctx)
+  (let ((avatar (ctx-text ctx "avatar"))
+        (actor (ctx-text ctx "actor")))
+    (if (non-empty-string? avatar) avatar actor)))
+
+(define (traveller-caller? ctx msg)
+  (same-actor? (msg-from msg) (ctx-recipient ctx)))
+
 (define (set-locked! value)
   (set-prop! "locked" (if value "true" "false"))
   (ma-save-state!))
@@ -38,13 +46,14 @@
     (set-prop! (string-append slot "-message") text)
     (ma-save-state!)))
 
-(define (valid-movement-ctx? ctx)
+(define (valid-avatar-ctx? ctx)
   (and (map? ctx)
-       (non-empty-string? (ctx-text ctx "actor"))
-       (non-empty-string? (ctx-text ctx "kind"))
+  (equal? (ctx-text ctx "kind") "avatar")
+  (non-empty-string? (ctx-text ctx "did"))
+  (non-empty-string? (ctx-text ctx "avatar"))
        (same-actor? (ctx-text ctx "room") (source-room))))
 
-(define (annotate-movement-ctx ctx room text)
+(define (annotate-avatar-ctx ctx room text)
   (map-set
     (map-set
       (map-set
@@ -54,10 +63,10 @@
     "direction" (direction)))
 
 (define (blocked-ctx ctx)
-  (annotate-movement-ctx ctx (source-room) (blocked-message)))
+  (annotate-avatar-ctx ctx (source-room) (blocked-message)))
 
 (define (target-ctx ctx)
-  (annotate-movement-ctx ctx (target-room) (traveller-message)))
+  (annotate-avatar-ctx ctx (target-room) (traveller-message)))
 
 (define (about-text)
   (string-append
@@ -163,25 +172,25 @@
         (ma-end)
         #f)))
 
-; Traversal transforms ctx state and returns it to the source room. The moving
-; actor performs target-room :enter later, so target admission remains target-room authority.
-(set-cmd-method! :traverse
+; Exit policy transforms avatar ctx state and returns it to the moving avatar.
+; The avatar asks the target room to :enter, so target admission remains target-room authority.
+(set-internal-rpc-method! :ctx
   (lambda (args msg)
     (let ((ctx (if (null? args) #f (car args))))
-      (cond ((not (source-room-caller? msg))
-             (reply-error msg "only source room may traverse this exit"))
-            ((not (valid-movement-ctx? ctx))
-             (reply-error msg "traverse requires ctx with actor, kind, and current room"))
+      (cond ((not (valid-avatar-ctx? ctx))
+             (reply-error msg "exit ctx requires avatar ctx with did, avatar, kind, protocol, and current room"))
+            ((not (or (source-room-caller? msg) (traveller-caller? ctx msg)))
+             (reply-error msg "only source room or traveller may use this exit"))
             ((locked?)
              (begin
-               (ma-send! (canonical-actor (source-room)) (list :traversed (blocked-ctx ctx)))
+               (ma-send! (canonical-actor (ctx-recipient ctx)) (list :ctx (blocked-ctx ctx)))
                (reply-ok msg)))
             ((target-room)
              (begin
-               (ma-send! (canonical-actor (source-room)) (list :traversed (target-ctx ctx)))
+               (ma-send! (canonical-actor (ctx-recipient ctx)) (list :ctx (target-ctx ctx)))
                (reply-ok msg)))
             (else
              (begin
-               (ma-send! (canonical-actor (source-room))
-                         (list :traversed (annotate-movement-ctx ctx (source-room) "This exit leads nowhere.")))
+               (ma-send! (canonical-actor (ctx-recipient ctx))
+                         (list :ctx (annotate-avatar-ctx ctx (source-room) "This exit leads nowhere.")))
                (reply-ok msg)))))))

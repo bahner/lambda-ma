@@ -89,6 +89,10 @@ When documenting or changing behaviour, keep these contracts aligned:
   messages, ctx fields such as `root`, `avatar`, `room`, or future actor/path
   references. Actors may canonicalise old local shorthand while reading legacy
   state, but sibling privilege is a local policy over full DID-URLs.
+- Visible labels, aliases, nicks, and user-facing names are lookup terms only;
+  they must never be persistent map keys, authority keys, or actor identity.
+  Persistent child, contents, occupant, inventory, and visibility maps must be
+  keyed by the canonical full actor DID-URL (`did:ma:...#fragment`).
 - Cross-runtime movement must not admit the source-runtime avatar into the
   target room. The target room creates or reuses the target-runtime deterministic
   avatar for the controlling DID, and uses the source avatar only for old-room
@@ -108,17 +112,40 @@ When documenting or changing behaviour, keep these contracts aligned:
   state only after the room sends committed ctx back.
 - Authority model: room ownership is by bare DID; avatars are delegates;
   parent authority governs `take`/`drop` flows.
-- Container ctx: containers use `/ma/container/0.0.1` and send
-  `/ma/ctx/container/0.0.1` full contents snapshots to their current parent on
-  contents changes. Parents may ignore these notifications. Avatar inventory is
-  a configured container reference in avatar ctx, not a separate inventory kind
-  or protocol; the avatar caches only valid, newer container ctx from that
+- Parent/child role verbs: method names describe the receiver's role, not the
+  sender's role. A child actor asks a candidate or current parent to act as
+  parent by sending `<parent>:parent <ctx>`. A parent asks or informs a child by
+  sending `<child>:child <ctx>`. For drop/reparenting, a carried actor sends
+  `<new-parent>:parent <desired-ctx>`; the new parent confirms with
+  `<actor>:child <committed-ctx>`; the actor accepts only a matching ctx where
+  `ctx.parent == msg.from`, commits the new parent, then sends a courtesy
+  `<old-parent>:parent <departure-or-new-parent-ctx>` so the old parent can
+  remove derived cache entries. Do not reverse these verbs.
+- Container ctx: containers use `/ma/container/0.0.1` and have one specified
+  container ctx, including contents. Containers send refreshed container ctx to
+  their current parent with `:parent` on contents or presentation changes. Do
+  not split container ctx into movable-child vs contents-snapshot forms, and do
+  not send parent-facing container ctx with `:ctx`. Avatar inventory is a
+  configured container reference in avatar ctx, not a separate inventory kind or
+  protocol; the avatar caches only valid, newer container ctx from that
   configured container.
-- Avatar inventory lifecycle: avatars create/reuse a deterministic local
-  `/ma/container/0.0.1` actor as inventory and publish it in avatar ctx as
-  `inventory`. Carried actors should be parented to that container, not directly
-  to the avatar. `take` routes to the inventory container as carrier parent;
-  `drop`/`put` route through the inventory container as the current parent.
+- Actor ctx propagation: whenever an actor changes a field present in its
+  parent-facing ctx, such as `parent`, `name`, `nick`, or `description`, it must
+  send refreshed ctx to its current parent so derived caches stay current.
+- Avatar inventory lifecycle: avatar ctx carries `inv` as a baton during
+  `:go`/`:enter`. Target-runtime avatars adopt that supplied container
+  reference when present, and create/reuse a deterministic local
+  `/ma/container/0.0.1` only when no inventory has been configured yet. Carried
+  actors should be parented to that container, not directly to the avatar.
+  `take` uses the inventory container as carrier parent; visible take resolves
+  the child from room ctx and asks the child directly, while carried-source take
+  asks the explicit source parent. Carried `drop` must follow the parent/child
+  ctx algorithm above: the carried actor requests the target parent with
+  `:parent <ctx>`, the target parent confirms with `:child <ctx>`, and the old
+  inventory container removes derived cache entries from the actor's committed
+  ctx update. Avatar carried `drop` must not invent a new verb, call the current
+  room, or use an avatar room-helper. Rooms must not expose `:take` or `:drop`;
+  the current room DID-URL may be passed only as target-parent data.
 - Transfer strictness (default): thing/agent transfer calls must keep strict
   input validation until explicitly relaxed:
   controlling DID must be `did:ma:...`; non-ctx parent arguments must be DID-URLs.

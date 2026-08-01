@@ -31,6 +31,10 @@
   (set-prop! "parent" (canonical-actor did))
   (ma-save-state!))
 
+(define (clear-parent!)
+  (del-prop! "parent")
+  (ma-save-state!))
+
 (define (claim-key actor)
   (string-append "claim:" (canonical-actor actor)))
 
@@ -112,7 +116,7 @@
   (let ((p (parent)))
     (if (equal? p "")
         #f
-        (ma-send! (canonical-actor p) (list :child (thing-ctx))))))
+        (ma-send! (canonical-actor p) (list :parent (thing-ctx))))))
 
 (define (parent-target-from-ctx ctx)
   (let ((target (ctx-text ctx "parent")))
@@ -140,13 +144,14 @@
     (set-prop-from-ctx! ctx "nick")
     (set-prop-from-ctx! ctx "description")
     (ma-save-state!)
+    (announce-parent!)
     (if (and (non-empty-string? old-parent)
              (not (same-actor? old-parent target-parent)))
-        (ma-send! (canonical-actor old-parent) (list :child (thing-ctx)))
+      (ma-send! (canonical-actor old-parent) (list :parent (thing-ctx)))
         #f))))
 
 (define (propose-parent-change! target-parent)
-  (ma-send! (canonical-actor target-parent) (list :child (thing-ctx-for-parent target-parent))))
+  (ma-send! (canonical-actor target-parent) (list :parent (thing-ctx-for-parent target-parent))))
 
 (define (owner-or-unowned? did)
   (let ((o (owner)))
@@ -159,8 +164,26 @@
 (define (orphan-owner-recovery? did)
   (and (equal? (parent) "") (owner-did? did)))
 
+(define (owner-avatar-delegation? did msg)
+  (and (owner-did? did) (msg-from-owner? did msg)))
+
 (define (transfer-caller-authorised? did msg)
-  (or (caller-is-parent? msg) (orphan-owner-recovery? did)))
+  (or (caller-is-parent? msg)
+      (orphan-owner-recovery? did)
+      (owner-avatar-delegation? did msg)))
+
+(define (recycle-caller-authorised? did msg)
+  (and (caller-is-parent? msg) (owner-did? did)))
+
+(define (recycle! msg)
+  (let ((old-parent (parent)))
+    (begin
+      (clear-parent!)
+      (if (non-empty-string? old-parent)
+          (ma-send! (canonical-actor old-parent) (list :parent (thing-ctx-for-parent "")))
+          #f)
+      (reply-ok-with msg "recycled")
+      (ma-end))))
 
 (define (editable-prop? key)
   (or (equal? key "name")
@@ -171,7 +194,8 @@
   (if (equal? value "")
       (del-prop! key)
       (set-prop! key value))
-  (ma-save-state!))
+  (ma-save-state!)
+  (announce-parent!))
 
 (define (handle-thing-prop! msg args)
   (cond ((not (owner-caller? msg))
@@ -218,10 +242,17 @@
                (reply-error msg "only owner may inspect parent")))
           ((not (null? (cdr args)))
            (reply-error msg "usage: :parent [ctx]"))
+          (else
+           (reply-error msg "thing is not a parent for ctx updates")))))
+
+(set-meta-method! :child
+  (lambda (args msg)
+    (cond ((or (null? args) (not (null? (cdr args))))
+           (reply-error msg "usage: :child <ctx>"))
           ((not (valid-parent-ctx? (car args)))
-           (reply-error msg "parent ctx must include target parent"))
+           (reply-error msg "child ctx must include target parent"))
           ((not (same-actor? (msg-from msg) (parent-target-from-ctx (car args))))
-           (reply-error msg "parent ctx must come from target parent"))
+           (reply-error msg "child ctx must come from target parent"))
           (else
            (begin
              (apply-parent-ctx! (car args))
@@ -328,6 +359,19 @@
                    #f)
                (propose-parent-change! (car rest))
                  (reply-ok-with msg "drop requested")))))))
+
+(set-cmd-method! :recycle
+  (lambda (args msg)
+    (let ((did (effective-did args msg))
+          (rest (effective-args args msg)))
+      (cond ((not (null? rest))
+             (reply-error msg "usage: :recycle <did>"))
+            ((not (valid-did? did))
+             (reply-error msg "recycle requires DID with did:ma: prefix"))
+            ((not (recycle-caller-authorised? did msg))
+             (reply-error msg "only owner via current parent may recycle this thing"))
+            (else
+             (recycle! msg))))))
 
 (define (on-signal term)
   (cond ((equal? (verb-of term) :start)
