@@ -19,13 +19,21 @@
           (mark-scheduled! key)
           (ma-send! (entity-url "scheduler") (list "quack" :random 600 :quack))))))
 
-; Duck-specific room speech.
+; Duck-specific room speech and action.
 (define (duck-say msg text)
   (let ((p (parent)))
     (if (equal? p "")
         (reply-error msg "duck is nowhere")
         (begin
           (ma-send! p (list :say text))
+          (reply-ok msg)))))
+
+(define (duck-emote msg text)
+  (let ((p (parent)))
+    (if (equal? p "")
+        (reply-error msg "duck is nowhere")
+        (begin
+          (ma-send! p (list :emote text))
           (reply-ok msg)))))
 
 ; Public methods added on top of the generic agent behaviour.
@@ -42,7 +50,7 @@
 
 (set-cmd-method! :duck
   (lambda (args msg)
-    (duck-say msg "A duck waddles through the room. It looks busy.")))
+    (duck-emote msg "waddles through the room. It looks busy.")))
 
 (set-cmd-method! :quack
   (lambda (args msg)
