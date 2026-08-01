@@ -226,11 +226,11 @@ All Scheme-backed lambda-ma actors inherit the generic actor method below from
 | Verb | Args | Notes |
 | --- | --- | --- |
 | `:behaviour` | `[ /ipfs/<cid> ]` | No args returns this actor's current per-entity behaviour reference, if any. With one IPFS reference, the caller must match the actor's `owner` prop; on success this queues a reload of this actor's own extra behaviour layer. |
-| `:name` / `:description` / `:kind` | `[text...]` for `:name` and `:description`; none for `:kind` | Generic metadata inspection. With no args, `:name` returns the `name` prop, `:description` returns the `description` prop, and `:kind` returns the runtime kind. With args, `:name` and `:description` are owner-gated setters that persist the joined text and return the new prop value. `:kind` is read-only. |
-| `:owner` / `:owner?` | `[printer]` | Generic prop-based owner inspection. `:owner` returns the raw owner DID or `(none)`. `:owner?` returns display text, or sends it to `printer` via `:print` when a target is supplied. Kind-specific actors may override this with stricter policy. |
-| `:parent` / `:parent?` | none, or kind-specific `[ctx]` | Generic prop-based parent inspection. `:parent` returns the raw parent actor or `(none)`; `:parent?` returns display text. Movable actors override `:parent <ctx>` as a current-parent-gated parent push: the current parent sends a ctx map naming the new parent in `parent` (or `room` as a movement fallback), the child updates its authoritative parent state, then announces its own ctx to the new parent with `:children <ctx>`. The received ctx is intentionally accepted broadly for now; filtering can be tightened later. |
+| `:name` / `:description` / `:kind?` | `[text...]` for `:name` and `:description`; none for `:kind?` | Generic metadata inspection. With no args, `:name` returns the `name` prop, `:description` returns the `description` prop, and `:kind?` returns the runtime kind. With args, `:name` and `:description` are owner-gated setters that persist the joined text and return the new prop value. `:kind?` is read-only. |
+| `:owner` / `:owner?` | none | Generic prop-based owner inspection. `:owner` returns the raw owner DID or `(none)`. `:owner?` returns display text. Both are dry RPC replies and never send `:print`; avatar/proxy code may present the reply to a user. Kind-specific actors may override this with stricter policy. |
+| `:parent` / `:parent?` | none generically; `[ctx]` on movable actors | Generic dry parent query. Returns the raw current `parent` actor reference or `(none)`, making `:parent` the relation-query counterpart to `:children`. Movable actors override `:parent` with the stable parent-transfer mechanism: the current parent sends a ctx map naming the new parent in `parent` (or `room` as a movement fallback), the child updates its authoritative parent state, then announces its own ctx to the new parent with `:children <ctx>`. |
 | `:children` | `[ctx]` | With no args, owner-gated child-cache listing. With one ctx map, registers or updates a child cache entry when `ctx.actor` is a full DID-URL, `ctx` is an actor ctx, and `msg-from` matches `ctx.actor`. The child cache is derived state; the child's own `parent` prop remains authoritative. |
-| `:where` / `:where?` / `:here` / `:here?` | none | Aliases for generic parent inspection, so every actor has a minimal location answer even before kind-specific behaviour is loaded. |
+| `:rpcs?` / `:cmds?` / `:metas?` / `:api?` | none | Generic public API inspection. These introspection verbs are themselves dry public RPCs and appear in `:rpcs?`. `:rpcs?` returns public RPC verbs, `:cmds?` returns avatar and world command verbs, `:metas?` returns explicit relation/repair helpers such as `:parent` or `:children`, and `:api?` returns a grouped view keyed by `:rpcs?`, `:cmds?`, and `:metas?`. Hidden actor-to-actor protocol handlers are not part of this surface. |
 
 ### 5.1 root actor
 
@@ -259,8 +259,10 @@ Key verbs:
 | `:help` | `[topic]` | DID principal only | `help here` asks room `:help`. |
 | `:nick` | `[nick]` | DID principal only | No args returns current nick; with args forwards to room. |
 | `:make` | `<kind> <init...>` | DID principal only | Requests a new actor of `kind` using `ma-create-actor` with no behaviour override and all args after `kind` joined as the creation payload. The avatar does not inject owner, parent, or room props; the init text owns initial state. `thing` is accepted as shorthand for `/ma/thing/0.0.1`. Creation is queued; the returned DID-URL may not be live until the runtime loads the entity. |
-| `:look`/`:l` `:exits?` `:who?` `:did?` `:owner?` `:say` `:emote` `:go` | varies | DID principal only | Delegates to room. |
-| `:claim` `:owner` `:dig` `:fill` `:prop` | varies | DID principal only | Delegates to room without owner-authority arguments; rooms recognise the owner DID or deterministic owner avatar from `msg-from`. |
+| `:owner?` | none | DID principal, room, or root | Returns the avatar's owner DID. This is fixed avatar identity metadata, not a setter. Avatars do not expose `:owner`. |
+| `:did?` / `:dids?` / `:prop` | varies | DID principal only | RPC proxy to the current room for direct metadata lookup or room prop mutation; these are not avatar commands. |
+| `:look`/`:l` `:exits?` `:who?` `:say` `:emote` `:go` | varies | DID principal only | Avatar-mediated room commands. |
+| `:claim` `:dig` `:fill` | varies | DID principal only | Delegates to room without owner-authority arguments; rooms recognise the owner DID or deterministic owner avatar from `msg-from`. `:owner` is mediated by the avatar's default room forwarding; it is not an avatar method and does not mutate avatar ownership. |
 | `:drop-thing` | `<did> <thing> <target-parent> [token] [ctx]` | room caller only | Parent-mediated drop helper; forwards optional DID principal ctx map. |
 | `:report-parent` | `<room> <tick> <nonce>` | room caller | Machine presence request; replies with `:parent-report <self> <room> <tick> <nonce>` using the avatar's persisted room. |
 
@@ -289,10 +291,11 @@ Key verbs:
 | `:dig` | direct args | Owner-gated exit creation/linking; newly-created rooms are assigned to the stored owner DID. |
 | `:fill` | direct args | Owner-gated exit removal. Removes the direction from the room and asks the exit actor to terminate itself; target rooms are not deleted. |
 | `:exit` | `<direction> <verb> [args]` | Owner-gated direction resolver and generic forwarder to the exit actor. Exit semantics live in `exit.ma`. |
-| `:child-alive` | `<actor> <kind> <nonce> <direction>` | Child readiness callback; rooms use it for pending new-room dig targets when actor, kind, nonce, and direction match. |
-| `:ping` / `:pong` / `:authorise-link` / `:link-authorised` / `:link-denied` | link handshake args | Existing-room link handshake. |
-| `:presence-tick` | none | Scheduled room-local occupant sweep. Asks occupants to report their parent and removes occupants that have not reported within the room timeout. |
-| `:parent-report` | `<child> <parent> <tick> <nonce>` | Machine reply from a child to the room's `:report-parent` request. A parent different from the room removes the child immediately. |
+
+Room callbacks such as `:child-alive`, `:ping`, `:pong`, `:authorise-link`,
+`:link-authorised`, `:link-denied`, `:presence-tick`, `:parent-report`,
+`:traversed`, and `:leave-occupant` are internal protocol handlers. They are
+not part of `:api?`.
 
 Room presence cache rules:
 
@@ -334,7 +337,7 @@ Purpose: first-class inspectable traversal object.
 | `:report-parent` | `<room> <tick> <nonce>` | Machine presence request; replies to the requesting room with `:parent-report <self> <source-room> <tick> <nonce>`. |
 | `:locked?` | none | Returns `true` or `false`. |
 | `:lock` / `:unlock` | none | Source-room-only mutation. Avatar/DID principal `lock <direction>` and direct room `:exit <direction> :lock` resolve through the source room. |
-| `:message` | `traveller`, `source`, `target`, or `blocked`, plus `text` | Source-room-only traversal-message update. Avatar/DID principal `exit-message <direction> ...` and direct room `:exit <direction> :message ...` resolve through the source room; the exit actor keeps canonical message state. |
+| `:message` | `traveller`, `source`, `target`, or `blocked`, plus `text` | Source-room-only traversal-message update. Direct room `:exit <direction> :message ...` resolves through the source room; the exit actor keeps canonical message state. |
 | `:traverse` | `<ctx-map>` | Source-room-only traversal request. If unlocked, returns `:traversed <ctx>` to the source room with `ctx.room` set to the target. If locked, returns `:traversed <ctx>` with `ctx.room` still set to the source room and `ctx.text` set to the blocked message. |
 
 Movement ctx is ordinary actor/entity state, not a separate signed or protocol

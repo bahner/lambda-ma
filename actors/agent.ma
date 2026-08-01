@@ -216,7 +216,7 @@
          (reply-error msg "only a free agent or owner may move this agent"))))
 
 ; Public methods.
-(set-method! :about
+(set-rpc-method! :about
   (lambda (args msg)
     (reply-ok-with msg
       (string-append
@@ -225,22 +225,22 @@
         "owner: " (if (owner) (owner) "(none)") "\n"
         "parent: " (if (equal? (parent) "") "(none)" (parent))))))
 
-(set-method! :where?
+(set-rpc-method! :where?
   (lambda (args msg)
     (reply-ok-with msg (if (equal? (parent) "") "(none)" (parent)))))
 
-(set-method! :report-parent
+(set-internal-rpc-method! :report-parent
   (lambda (args msg)
     (let ((tick (if (or (null? args) (null? (cdr args))) "" (car (cdr args))))
           (nonce (if (or (null? args) (null? (cdr args)) (null? (cdr (cdr args)))) "" (car (cdr (cdr args))))))
       (ma-send! (canonical-actor (msg-from msg))
                 (list :parent-report (canonical-actor (self)) (parent) tick nonce)))))
 
-(set-method! :owner
+(set-rpc-method! :owner
   (lambda (args msg)
     (reply-ok-with msg (if (owner) (owner) "(none)"))))
 
-(set-method! :owner?
+(set-rpc-method! :owner?
   (lambda (args msg)
     (if (null? args)
         (reply-ok-with msg (string-append "Owner: " (if (owner) (owner) "(none)")))
@@ -248,19 +248,19 @@
           (ma-send! (canonical-actor (car args)) (list :print (string-append "Owner: " (if (owner) (owner) "(none)"))))
           (reply-ok msg)))))
 
-(set-method! :print
+(set-internal-rpc-method! :print
   (lambda (args msg)
     (set-last-message! (join-words args))))
 
-(set-method! :exits?
+(set-rpc-method! :exits?
   (lambda (args msg)
     (send-parent-room! msg (list :exits?))))
 
-(set-method! :go
+(set-cmd-method! :go
   (lambda (args msg)
     (agent-go! args msg)))
 
-(set-method! :move
+(set-cmd-method! :move
   (lambda (args msg)
     (cond ((movement-pending?)
            (reply-error msg "movement already pending"))
@@ -269,13 +269,13 @@
           (else
            (reply-error msg "only a free agent or owner may move this agent")))))
 
-(set-method! :enter-room
+(set-internal-rpc-method! :enter-room
   (lambda (args msg)
     (if (or (null? args) (null? (cdr args)))
         #f
         (move-to-room! (car args) (car (cdr args))))))
 
-(set-method! :ctx
+(set-internal-rpc-method! :ctx
   (lambda (args msg)
     (if (null? args)
         (if (or (owner-caller? msg) (caller-is-parent? msg))
@@ -300,7 +300,7 @@
                  (move-to-room! (ctx-text ctx "room") (msg-from msg)))))
             (else #f))))))
 
-(set-method! :set-recovery-secret
+(set-rpc-method! :set-recovery-secret
   (lambda (args msg)
     (if (owner-caller? msg)
         (begin
@@ -308,7 +308,7 @@
           (reply-ok-with msg "recovery secret updated"))
         (reply-error msg "only owner may set recovery secret"))))
 
-(set-method! :claim
+(set-cmd-method! :claim
   (lambda (args msg)
     (let ((stored (recovery-secret))
           (did (msg-from msg)))
@@ -328,7 +328,7 @@
 
 ; Parent-mediated transfer. The parent room asks the agent to bind to a did
 ; or re-enter another parent; direct did calls are deliberately rejected.
-(set-method! :take
+(set-cmd-method! :take
   (lambda (args msg)
     (let ((did (effective-did args msg))
           (rest (effective-args args msg)))
@@ -357,7 +357,7 @@
                (announce-parent!)
                  (reply-ok-with msg "taken")))))))
 
-(set-method! :drop
+(set-cmd-method! :drop
   (lambda (args msg)
     (let ((did (effective-did args msg))
           (rest (effective-args args msg)))
@@ -384,7 +384,7 @@
                    #f)
                  (reply-ok-with msg "dropped")))))))
 
-(set-method! :parent
+(set-meta-method! :parent
   (lambda (args msg)
     (cond ((null? args)
            (if (owner-caller? msg)

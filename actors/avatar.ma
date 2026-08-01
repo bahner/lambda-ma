@@ -352,7 +352,6 @@
     "  fill <dir>        remove an exit\n"
     "  lock <dir>        lock an exit\n"
     "  unlock <dir>      unlock an exit\n"
-    "  exit-message <dir> <traveller|source|target|blocked> <text>\n"
     "  prop <key> [value] set or reset room text\n"
     "  nick [name]       show or set your display name\n"
     "Use :help for the focused actor directly."))
@@ -361,13 +360,13 @@
   (string-append "No help topic: " topic "\nTry help or help here."))
 
 ; Root and room callbacks.
-(set-method! :sync-ctx
+(set-internal-rpc-method! :sync-ctx
   (lambda (args msg)
     (if (root? msg)
         (send-ctx #f)
         #f)))
 
-(set-method! :enter-room
+(set-internal-rpc-method! :enter-room
   (lambda (args msg)
     (if (and (enter-room-authorised? args msg) (not (null? args)))
         (let ((target-room (car args))
@@ -384,7 +383,7 @@
           (ma-send! (canonical-actor target-room) (list :enter (local-self) (canonical-actor old-room) (nick))))
         #f)))
 
-(set-method! :ctx
+(set-internal-rpc-method! :ctx
   (lambda (args msg)
     (if (null? args)
         (if (ctx-caller? msg)
@@ -414,23 +413,17 @@
                        (ma-send! (did) (list :ctx payload)))))))
             (else #f))))))
 
-(set-method! :ctx?
+(set-rpc-method! :ctx?
   (lambda (args msg)
     (require-did msg
       (lambda ()
         (ma-reply! msg (list :ok (ctx-term #f)))))))
 
-(set-method! :print
+(set-internal-rpc-method! :print
   (lambda (args msg)
     (ma-send! (did) (list :print (join-words args)))))
 
-(set-method! :here?
-  (lambda (args msg)
-    (require-did msg
-      (lambda ()
-        (ma-reply! msg (list :ok (room)))))))
-
-(set-method! :report-parent
+(set-internal-rpc-method! :report-parent
   (lambda (args msg)
     (let ((tick (if (or (null? args) (null? (cdr args))) "" (car (cdr args))))
           (nonce (if (or (null? args) (null? (cdr args)) (null? (cdr (cdr args)))) "" (car (cdr (cdr args)))))
@@ -439,7 +432,9 @@
                 (list :parent-report (local-self) (if current-room (canonical-actor current-room) "") tick nonce)))))
 
 ; DID-facing commands.
-(set-method! :help
+(unset-method! :owner)
+
+(set-cmd-method! :help
   (lambda (args msg)
     (require-did msg
       (lambda ()
@@ -456,7 +451,7 @@
                  (send-did-text (unknown-help-text (car args)))
                  (reply-ok-silent msg))))))))
 
-(set-method! :nick
+(set-cmd-method! :nick
   (lambda (args msg)
     (require-did msg
       (lambda ()
@@ -469,124 +464,115 @@
               (send-room :nick args)
               (reply-ok-silent msg)))))))
 
-(set-method! :look
+(set-cmd-method! :look
   avatar-look)
 
-(set-method! :l
+(set-cmd-method! :l
   avatar-look)
 
-(set-method! :exits?
+(set-cmd-method! :exits?
   (lambda (args msg)
     (require-did msg
       (lambda ()
         (send-room :exits? '())
         (reply-ok-silent msg)))))
 
-(set-method! :who?
+(set-cmd-method! :who?
   (lambda (args msg)
     (require-did msg
       (lambda ()
         (send-room :who? '())
         (reply-ok-silent msg)))))
 
-(set-method! :occupants?
+(set-cmd-method! :occupants?
   (lambda (args msg)
     (require-did msg
       (lambda ()
         (send-room :occupants? '())
         (reply-ok-silent msg)))))
 
-(set-method! :things?
+(set-cmd-method! :things?
   (lambda (args msg)
     (require-did msg
       (lambda ()
         (send-room :things? '())
         (reply-ok-silent msg)))))
 
-(set-method! :did?
+(set-rpc-method! :did?
   (lambda (args msg)
     (require-did msg
       (lambda ()
         (send-room :did? args)
         (reply-ok-silent msg)))))
 
-(set-method! :dids?
+(set-rpc-method! :dids?
   (lambda (args msg)
     (require-did msg
       (lambda ()
         (send-room :dids? args)
         (reply-ok-silent msg)))))
 
-(set-method! :say
+(set-cmd-method! :say
   avatar-say)
 
-(set-method! :emote
+(set-cmd-method! :emote
   (lambda (args msg)
     (require-did msg
       (lambda ()
         (send-room :emote (list (join-words args)))
         (reply-ok-silent msg)))))
 
-(set-method! :claim
+(set-cmd-method! :claim
   (lambda (args msg)
     (require-did msg
       (lambda ()
         (send-room :claim args)
         (reply-ok-silent msg)))))
 
-(set-method! :owner
+(set-rpc-method! :owner?
   (lambda (args msg)
-    (require-did msg
-      (lambda ()
-        (send-room :owner args)
-        (reply-ok-silent msg)))))
+    (cond ((not (null? args))
+           (reply-error msg "usage: :owner?"))
+          ((equal? (msg-from msg) (did))
+           (reply-ok-with msg (actor-owner)))
+          (else
+           (reply-error msg "avatar command denied")))))
 
-(set-method! :owner?
-  (lambda (args msg)
-    (if (and (room? msg) (not (null? args)))
-        (begin
-          (ma-send! (canonical-actor (car args)) (list :print (string-append "Owner: " (did))))
-          (reply-ok-silent msg))
-        (require-did msg
-          (lambda ()
-            (send-room :owner? args)
-            (reply-ok-silent msg))))))
-
-(set-method! :make
+(set-cmd-method! :make
   avatar-make)
 
-(set-method! :children
+(set-meta-method! :children
   handle-avatar-children)
 
-(set-method! :inventory
+(set-cmd-method! :inventory
   (lambda (args msg)
     (require-did msg
       (lambda ()
         (send-did-text (inventory-text))
         (reply-ok-silent msg)))))
 
-(set-method! :i
+(set-cmd-method! :i
   (lambda (args msg)
     (require-did msg
       (lambda ()
         (send-did-text (inventory-text))
         (reply-ok-silent msg)))))
 
-(set-method! :dig
+(set-cmd-method! :dig
   (lambda (args msg)
     (require-did msg
       (lambda ()
         (send-room :dig args)
         (reply-ok-silent msg)))))
 
-(set-method! :fill
+(set-cmd-method! :fill
   (lambda (args msg)
     (require-did msg
       (lambda ()
         (send-room :fill args)
         (reply-ok-silent msg)))))
 
-(set-method! :lock
+(set-cmd-method! :lock
   (lambda (args msg)
     (require-did msg
       (lambda ()
@@ -595,7 +581,7 @@
             (send-room :exit (list (car args) :lock)))
         (reply-ok-silent msg)))))
 
-(set-method! :unlock
+(set-cmd-method! :unlock
   (lambda (args msg)
     (require-did msg
       (lambda ()
@@ -604,23 +590,14 @@
             (send-room :exit (list (car args) :unlock)))
         (reply-ok-silent msg)))))
 
-(set-method! :exit-message
-  (lambda (args msg)
-    (require-did msg
-      (lambda ()
-        (if (or (null? args) (null? (cdr args)) (null? (cdr (cdr args))))
-            (send-did-text "Usage: exit-message <direction> <traveller|source|target|blocked> <text>")
-            (send-room :exit (list (car args) :message (car (cdr args)) (join-words (cdr (cdr args))))))
-        (reply-ok-silent msg)))))
-
-(set-method! :prop
+(set-rpc-method! :prop
   (lambda (args msg)
     (require-did msg
       (lambda ()
         (send-room :prop args)
         (reply-ok-silent msg)))))
 
-(set-method! :take
+(set-cmd-method! :take
   (lambda (args msg)
     (require-did msg
       (lambda ()
@@ -630,7 +607,7 @@
         (send-room-as-did :take args)
         (reply-ok-silent msg)))))
 
-(set-method! :drop
+(set-cmd-method! :drop
   (lambda (args msg)
     (require-did msg
       (lambda ()
@@ -646,14 +623,14 @@
                   (send-did-text (string-append "Unknown carried agent or thing: " (car args))))))
         (reply-ok-silent msg)))))
 
-(set-method! :where?
+(set-cmd-method! :where?
   (lambda (args msg)
     (require-did msg
       (lambda ()
         (send-room :where? args)
         (reply-ok-silent msg)))))
 
-(set-method! :go
+(set-cmd-method! :go
   (lambda (args msg)
     (require-did msg
       (lambda ()
@@ -661,7 +638,7 @@
         (reply-ok-silent msg)))))
 
 ; Room-mediated drop helper for carried things/agents.
-(set-method! :drop-thing
+(set-internal-rpc-method! :drop-thing
   (lambda (args msg)
     (if (room? msg)
         (if (or (null? args) (null? (cdr args)) (null? (cdr (cdr args))))

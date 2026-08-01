@@ -246,20 +246,20 @@ Useful room-building commands:
 help                   show avatar/avatar-mediated commands
 help here              show what this room says is possible
 claim                  claim an unowned room
-owner                  show the current room owner
-owner did:ma:<target>  transfer the room to another bare DID
+:owner?                show the current room owner
+owner did:ma:<target>  transfer the room to another bare DID through your avatar
 make thing <.my.things.lamp
                        create a thing through your avatar; the init string sets owner and location
 did? [kind] lamp       show the DID for a visible occupant, thing, or exit
-owner? lamp            show who owns a visible occupant, thing, or exit
+:owner? lamp           show who owns a visible occupant, thing, or exit
 dig north to Name      create an exit and a new room
 fill north             remove the north exit
 look north             inspect the north exit
 lock north             lock the north exit
 unlock north           unlock the north exit
-exit-message north traveller You step through the green door.
-exit-message north blocked The green door is locked.
-exit-message north source Someone slips through the green door.
+:exit north :message traveller You step through the green door.
+:exit north :message blocked The green door is locked.
+:exit north :message source Someone slips through the green door.
 :dids?                 owner lists visible occupants, things, and exits with DIDs
 :remove Alice          owner removes Alice if that nick is unique here
 :remove did:ma:...#x   owner removes an exact occupant DID-URL
@@ -359,11 +359,17 @@ actor's `owner` prop to match you. Add Scheme code and press Publish.
 For example:
 
 ```scheme
-(set-method! :duck
+(set-cmd-method! :duck
   (lambda (args msg)
     (ma-send! (msg-from msg)
       (list :print "A duck waddles through the room. It looks busy."))))
 ```
+
+Use `set-cmd-method!` for command verbs that present something in-world,
+such as looking, speaking, emoting, moving, or noticing a local duck. Use
+`set-rpc-method!` for dry metadata/query/config verbs that should answer with
+`ma-reply!`. Actors also provide standard introspection such as `:rpcs?`,
+`:cmds?`, `:api?`, and `:metas?` for explicit runtime maintenance helpers.
 
 Zion publishes the editor contents as `text/plain`, sends the returned
 `/ipfs/<cid>` to the actor's `:behaviour` method, and the runtime reloads only
@@ -409,7 +415,7 @@ You can also compose code files. If `duck-room.ma` contains this:
 ```scheme
 (ma-include-ipfs #/ipfs/bafkreiduck...)
 
-(set-method! :pond
+(set-cmd-method! :pond
   (lambda (args msg)
     (ma-send! (msg-from msg)
       (list :print "The pond is still. Something under it is considering you."))))
@@ -425,13 +431,13 @@ ipfs add --quieter duck-room.ma
 :behaviour /ipfs/<duck-room-cid>
 ```
 
-The include form is named `ma-include-ipfs`, and the method helper is named
-`set-method!`.
+The include form is named `ma-include-ipfs`, and in ordinary custom room code
+the method helper is usually `set-cmd-method!` or `set-rpc-method!`.
 
 For tiny experiments, inline code also works:
 
 ```text
-dig west to Tiny Duck Room with (set-method! :duck (lambda (args msg) (ma-send! (msg-from msg) (list :print "quack"))))
+dig west to Tiny Duck Room with (set-cmd-method! :duck (lambda (args msg) (ma-send! (msg-from msg) (list :print "quack"))))
 ```
 
 Inline `with (...)` code is delivered as creation-time init code. It is useful

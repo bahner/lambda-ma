@@ -91,7 +91,7 @@
           (if fortune fortune "Freedom requires sharing.")))))
 
 ; Public methods added on top of the generic agent behaviour.
-(set-method! :help
+(set-rpc-method! :help
   (lambda (args msg)
     (reply-ok-with msg
       (string-append
@@ -101,7 +101,7 @@
         "  :fortune    say a random fortune in the current room\n"
         "rms registers schedule fortune with #scheduler as random up to 60 seconds."))))
 
-(set-method! :fortune
+(set-cmd-method! :fortune
   (lambda (args msg)
     (let ((p (parent))
           (fortune (next-fortune)))

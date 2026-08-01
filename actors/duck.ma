@@ -29,7 +29,7 @@
           (reply-ok msg)))))
 
 ; Public methods added on top of the generic agent behaviour.
-(set-method! :help
+(set-rpc-method! :help
   (lambda (args msg)
     (reply-ok-with msg
       (string-append
@@ -40,11 +40,11 @@
         "  :duck       say a duck line in the current room\n"
         "  :quack      say quack in the current room"))))
 
-(set-method! :duck
+(set-cmd-method! :duck
   (lambda (args msg)
     (duck-say msg "A duck waddles through the room. It looks busy.")))
 
-(set-method! :quack
+(set-cmd-method! :quack
   (lambda (args msg)
     (duck-say msg "quack")))
 

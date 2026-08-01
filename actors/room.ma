@@ -557,7 +557,7 @@
         (string-append "DIDs:\n" (entry-lines lines)))))
 
 (define (handle-dids! msg args)
-  (let ((mediated (avatar-caller? msg)))
+  (let ((mediated #f))
     (cond ((not (owned?))
            (reply-command-error msg mediated "This room is unowned. Claim it before listing DIDs."))
           ((not (valid-owner? (owner)))
@@ -568,7 +568,7 @@
            (reply-command-ok msg mediated (dids-text))))))
 
 (define (handle-did! msg args)
-  (let ((mediated (avatar-caller? msg))
+  (let ((mediated #f)
         (did-args args))
    (cond ((null? did-args)
         (reply-command-error msg mediated "Usage: did? [exit|thing|occupant] <name>"))
@@ -597,7 +597,7 @@
               (reply-command-ok msg mediated (string-append "Ambiguous name: " token "\n" (entry-lines lines))))))))))
 
 (define (handle-owner-query! msg args)
-  (let ((mediated (avatar-caller? msg))
+  (let ((mediated #f)
         (owner-args args))
     (if (null? owner-args)
         (let ((current-owner (owner)))
@@ -1232,21 +1232,21 @@
 
 ; ── Presence and presentation methods ─────────────────────────────────────
 
-(set-method! :leave-occupant
+(set-internal-rpc-method! :leave-occupant
   (lambda (args msg)
     (if (member-entry? (msg-from msg) (occupants))
         (on-event :leave-occupant args msg)
         #f)))
 
-(set-method! :leave
+(set-cmd-method! :leave
   (lambda (args msg)
     (handle-leave! msg)))
 
-(set-method! :remove
+(set-cmd-method! :remove
   (lambda (args msg)
     (handle-remove! msg args)))
 
-(set-method! :look
+(set-cmd-method! :look
   (lambda (args msg)
     (let ((avatar (msg-from msg))
           (look-args (command-args args msg)))
@@ -1260,43 +1260,43 @@
                   (reply-ok-with msg "queued"))
                 (print-and-reply-ok msg (string-append "No exit " direction "."))))))))
 
-(set-method! :exits?
+(set-cmd-method! :exits?
   (lambda (args msg)
     (let ((avatar (msg-from msg)))
       (print-and-reply-ok msg (exits-text)))))
 
-(set-method! :who?
+(set-cmd-method! :who?
   (lambda (args msg)
     (let ((avatar (msg-from msg)))
       (reconcile-caller-occupant! avatar)
       (print-and-reply-ok msg (who-text)))))
 
-(set-method! :occupants?
+(set-cmd-method! :occupants?
   (lambda (args msg)
     (let ((avatar (msg-from msg)))
       (reconcile-caller-occupant! avatar)
       (print-and-reply-ok msg (occupants-text)))))
 
-(set-method! :things?
+(set-cmd-method! :things?
   (lambda (args msg)
     (let ((avatar (msg-from msg)))
       (print-and-reply-ok msg (things-text)))))
 
-(set-method! :dids?
+(set-rpc-method! :dids?
   (lambda (args msg)
     (handle-dids! msg args)))
 
-(set-method! :did?
+(set-rpc-method! :did?
   (lambda (args msg)
     (handle-did! msg args)))
 
-(set-method! :owner?
+(set-rpc-method! :owner?
   (lambda (args msg)
     (handle-owner-query! msg args)))
 
 ; ── Room-local occupant commands ──────────────────────────────────────────
 
-(set-method! :thing
+(set-cmd-method! :thing
   (lambda (args msg)
     (let ((thing-args args))
       (cond ((null? thing-args)
@@ -1318,7 +1318,7 @@
                (set-thing! (car thing-args) (car (cdr thing-args)))
                (reply-ok-with msg "thing alias set")))))))
 
-(set-method! :take
+(set-cmd-method! :take
   (lambda (args msg)
     (let* ((did (caller-did args msg))
            (avatar (msg-from msg))
@@ -1335,7 +1335,7 @@
             (else
              (reply-to-sender msg (string-append "Unknown agent or thing: " token)))))))
 
-(set-method! :drop
+(set-cmd-method! :drop
   (lambda (args msg)
     (let* ((did (caller-did args msg))
            (avatar (msg-from msg))
@@ -1358,7 +1358,7 @@
             (else
              (reply-to-sender msg (string-append "Unknown agent or thing: " token)))))))
 
-(set-method! :where?
+(set-cmd-method! :where?
   (lambda (args msg)
     (let* ((where-args (command-args args msg))
            (token (if (null? where-args) #f (car where-args)))
@@ -1370,7 +1370,7 @@
             (else
              (reply-to-sender msg (string-append "Unknown agent or thing: " token)))))))
 
-(set-method! :traversed
+(set-internal-rpc-method! :traversed
   (lambda (args msg)
     (if (null? args)
         #f
@@ -1394,7 +1394,7 @@
                   (reply-to-sender msg "Exit command queued."))
                 (reply-to-sender msg (string-append "No exit " direction ".")))))))))
 
-(set-method! :exit
+(set-rpc-method! :exit
   (lambda (args msg)
     (let ((exit-args (command-args args msg)))
       (if (or (null? exit-args) (null? (cdr exit-args)))
@@ -1404,7 +1404,7 @@
                 (verb-args (cdr (cdr exit-args))))
             (proxy-exit-command! msg direction (cons verb verb-args)))))))
 
-(set-method! :help
+(set-cmd-method! :help
   (lambda (args msg)
     (let ((text (room-help-text)))
       (if (avatar-caller? msg)
@@ -1412,13 +1412,13 @@
           #f)
         (reply-ok-with msg text))))
 
-(set-method! :say
+(set-cmd-method! :say
   (lambda (args msg)
     (let ((speaker (msg-from msg))
           (text (join-words args)))
       (broadcast (string-append (speaker-name speaker) " says: " text)))))
 
-(set-method! :emote
+(set-cmd-method! :emote
   (lambda (args msg)
     (let ((speaker (msg-from msg))
           (text (join-words args)))
@@ -1426,7 +1426,7 @@
 
 ; ── Ownership and room mutation methods ───────────────────────────────────
 
-(set-method! :claim
+(set-cmd-method! :claim
   (lambda (args msg)
     (let ((did (msg-from msg)))
       (require-valid-owner did msg
@@ -1437,36 +1437,38 @@
                 (set-owner! did)
                 (print-and-reply-ok msg (string-append "You now own " (room-name) ".")))))))))
 
-(set-method! :owner
+(set-rpc-method! :owner
   (lambda (args msg)
     (let ((owner-args args))
-      (if (null? owner-args)
-          (let ((current-owner (owner)))
-            (if current-owner
-                (reply-to-sender msg (string-append "Owner: " current-owner))
-                (reply-to-sender msg "This room is unowned.")))
-          (require-valid-owner (car owner-args) msg
-            (lambda ()
-              (require-owner-transfer msg
-                (lambda ()
-                  (let ((new-owner (car owner-args)))
-                    (if (valid-owner? new-owner)
-                        (begin
-                          (set-owner! new-owner)
-                          (reply-to-sender msg (string-append "Owner set to " new-owner ".")))
-                        (reply-to-sender msg "New owner must be a DID.")))))))))))
+      (cond ((null? owner-args)
+             (let ((current-owner (owner)))
+               (if current-owner
+                   (reply-ok-with msg current-owner)
+                   (reply-ok-with msg "(none)"))))
+            ((not (owned?))
+             (reply-error msg "This room is unowned. Claim it before transferring ownership."))
+            ((not (valid-owner? (owner)))
+             (reply-error msg "Owner must be a DID."))
+            ((not (owner-message? msg))
+             (reply-error msg "Only this room's owner can transfer ownership."))
+            ((not (valid-owner? (car owner-args)))
+             (reply-error msg "New owner must be a DID."))
+            (else
+             (let ((new-owner (car owner-args)))
+               (set-owner! new-owner)
+               (reply-ok-with msg (string-append "Owner set to " new-owner "."))))))))
 
-(set-method! :prop
+(set-rpc-method! :prop
   (lambda (args msg)
     (handle-room-prop! msg args)))
 
 ; ── Link handshake and scheduled presence callbacks ───────────────────────
 
-(set-method! :ping
+(set-internal-rpc-method! :ping
   (lambda (args msg)
     (ma-send! (canonical-actor (msg-from msg)) (cons :pong args))))
 
-(set-method! :pong
+(set-internal-rpc-method! :pong
   (lambda (args msg)
     (if (or (null? args) (null? (cdr args)) (null? (cdr (cdr args))))
         #f
@@ -1478,7 +1480,7 @@
               (request-link-authorisation! requester did direction target-room)
               #f)))))
 
-(set-method! :authorise-link
+(set-internal-rpc-method! :authorise-link
   (lambda (args msg)
     (if (or (null? args) (null? (cdr args)) (null? (cdr (cdr args))))
         #f
@@ -1490,14 +1492,14 @@
               (ma-send! (canonical-actor source-room) (list :link-authorised did direction (canonical-actor requester)))
               (ma-send! (canonical-actor source-room) (list :link-denied did direction (canonical-actor requester) "You must own both rooms to link them.")))))))
 
-(set-method! :presence-tick
+(set-internal-rpc-method! :presence-tick
   (lambda (args msg)
     (let ((tick (next-presence-tick!)))
       (if (presence-sweep! tick)
           (ma-save-state!)
           #f))))
 
-(set-method! :parent-report
+(set-internal-rpc-method! :parent-report
   (lambda (args msg)
     (if (or (null? args)
             (null? (cdr args))
@@ -1518,7 +1520,7 @@
                 (ma-save-state!))
               #f)))))
 
-(set-method! :link-denied
+(set-internal-rpc-method! :link-denied
   (lambda (args msg)
     (if (or (null? args) (null? (cdr args)) (null? (cdr (cdr args))) (null? (cdr (cdr (cdr args)))))
         #f
@@ -1534,7 +1536,7 @@
                 (ma-send! (canonical-actor requester) (list :print reason)))
               #f)))))
 
-(set-method! :link-authorised
+(set-internal-rpc-method! :link-authorised
   (lambda (args msg)
     (if (or (null? args) (null? (cdr args)) (null? (cdr (cdr args))))
         #f
@@ -1557,7 +1559,7 @@
                        (enter-dig-target! requester did target-room))))
               #f)))))
 
-(set-method! :delivery-failed
+(set-internal-rpc-method! :delivery-failed
   (lambda (args msg)
     (if (or (null? args) (null? (cdr args)) (null? (cdr (cdr args))))
         #f
@@ -1573,13 +1575,13 @@
                           (list :print (string-append "Could not reach " target-room ": " reason))))
               #f)))))
 
-(set-method! :child-alive
+(set-internal-rpc-method! :child-alive
   (lambda (args msg)
     (handle-child-alive! msg args)))
 
 ; ── Building, movement, and direct entry methods ──────────────────────────
 
-(set-method! :dig
+(set-cmd-method! :dig
   (lambda (args msg)
     (let* ((did (owner))
            (dig-args args)
@@ -1606,7 +1608,7 @@
                       (else
                        (request-new-room! msg did direction target custom-init custom-behaviour)))))))))))
 
-(set-method! :fill
+(set-cmd-method! :fill
   (lambda (args msg)
     (let* ((did (owner))
            (fill-args args))
@@ -1627,7 +1629,7 @@
                           (reply-ok msg))
                         (reply-to-sender msg (string-append "No exit " direction "."))))))))))))
 
-(set-method! :go
+(set-cmd-method! :go
   (lambda (args msg)
     (if (reject-foreign-delegated-go? args msg)
       (reply-ok msg)
@@ -1642,7 +1644,7 @@
                   (ma-send! (canonical-actor actor) (list :print (string-append "No exit " direction ".")))
                   (reply-ok msg))))))))
 
-(set-method! :move
+(set-cmd-method! :move
   (lambda (args msg)
     (if (reject-foreign-delegated-go? args msg)
       (reply-ok msg)
@@ -1655,7 +1657,7 @@
                 (ma-send! (canonical-actor actor) (list :print "No exits."))
                 (reply-ok msg)))))))
 
-(set-method! :nick
+(set-cmd-method! :nick
   (lambda (args msg)
     (if (avatar-caller? msg)
         (if (null? args)
@@ -1669,7 +1671,7 @@
                 (reply-ok msg)))
         (reply-error msg "nick sender must be an avatar"))))
 
-(set-method! :children
+(set-meta-method! :children
   (lambda (args msg)
     (cond ((null? args)
            (reply-error msg "usage: :children <ctx>"))
@@ -1678,7 +1680,7 @@
           (else
            (handle-child-announcement! msg (car args))))))
 
-(set-method! :enter
+(set-internal-rpc-method! :enter
   (lambda (args msg)
     (cond
       ((enter-empty? args)

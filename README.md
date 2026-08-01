@@ -145,7 +145,6 @@ dig north to Garden    create an exit and a new room owned by you
 look north             inspect an exit as a first-class object
 lock north             lock an exit
 unlock north           unlock an exit
-exit-message north blocked The gate is locked.
 ```
 
 Colon-prefixed methods bypass the avatar and target the focused room directly:
@@ -172,8 +171,9 @@ with `owner` and that DID can then build outward from there. Linking to an
 already-existing room is allowed when the target room confirms that the same
 DID principal owns it too. Exits are first-class inspectable objects owned by exit
 actors; rooms resolve directions and can forward direct `:exit <direction>
-<verb>` commands to the exit. Avatar/avatar-mediated commands such as `lock <direction>`
-and `exit-message <direction> <slot> <text>` are shorthand for that forwarding.
+<verb>` commands to the exit. Avatar-mediated `lock <direction>` and
+`unlock <direction>` are shorthand for that forwarding; traversal messages are
+configured directly with `:exit <direction> :message <slot> <text>`.
 `fill <direction>` removes the exit link and terminates the exit actor, but
 leaves the target room intact.
 

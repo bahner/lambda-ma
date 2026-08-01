@@ -31,6 +31,26 @@ Actor code must preserve that boundary. Do not add avatar methods just to proxy
 colon-prefixed room methods. If a colon-prefixed command fails from zion focus
 mode, fix zion's routing or the room actor method, not the avatar.
 
+## RPC replies vs avatar presentation
+
+Actor methods must distinguish RPC replies from user-visible presentation by
+semantics, not by caller shape.
+
+Use `ma-reply!` for metadata, introspection, status, configuration, and
+getter/setter commands. Examples: `:name`, `:description`, `:kind?`, `:owner`,
+`:prop`, `:did?`, `:dids?`, alias/config lookups, and other commands whose
+purpose is to return or mutate a value. Target actors must not answer these by
+sending `:print`.
+
+Use `:print` or room broadcast only for events caused by avatar commands: actual
+in-world verbs such as looking, saying, emoting, entering, leaving, moving,
+digging, taking, or dropping. These are presentation or world-event flows, not
+plain metadata replies.
+
+Avatar-specific code may turn replies or events into user-facing prints for
+plain avatar-mediated UX. That presentation complexity belongs in the avatar or
+proxy layer, not as a generic pattern in rooms, things, agents, or exits.
+
 ## Scheme actor
 
 The generic scheme actor lives in `scheme-actor/`. `Makefile` builds

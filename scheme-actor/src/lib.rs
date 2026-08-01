@@ -299,16 +299,20 @@ mod tests {
             r#"
             (set-prop! "owner" "did:ma:owner")
             (set-prop! "parent" "did:ma:runtime#construct")
-            ((find-method :parent) '() msg)
             ((find-method :parent?) '() msg)
-            ((find-method :where) '() msg)
-            ((find-method :here?) '() msg)
+            ((find-method :parent) '() msg)
+            ((find-method :rpcs?) '() msg)
+            ((find-method :cmds?) '() msg)
+            ((find-method :metas?) '() msg)
+            ((find-method :api?) '() msg)
             "#,
             &env,
         )
         .unwrap();
 
-        assert_eq!(eval_int("(get-prop \"reply-count\")", &env), 4);
+        assert_eq!(eval_int("(get-prop \"reply-count\")", &env), 6);
+        assert!(eval_bool("(not (find-method :meta?))", &env));
+        assert!(eval_bool("(not (find-method :methods?))", &env));
         assert_eq!(
             eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
             Value::list(vec![
@@ -320,22 +324,91 @@ mod tests {
             eval_all("(get-prop \"reply-term:2\")", &env).unwrap(),
             Value::list(vec![
                 Value::symbol(":ok"),
-                Value::str("Parent: did:ma:runtime#construct")
+                Value::str("did:ma:runtime#construct")
             ])
         );
         assert_eq!(
             eval_all("(get-prop \"reply-term:3\")", &env).unwrap(),
             Value::list(vec![
                 Value::symbol(":ok"),
-                Value::str("did:ma:runtime#construct")
+                Value::list(vec![
+                    Value::symbol(":name"),
+                    Value::symbol(":description"),
+                    Value::symbol(":kind?"),
+                    Value::symbol(":owner"),
+                    Value::symbol(":owner?"),
+                    Value::symbol(":parent?"),
+                    Value::symbol(":behaviour"),
+                    Value::symbol(":rpcs?"),
+                    Value::symbol(":cmds?"),
+                    Value::symbol(":metas?"),
+                    Value::symbol(":api?"),
+                ])
             ])
         );
         assert_eq!(
             eval_all("(get-prop \"reply-term:4\")", &env).unwrap(),
+            Value::list(vec![Value::symbol(":ok"), Value::list(vec![])])
+        );
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:5\")", &env).unwrap(),
             Value::list(vec![
                 Value::symbol(":ok"),
-                Value::str("did:ma:runtime#construct")
+                Value::list(vec![Value::symbol(":parent"), Value::symbol(":children")])
             ])
+        );
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:6\")", &env).unwrap(),
+            Value::list(vec![
+                Value::symbol(":ok"),
+                Value::list(vec![
+                    Value::list(vec![
+                        Value::symbol(":rpcs?"),
+                        Value::list(vec![
+                            Value::symbol(":name"),
+                            Value::symbol(":description"),
+                            Value::symbol(":kind?"),
+                            Value::symbol(":owner"),
+                            Value::symbol(":owner?"),
+                            Value::symbol(":parent?"),
+                            Value::symbol(":behaviour"),
+                            Value::symbol(":rpcs?"),
+                            Value::symbol(":cmds?"),
+                            Value::symbol(":metas?"),
+                            Value::symbol(":api?"),
+                        ])
+                    ]),
+                    Value::list(vec![Value::symbol(":cmds?"), Value::list(vec![])]),
+                    Value::list(vec![
+                        Value::symbol(":metas?"),
+                        Value::list(vec![Value::symbol(":parent"), Value::symbol(":children")])
+                    ])
+                ])
+            ])
+        );
+        assert_eq!(
+            eval_all(
+                "(let* ((api (car (cdr (get-prop \"reply-term:6\")))) (section (car api))) (car (cdr section)))",
+                &env,
+            )
+            .unwrap(),
+            eval_all("(car (cdr (get-prop \"reply-term:3\")))", &env).unwrap()
+        );
+        assert_eq!(
+            eval_all(
+                "(let* ((api (car (cdr (get-prop \"reply-term:6\")))) (section (car (cdr api)))) (car (cdr section)))",
+                &env,
+            )
+            .unwrap(),
+            eval_all("(car (cdr (get-prop \"reply-term:4\")))", &env).unwrap()
+        );
+        assert_eq!(
+            eval_all(
+                "(let* ((api (car (cdr (get-prop \"reply-term:6\")))) (section (car (cdr (cdr api))))) (car (cdr section)))",
+                &env,
+            )
+            .unwrap(),
+            eval_all("(car (cdr (get-prop \"reply-term:5\")))", &env).unwrap()
         );
     }
 
@@ -362,10 +435,10 @@ mod tests {
             (set-prop! "owner" "did:ma:owner")
             ((find-method :name) '() owner_msg)
             ((find-method :description) '() owner_msg)
-            ((find-method :kind) '() owner_msg)
+            ((find-method :kind?) '() owner_msg)
             ((find-method :name) (list "Brass" "Lamp") owner_msg)
             ((find-method :description) (list "A" "warm" "desk" "lamp") owner_msg)
-            ((find-method :kind) (list "/ma/other/0.0.1") owner_msg)
+            ((find-method :kind?) (list "/ma/other/0.0.1") owner_msg)
             ((find-method :name) (list "Stolen") other_msg)
             "#,
             &env,
@@ -412,6 +485,34 @@ mod tests {
             eval_str("(get-prop \"description\")", &env),
             "A warm desk lamp"
         );
+    }
+
+    #[test]
+    fn actor_metadata_setter_accepts_controlling_did() {
+        let env = actor_env();
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        crate::state::set_config(config);
+        install_send_reply_recorders(&env);
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_msg("did:ma:owner", "did:ma:runtime#avatar")),
+        );
+
+        eval_all(
+            r#"
+            (set-prop! "did" "did:ma:owner")
+            ((find-method :name) (list "Pondus") msg)
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
+            Value::list(vec![Value::symbol(":ok"), Value::str("Pondus")])
+        );
+        assert_eq!(eval_str("(get-prop \"name\")", &env), "Pondus");
     }
 
     #[test]
@@ -495,7 +596,7 @@ mod tests {
     }
 
     #[test]
-    fn duck_on_message_here_uses_inherited_actor_handler_args_first() {
+    fn duck_on_message_parent_query_uses_inherited_actor_handler_args_first() {
         let env = duck_env();
         install_send_reply_recorders(&env);
         env.define(
@@ -503,7 +604,7 @@ mod tests {
             Value::Msg(sample_term_msg(
                 "did:ma:owner",
                 "did:ma:runtime#duckie",
-                Value::symbol(":here?"),
+                Value::symbol(":parent?"),
             )),
         );
 
@@ -527,7 +628,7 @@ mod tests {
     }
 
     #[test]
-    fn thing_on_message_here_uses_inherited_actor_handler_args_first() {
+    fn thing_on_message_parent_query_uses_inherited_actor_handler_args_first() {
         let env = thing_env();
         install_send_reply_recorders(&env);
         env.define(
@@ -535,7 +636,7 @@ mod tests {
             Value::Msg(sample_term_msg(
                 "did:ma:owner",
                 "did:ma:runtime#lamp",
-                Value::symbol(":here?"),
+                Value::symbol(":parent?"),
             )),
         );
 
@@ -619,6 +720,54 @@ mod tests {
         assert_eq!(
             eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
             Value::symbol(":ok")
+        );
+    }
+
+    #[test]
+    fn specialised_agents_register_cmds() {
+        let duck = duck_env();
+        install_send_reply_recorders(&duck);
+        duck.define(
+            Rc::from("msg"),
+            Value::Msg(sample_msg("did:ma:owner", "did:ma:runtime#duckie")),
+        );
+        eval_all("((find-method :cmds?) '() msg)", &duck).unwrap();
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:1\")", &duck).unwrap(),
+            Value::list(vec![
+                Value::symbol(":ok"),
+                Value::list(vec![
+                    Value::symbol(":go"),
+                    Value::symbol(":move"),
+                    Value::symbol(":claim"),
+                    Value::symbol(":take"),
+                    Value::symbol(":drop"),
+                    Value::symbol(":duck"),
+                    Value::symbol(":quack"),
+                ])
+            ])
+        );
+
+        let rms = rms_env();
+        install_send_reply_recorders(&rms);
+        rms.define(
+            Rc::from("msg"),
+            Value::Msg(sample_msg("did:ma:owner", "did:ma:runtime#rms")),
+        );
+        eval_all("((find-method :cmds?) '() msg)", &rms).unwrap();
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:1\")", &rms).unwrap(),
+            Value::list(vec![
+                Value::symbol(":ok"),
+                Value::list(vec![
+                    Value::symbol(":go"),
+                    Value::symbol(":move"),
+                    Value::symbol(":claim"),
+                    Value::symbol(":take"),
+                    Value::symbol(":drop"),
+                    Value::symbol(":fortune"),
+                ])
+            ])
         );
     }
 
@@ -931,13 +1080,10 @@ mod tests {
         config.insert("runtime".to_string(), "did:ma:runtime".to_string());
         config.insert("self".to_string(), "did:ma:runtime#room".to_string());
         crate::state::set_config(config);
+        install_send_reply_recorders(&env);
         eval_all(
             r#"
             (set-prop! "owner" "did:ma:owner")
-            (define (ma-send! target term)
-              (inc-prop! "sent-count" 1)
-              (set-prop! (string-append "sent-target:" (number->string (get-prop "sent-count"))) target)
-              (set-prop! (string-append "sent-term:" (number->string (get-prop "sent-count"))) term))
             "#,
             &env,
         )
@@ -953,17 +1099,31 @@ mod tests {
 
         eval_all("((find-method :owner) (list \"did:ma:new\") msg)", &env).unwrap();
 
-        assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 1);
+        assert!(eval_bool("(not (get-prop \"sent-count\"))", &env));
         assert_eq!(
-            eval_str("(get-prop \"sent-target:1\")", &env),
-            "did:ma:other"
-        );
-        assert_eq!(
-            eval_all("(get-prop \"sent-term:1\")", &env).unwrap(),
+            eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
             Value::list(vec![
-                Value::symbol(":print"),
+                Value::symbol(":error"),
                 Value::str("Only this room's owner can transfer ownership."),
             ])
+        );
+    }
+
+    #[test]
+    fn room_owner_getter_replies_with_raw_did() {
+        let env = room_env();
+        install_send_reply_recorders(&env);
+        eval_all(r#"(set-prop! "owner" "did:ma:owner")"#, &env).unwrap();
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_msg("did:ma:owner", "did:ma:runtime#room")),
+        );
+
+        eval_all("((find-method :owner) '() msg)", &env).unwrap();
+
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
+            Value::list(vec![Value::symbol(":ok"), Value::str("did:ma:owner")])
         );
     }
 
@@ -1240,19 +1400,16 @@ mod tests {
     }
 
     #[test]
-    fn room_did_lookup_prints_when_delegated_by_avatar() {
+    fn room_did_lookup_replies_when_delegated_by_avatar() {
         let env = room_env();
         let mut config = std::collections::HashMap::new();
         config.insert("runtime".to_string(), "did:ma:runtime".to_string());
         config.insert("self".to_string(), "did:ma:runtime#room".to_string());
         crate::state::set_config(config);
+        install_send_reply_recorders(&env);
         eval_all(
             r#"
-                        (define (ma-entity-exists? actor) #t)
-            (define (ma-send! target term)
-              (inc-prop! "sent-count" 1)
-              (set-prop! (string-append "sent-target:" (number->string (get-prop "sent-count"))) target)
-              (set-prop! (string-append "sent-term:" (number->string (get-prop "sent-count"))) term))
+            (define (ma-entity-exists? actor) #t)
                         (define avatar "did:ma:runtime#avatar")
                         (set-label! avatar "Avatar")
                         (add-avatar-presence! avatar)
@@ -1274,14 +1431,11 @@ mod tests {
 
         eval_all("((find-method :did?) (list \"Duckie\") msg)", &env).unwrap();
 
+        assert!(eval_bool("(not (get-prop \"sent-count\"))", &env));
         assert_eq!(
-            eval_str("(get-prop \"sent-target:1\")", &env),
-            "did:ma:runtime#avatar"
-        );
-        assert_eq!(
-            eval_all("(get-prop \"sent-term:1\")", &env).unwrap(),
+            eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
             Value::list(vec![
-                Value::symbol(":print"),
+                Value::symbol(":ok"),
                 Value::str("Duckie = did:ma:runtime#duckie"),
             ])
         );
@@ -1562,6 +1716,196 @@ mod tests {
                 Value::symbol(":presence-tick"),
             ])
         );
+    }
+
+    #[test]
+    fn movable_and_exit_methods_are_categorised() {
+        let thing = thing_env();
+        install_send_reply_recorders(&thing);
+        thing.define(
+            Rc::from("msg"),
+            Value::Msg(sample_msg("did:ma:owner", "did:ma:runtime#lamp")),
+        );
+        eval_all(
+            r#"
+            ((find-method :cmds?) '() msg)
+            ((find-method :rpcs?) '() msg)
+            ((find-method :metas?) '() msg)
+            "#,
+            &thing,
+        )
+        .unwrap();
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:1\")", &thing).unwrap(),
+            Value::list(vec![
+                Value::symbol(":ok"),
+                Value::list(vec![
+                    Value::symbol(":claim"),
+                    Value::symbol(":take"),
+                    Value::symbol(":drop"),
+                ])
+            ])
+        );
+        assert!(eval_bool(
+            "(not (method-member? :parent (car (cdr (get-prop \"reply-term:2\")))))",
+            &thing,
+        ));
+        assert!(eval_bool(
+            "(method-member? :parent (car (cdr (get-prop \"reply-term:3\"))))",
+            &thing,
+        ));
+
+        let exit = exit_env();
+        install_send_reply_recorders(&exit);
+        exit.define(
+            Rc::from("msg"),
+            Value::Msg(sample_msg("did:ma:owner", "did:ma:runtime#exit")),
+        );
+        eval_all("((find-method :cmds?) '() msg)", &exit).unwrap();
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:1\")", &exit).unwrap(),
+            Value::list(vec![
+                Value::symbol(":ok"),
+                Value::list(vec![Value::symbol(":traverse")])
+            ])
+        );
+    }
+
+    #[test]
+    fn room_methods_are_categorised() {
+        let env = room_env();
+        install_send_reply_recorders(&env);
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_msg("did:ma:owner", "did:ma:runtime#room")),
+        );
+        eval_all(
+            r#"
+            ((find-method :cmds?) '() msg)
+            ((find-method :rpcs?) '() msg)
+            ((find-method :metas?) '() msg)
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        assert!(eval_bool(
+            "(method-member? :look (car (cdr (get-prop \"reply-term:1\"))))",
+            &env,
+        ));
+        assert!(eval_bool(
+            "(method-member? :say (car (cdr (get-prop \"reply-term:1\"))))",
+            &env,
+        ));
+        assert!(eval_bool(
+            "(method-member? :owner (car (cdr (get-prop \"reply-term:2\"))))",
+            &env,
+        ));
+        assert!(eval_bool(
+            "(method-member? :did? (car (cdr (get-prop \"reply-term:2\"))))",
+            &env,
+        ));
+        assert!(eval_bool(
+            "(not (method-member? :parent-report (car (cdr (get-prop \"reply-term:2\")))))",
+            &env,
+        ));
+        assert!(eval_bool(
+            "(method-member? :children (car (cdr (get-prop \"reply-term:3\"))))",
+            &env,
+        ));
+        assert!(eval_bool(
+            "(not (method-member? :parent-report (car (cdr (get-prop \"reply-term:3\")))))",
+            &env,
+        ));
+    }
+
+    #[test]
+    fn avatar_ack_only_proxies_are_not_public_rpcs() {
+        let env = avatar_env();
+        install_send_reply_recorders(&env);
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_msg("did:ma:owner", "did:ma:runtime#avatar")),
+        );
+
+        eval_all(
+            r#"
+            ((find-method :rpcs?) '() msg)
+            ((find-method :cmds?) '() msg)
+            ((find-method :metas?) '() msg)
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        assert!(eval_bool(
+            "(method-member? :ctx? (car (cdr (get-prop \"reply-term:1\"))))",
+            &env,
+        ));
+        assert!(eval_bool(
+            "(method-member? :did? (car (cdr (get-prop \"reply-term:1\"))))",
+            &env,
+        ));
+        assert!(eval_bool(
+            "(method-member? :dids? (car (cdr (get-prop \"reply-term:1\"))))",
+            &env,
+        ));
+        assert!(eval_bool(
+            "(method-member? :prop (car (cdr (get-prop \"reply-term:1\"))))",
+            &env,
+        ));
+        assert!(eval_bool(
+            "(not (method-member? :owner (car (cdr (get-prop \"reply-term:1\")))))",
+            &env,
+        ));
+        assert!(eval_bool(
+            "(method-member? :owner? (car (cdr (get-prop \"reply-term:1\"))))",
+            &env,
+        ));
+        assert!(eval_bool(
+            "(not (method-member? :did? (car (cdr (get-prop \"reply-term:2\")))))",
+            &env,
+        ));
+        assert!(eval_bool(
+            "(not (method-member? :dids? (car (cdr (get-prop \"reply-term:2\")))))",
+            &env,
+        ));
+        assert!(eval_bool(
+            "(not (method-member? :prop (car (cdr (get-prop \"reply-term:2\")))))",
+            &env,
+        ));
+        assert!(eval_bool(
+            "(not (method-member? :exit-message (car (cdr (get-prop \"reply-term:2\")))))",
+            &env,
+        ));
+        assert!(eval_bool(
+            "(not (find-method :here?))",
+            &env,
+        ));
+        assert!(eval_bool(
+            "(not (find-method :exit-message))",
+            &env,
+        ));
+        assert!(eval_bool(
+            "(not (method-member? :owner (car (cdr (get-prop \"reply-term:2\")))))",
+            &env,
+        ));
+        assert!(eval_bool(
+            "(not (method-member? :owner? (car (cdr (get-prop \"reply-term:2\")))))",
+            &env,
+        ));
+        assert!(eval_bool(
+            "(method-member? :children (car (cdr (get-prop \"reply-term:3\"))))",
+            &env,
+        ));
+        assert!(eval_bool(
+            "(not (method-member? :enter-room (car (cdr (get-prop \"reply-term:3\")))))",
+            &env,
+        ));
+        assert!(eval_bool(
+            "(not (method-member? :print (car (cdr (get-prop \"reply-term:3\")))))",
+            &env,
+        ));
     }
 
     #[test]
@@ -1864,8 +2208,9 @@ mod tests {
     }
 
     #[test]
-    fn avatar_forwards_owner_query_to_room() {
+    fn avatar_owner_query_with_args_is_usage_error() {
         let env = avatar_env();
+        install_send_reply_recorders(&env);
         let did = "did:ma:did";
         let mut config = std::collections::HashMap::new();
         config.insert("runtime".to_string(), "did:ma:runtime".to_string());
@@ -1896,12 +2241,135 @@ mod tests {
         eval_all("(on-message msg)", &env).unwrap();
 
         assert_eq!(
+            eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
+            Value::list(vec![Value::symbol(":error"), Value::str("usage: :owner?")]),
+        );
+        assert!(eval_bool("(not (has-prop? \"sent-count\"))", &env));
+    }
+
+    #[test]
+    fn avatar_mediates_owner_to_room_without_owner_method() {
+        let env = avatar_env();
+        let did = "did:ma:did";
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        crate::state::set_config(config.clone());
+
+        let avatar_id = eval_str(&format!(r#"(avatar-fragment "{did}")"#), &env);
+        config.insert("self".to_string(), format!("did:ma:runtime#{avatar_id}"));
+        config.insert("id".to_string(), avatar_id);
+        crate::state::set_config(config);
+
+        eval_all(
+            r#"
+            (set-prop! "did" "did:ma:did")
+            (set-prop! "room" "did:ma:runtime#room")
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        assert!(eval_bool("(not (find-method :owner))", &env));
+
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_term_msg(
+                did,
+                "did:ma:runtime#avatar",
+                Value::list(vec![
+                    Value::symbol(":owner"),
+                    Value::str("did:ma:new-owner"),
+                ]),
+            )),
+        );
+        eval_all("(on-message msg)", &env).unwrap();
+
+        assert_eq!(
             eval_str("(get-prop \"sent-target:1\")", &env),
             "did:ma:runtime#room"
         );
         assert_eq!(
             eval_all("(get-prop \"sent-term:1\")", &env).unwrap(),
-            Value::list(vec![Value::symbol(":owner?"), Value::str("Shrugger")]),
+            Value::list(vec![
+                Value::symbol(":owner"),
+                Value::str("did:ma:new-owner")
+            ]),
+        );
+    }
+
+    #[test]
+    fn avatar_owner_query_from_room_with_args_is_usage_error() {
+        let env = avatar_env();
+        install_send_reply_recorders(&env);
+        let did = "did:ma:did";
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        crate::state::set_config(config.clone());
+
+        let avatar_id = eval_str(&format!(r#"(avatar-fragment "{did}")"#), &env);
+        config.insert("self".to_string(), format!("did:ma:runtime#{avatar_id}"));
+        config.insert("id".to_string(), avatar_id);
+        crate::state::set_config(config);
+
+        eval_all(
+            r#"
+            (set-prop! "did" "did:ma:did")
+            (set-prop! "owner" "did:ma:owner")
+            (set-prop! "room" "did:ma:runtime#room")
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:runtime#room",
+                "did:ma:runtime#avatar",
+                Value::list(vec![
+                    Value::symbol(":owner?"),
+                    Value::str("did:ma:runtime#requester"),
+                ]),
+            )),
+        );
+        eval_all("(on-message msg)", &env).unwrap();
+
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
+            Value::list(vec![Value::symbol(":error"), Value::str("usage: :owner?")]),
+        );
+        assert!(eval_bool("(not (has-prop? \"sent-count\"))", &env));
+    }
+
+    #[test]
+    fn avatar_owner_queries_without_args_return_avatar_owner() {
+        let env = avatar_env();
+        install_send_reply_recorders(&env);
+        eval_all(
+            r#"
+            (set-prop! "did" "did:ma:did")
+            (set-prop! "owner" "did:ma:owner")
+            "#,
+            &env,
+        )
+        .unwrap();
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_msg("did:ma:did", "did:ma:runtime#avatar")),
+        );
+
+        eval_all(
+            r#"
+            ((find-method :owner?) '() msg)
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        assert!(eval_bool("(not (find-method :owner))", &env));
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
+            Value::list(vec![Value::symbol(":ok"), Value::str("did:ma:owner")])
         );
     }
 

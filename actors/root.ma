@@ -67,7 +67,7 @@
         (entity-url (ma-create-actor AVATAR_KIND #f (avatar-init did nick room) (avatar-fragment did))))))
 
 ; Public entry methods.
-(set-method! :enter
+(set-cmd-method! :enter
   (lambda (args msg)
     (let* ((did (entry-did args msg))
            (room (entry-room (requested-room args)))
@@ -75,7 +75,7 @@
            (avatar (ensure-avatar did nick room)))
       (ma-reply! msg (list :ok avatar)))))
 
-(set-method! :avatar?
+(set-rpc-method! :avatar?
   (lambda (args msg)
     (let* ((did (msg-from msg))
            (room (ensure-start-room))

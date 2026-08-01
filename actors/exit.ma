@@ -60,7 +60,7 @@
   (annotate-movement-ctx ctx (target-room) (traveller-message)))
 
 ; Public inspection methods.
-(set-method! :about
+(set-rpc-method! :about
   (lambda (args msg)
     (reply-ok-with msg
       (string-append
@@ -72,15 +72,15 @@
         "direction: " (if (direction) (direction) "(none)") "\n"
         "locked: " (if (locked?) "true" "false")))))
 
-(set-method! :where?
+(set-rpc-method! :where?
   (lambda (args msg)
     (reply-ok-with msg (if (source-room) (source-room) "(none)"))))
 
-(set-method! :owner
+(set-rpc-method! :owner
   (lambda (args msg)
     (reply-ok-with msg (if (owner) (owner) "(none)"))))
 
-(set-method! :owner?
+(set-rpc-method! :owner?
   (lambda (args msg)
     (if (null? args)
         (reply-ok-with msg (string-append "Owner: " (if (owner) (owner) "(none)")))
@@ -88,18 +88,18 @@
           (ma-send! (canonical-actor (car args)) (list :print (string-append "Owner: " (if (owner) (owner) "(none)"))))
           (reply-ok msg)))))
 
-(set-method! :report-parent
+(set-internal-rpc-method! :report-parent
   (lambda (args msg)
     (let ((tick (if (or (null? args) (null? (cdr args))) "" (car (cdr args))))
           (nonce (if (or (null? args) (null? (cdr args)) (null? (cdr (cdr args)))) "" (car (cdr (cdr args))))))
       (ma-send! (canonical-actor (msg-from msg))
                 (list :parent-report (canonical-actor (self)) (source-room) tick nonce)))))
 
-(set-method! :locked?
+(set-rpc-method! :locked?
   (lambda (args msg)
     (reply-ok-with msg (if (locked?) "true" "false"))))
 
-(set-method! :lock
+(set-rpc-method! :lock
   (lambda (args msg)
     (if (source-room-caller? msg)
         (begin
@@ -107,7 +107,7 @@
           (reply-ok-with msg "locked"))
         (reply-error msg "only source room may lock this exit"))))
 
-(set-method! :unlock
+(set-rpc-method! :unlock
   (lambda (args msg)
     (if (source-room-caller? msg)
         (begin
@@ -115,7 +115,7 @@
           (reply-ok-with msg "unlocked"))
         (reply-error msg "only source room may unlock this exit"))))
 
-(set-method! :message
+(set-rpc-method! :message
   (lambda (args msg)
     (cond ((not (source-room-caller? msg))
            (reply-error msg "only source room may update exit messages"))
@@ -132,7 +132,7 @@
            (reply-error msg "unknown exit message slot")))))
 
 ; Only the source room that created the exit may ask it to end.
-(set-method! :fill
+(set-internal-rpc-method! :fill
   (lambda (args msg)
     (if (source-room-caller? msg)
         (ma-end)
@@ -140,7 +140,7 @@
 
 ; Traversal transforms ctx state and returns it to the source room. The moving
 ; actor performs target-room :enter later, so target admission remains target-room authority.
-(set-method! :traverse
+(set-cmd-method! :traverse
   (lambda (args msg)
     (let ((ctx (if (null? args) #f (car args))))
       (cond ((not (source-room-caller? msg))

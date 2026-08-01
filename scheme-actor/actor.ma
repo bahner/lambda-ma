@@ -164,8 +164,12 @@
         "Children: none."
         (string-append "Children:\n" (actor-entry-lines lines)))))
 
-(define (owner-authorised? msg)
+(define (owner-authority)
   (let ((owner (get-prop "owner")))
+    (if owner owner (get-prop "did"))))
+
+(define (owner-authorised? msg)
+  (let ((owner (owner-authority)))
     (and owner (msg-from-owner? owner msg))))
 
 (define (handle-actor-owner args msg)
@@ -195,15 +199,15 @@
 (define (handle-actor-owner? args msg)
   (if (null? args)
       (reply-ok-with msg (string-append "Owner: " (actor-owner)))
-      (begin
-        (ma-send! (canonical-actor (car args)) (list :print (string-append "Owner: " (actor-owner))))
-        (reply-ok msg))))
+      (reply-error msg "usage: :owner?")))
 
 (define (handle-actor-parent args msg)
   (reply-ok-with msg (actor-parent)))
 
 (define (handle-actor-parent? args msg)
-  (reply-ok-with msg (string-append "Parent: " (actor-parent))))
+  (if (null? args)
+  (reply-ok-with msg (actor-parent))
+      (reply-error msg "usage: :parent?")))
 
 (define (handle-actor-children args msg)
   (cond ((null? args)
@@ -245,23 +249,100 @@
 
 (define *methods* '())
 (define *default-method* #f)
+(define *rpc-methods* '())
+(define *cmd-methods* '())
+(define *meta-methods* '())
+
+(define (method-member? verb xs)
+  (cond ((null? xs) #f)
+        ((equal? verb (car xs)) #t)
+        (else (method-member? verb (cdr xs)))))
+
+(define (add-method-entry entries verb)
+  (if (method-member? verb entries)
+      entries
+      (list-append entries (list verb))))
+
+(define (remove-method-entry entries verb)
+  (cond ((null? entries) '())
+        ((equal? verb (car entries)) (remove-method-entry (cdr entries) verb))
+        (else (cons (car entries) (remove-method-entry (cdr entries) verb)))))
+
+(define (remove-method-pairs entries verb)
+  (cond ((null? entries) '())
+        ((equal? verb (car (car entries))) (remove-method-pairs (cdr entries) verb))
+        (else (cons (car entries) (remove-method-pairs (cdr entries) verb)))))
+
+(define (forget-method-category! verb)
+  (set! *rpc-methods* (remove-method-entry *rpc-methods* verb))
+  (set! *cmd-methods* (remove-method-entry *cmd-methods* verb))
+  (set! *meta-methods* (remove-method-entry *meta-methods* verb)))
+
+(define (unset-method! verb)
+  (set! *methods* (remove-method-pairs *methods* verb))
+  (forget-method-category! verb))
+
+(define (set-categorised-method! verb fn kind)
+  (set-method! verb fn)
+  (forget-method-category! verb)
+  (cond ((equal? kind :rpc)
+         (set! *rpc-methods* (add-method-entry *rpc-methods* verb)))
+        ((equal? kind :cmd)
+         (set! *cmd-methods* (add-method-entry *cmd-methods* verb)))
+        ((equal? kind :meta)
+         (set! *meta-methods* (add-method-entry *meta-methods* verb)))
+        (else #f)))
 
 (define (set-method! verb fn)
   (set! *methods* (cons (cons verb fn) *methods*)))
 
-(set-method! :name handle-actor-name)
-(set-method! :description handle-actor-description)
-(set-method! :kind handle-actor-kind)
-(set-method! :owner handle-actor-owner)
-(set-method! :owner? handle-actor-owner?)
-(set-method! :parent handle-actor-parent)
-(set-method! :parent? handle-actor-parent?)
-(set-method! :children handle-actor-children)
-(set-method! :where handle-actor-parent)
-(set-method! :where? handle-actor-parent)
-(set-method! :here handle-actor-parent)
-(set-method! :here? handle-actor-parent)
-(set-method! :behaviour handle-actor-behaviour!)
+(define (set-rpc-method! verb fn)
+  (set-categorised-method! verb fn :rpc))
+
+(define (set-cmd-method! verb fn)
+  (set-categorised-method! verb fn :cmd))
+
+(define (set-meta-method! verb fn)
+  (set-categorised-method! verb fn :meta))
+
+(define (set-internal-rpc-method! verb fn)
+  (set-method! verb fn)
+  (forget-method-category! verb))
+
+(define (actor-rpcs) *rpc-methods*)
+(define (actor-cmds) *cmd-methods*)
+(define (actor-metas) *meta-methods*)
+
+(define (actor-api)
+  (list (list :rpcs? (actor-rpcs))
+        (list :cmds? (actor-cmds))
+        (list :metas? (actor-metas))))
+
+(define (handle-actor-rpcs? args msg)
+  (reply-ok-with msg (actor-rpcs)))
+
+(define (handle-actor-cmds? args msg)
+  (reply-ok-with msg (actor-cmds)))
+
+(define (handle-actor-metas? args msg)
+  (reply-ok-with msg (actor-metas)))
+
+(define (handle-actor-api? args msg)
+  (reply-ok-with msg (actor-api)))
+
+(set-rpc-method! :name handle-actor-name)
+(set-rpc-method! :description handle-actor-description)
+(set-rpc-method! :kind? handle-actor-kind)
+(set-rpc-method! :owner handle-actor-owner)
+(set-rpc-method! :owner? handle-actor-owner?)
+(set-meta-method! :parent handle-actor-parent)
+(set-rpc-method! :parent? handle-actor-parent?)
+(set-meta-method! :children handle-actor-children)
+(set-rpc-method! :behaviour handle-actor-behaviour!)
+(set-rpc-method! :rpcs? handle-actor-rpcs?)
+(set-rpc-method! :cmds? handle-actor-cmds?)
+(set-rpc-method! :metas? handle-actor-metas?)
+(set-rpc-method! :api? handle-actor-api?)
 
 (define (set-default-method! fn)
   (set! *default-method* fn))
