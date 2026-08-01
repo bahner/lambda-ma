@@ -49,17 +49,60 @@
        (string-prefix? "did:ma:" actor)
        (string-contains? "#" actor)))
 
+(define (actor-runtime actor)
+  (if (valid-did-url? actor)
+      (car (string-split actor "#"))
+      #f))
+
 (define (entity-live? actor)
   (and actor (ma-entity-exists? (canonical-actor actor))))
 
 (define (dead-local-actor? actor)
   (and (local-actor-ref? actor) (not (entity-live? actor))))
 
+(define (avatar-fragment-for-runtime runtime did)
+  (blake3 (string-append "lambda-ma avatar v1\n" runtime "\n" did) 8))
+
 (define (avatar-fragment did)
-  (blake3 (string-append "lambda-ma avatar v1\n" (runtime) "\n" did) 8))
+  (avatar-fragment-for-runtime (runtime) did))
 
 (define (avatar-for-did did)
   (string-append (runtime) "#" (avatar-fragment did)))
+
+(define (avatar-for-did-in-runtime runtime did)
+  (string-append runtime "#" (avatar-fragment-for-runtime runtime did)))
+
+(define (deterministic-avatar-for-did? did actor)
+  (let* ((qualified (canonical-actor actor))
+         (actor-home (actor-runtime qualified)))
+    (and (valid-did? did)
+         actor-home
+         (equal? qualified (avatar-for-did-in-runtime actor-home did)))))
+
+(define (ctx-did ctx)
+  (let ((did (ctx-text ctx "did"))
+     (actor (ctx-text ctx "actor")))
+    (cond ((valid-did? did) did)
+    ((valid-did? actor) actor)
+    (else #f))))
+
+(define (ctx-sender-valid? ctx msg)
+  (let ((did (ctx-did ctx))
+     (avatar (ctx-text ctx "avatar"))
+     (actor (ctx-text ctx "actor"))
+     (from (msg-from msg)))
+    (cond ((valid-did? did)
+     (cond ((valid-did-url? from)
+         (and (deterministic-avatar-for-did? did from)
+           (or (not (non-empty-string? avatar))
+            (same-actor? avatar from))))
+        ((valid-did? from)
+         (and (equal? from did)
+           (not (non-empty-string? avatar))))
+        (else #f)))
+    ((non-empty-string? actor)
+     (same-actor? actor from))
+    (else #f))))
 
 (define (did-avatar? did actor)
   (and (valid-did? did)
@@ -130,12 +173,12 @@
   (ma-save-state!))
 
 (define (child-ctx-valid? ctx)
-  (and (actor-ctx? ctx)
+  (and (actor-ctx-shape? ctx)
        (valid-did-url? (ctx-text ctx "actor"))))
 
 (define (child-ctx-self-authentic? ctx msg)
   (and (child-ctx-valid? ctx)
-       (same-actor? (msg-from msg) (ctx-text ctx "actor"))))
+       (ctx-sender-valid? ctx msg)))
 
 (define (child-ctx-parent-is-self? ctx)
   (same-actor? (ctx-text ctx "parent") (self)))
@@ -198,16 +241,24 @@
                (canonical-actor (car (car entries))))
               (else (loop (cdr entries)))))))
 
+(define (take-target-parent rest msg)
+  (let ((candidate (if (or (null? rest) (null? (cdr rest))) #f (car (cdr rest)))))
+    (if (and (non-empty-string? candidate)
+             (or (valid-did-url? candidate) (local-actor-ref? candidate)))
+        (canonical-actor candidate)
+        (canonical-actor (msg-from msg)))))
+
 (define (handle-parent-take did rest msg)
   (if (null? rest)
       #f
       (let* ((token (car rest))
              (actor (child-ref token)))
         (if actor
-            (let ((ctx (child-ctx actor)))
+            (let ((ctx (child-ctx actor))
+                  (target-parent (take-target-parent rest msg)))
               (begin
                 (forget-child! actor)
-                (ma-send! (canonical-actor actor) (list :take did (canonical-actor (msg-from msg)) ctx))
+                (ma-send! (canonical-actor actor) (list :take did target-parent ctx))
                 (ma-send! (canonical-actor (msg-from msg)) (list :print (string-append "You take " (child-label ctx) ".")))
                 (reply-ok msg)
                 #t))
@@ -389,6 +440,9 @@
 (set-rpc-method! :kind? handle-actor-kind)
 (set-rpc-method! :owner handle-actor-owner)
 (set-rpc-method! :owner? handle-actor-owner?)
+(set-internal-rpc-method! :ctx
+  (lambda (args msg)
+    (reply-ok msg)))
 (set-meta-method! :parent handle-actor-parent)
 (set-rpc-method! :parent? handle-actor-parent?)
 (set-meta-method! :child handle-actor-children)

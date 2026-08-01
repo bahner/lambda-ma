@@ -53,7 +53,7 @@
       (equal? kind "container")
       (equal? kind "actor")))
 
-(define (valid-ctx? ctx)
+(define (ctx-shape-valid? ctx)
   (and (map? ctx)
        (ctx-kind-valid? (ctx-text ctx "kind"))
        (non-empty-string? (ctx-text ctx "parent"))
@@ -72,33 +72,42 @@
       (ctx-optional-text-valid? ctx "exit")
       (ctx-optional-text-valid? ctx "direction")))
 
-(define (ctx-kind? ctx kind)
-  (and (valid-ctx? ctx)
+(define (valid-ctx? ctx msg)
+  (and (ctx-shape-valid? ctx)
+       (ctx-sender-valid? ctx msg)))
+
+(define (ctx-kind-shape? ctx kind)
+  (and (ctx-shape-valid? ctx)
        (equal? (ctx-text ctx "kind") kind)))
 
-(define (actor-ctx? ctx)
-  (and (valid-ctx? ctx)
+(define (actor-ctx-shape? ctx)
+  (and (ctx-shape-valid? ctx)
        (non-empty-string? (ctx-text ctx "name"))
        (non-empty-string? (ctx-text ctx "nick"))
        (non-empty-string? (ctx-text ctx "description"))))
 
-(define (avatar-ctx? ctx)
-  (ctx-kind? ctx "avatar"))
+(define (actor-ctx? ctx msg)
+  (and (actor-ctx-shape? ctx)
+       (ctx-sender-valid? ctx msg)))
 
-(define (agent-ctx? ctx)
-  (and (actor-ctx? ctx)
+(define (avatar-ctx? ctx msg)
+  (and (valid-ctx? ctx msg)
+       (equal? (ctx-text ctx "kind") "avatar")))
+
+(define (agent-ctx? ctx msg)
+  (and (actor-ctx? ctx msg)
        (equal? (ctx-text ctx "kind") "agent")))
 
-(define (thing-ctx? ctx)
-  (and (actor-ctx? ctx)
+(define (thing-ctx? ctx msg)
+  (and (actor-ctx? ctx msg)
        (equal? (ctx-text ctx "kind") "thing")))
 
-(define (container-ctx? ctx)
-  (and (actor-ctx? ctx)
+(define (container-ctx? ctx msg)
+  (and (actor-ctx? ctx msg)
        (equal? (ctx-text ctx "kind") "container")))
 
-(define (room-ctx? ctx)
-  (and (valid-ctx? ctx)
+(define (room-ctx? ctx msg)
+  (and (valid-ctx? ctx msg)
        (non-empty-string? (ctx-text ctx "room"))))
 
 (define (string-entries xs)

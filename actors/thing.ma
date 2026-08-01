@@ -87,7 +87,7 @@
 ; Transfer ctx is optional, but when present it must be a full room-local ctx
 ; payload so future parent displays can use stable name/nick/description data.
 (define (valid-transfer-ctx? ctx)
-  (and (actor-ctx? ctx)
+  (and (actor-ctx-shape? ctx)
        (valid-transfer-kind? (ctx-text ctx "kind"))))
 
 (define (thing-ctx-for-parent target-parent)
@@ -194,6 +194,17 @@
         (description) "\n"
         "owner: " (if (owner) (owner) "(none)") "\n"
         "parent: " (if (equal? (parent) "") "(none)" (parent))))))
+
+(set-rpc-method! :look
+  (lambda (args msg)
+    (let ((text (string-append (name) "\n" (description))))
+      (if (and (not (null? args))
+               (non-empty-string? (car args))
+               (local-actor-ref? (msg-from msg)))
+          (begin
+            (ma-send! (car args) (list :print text))
+            (reply-ok msg))
+          (reply-ok-with msg text)))))
 
 (set-rpc-method! :where?
   (lambda (args msg)

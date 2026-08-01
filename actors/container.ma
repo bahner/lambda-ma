@@ -3,6 +3,7 @@
 ; child ctx entries while unlocked.
 
 (define CONTAINER_PROTOCOL "/ma/container/0.0.1")
+(define CONTAINER_CTX_PROTOCOL "/ma/ctx/container/0.0.1")
 
 ; Persistent state accessors.
 (define (owner) (get-prop "owner"))
@@ -93,6 +94,40 @@
 (define (content-ref token)
   (child-ref token))
 
+(define (container-ctx-rev)
+  (let ((value (get-prop "ctx:rev")))
+    (if (number? value) value 0)))
+
+(define (container-contents-ctx)
+  (map-set
+    (map-set
+      (map-set
+        (map-set
+          (map-set
+            (map-set
+              (map-set
+                (map-set
+                  (map-set
+                    (map-set (make-map) "ctx" CONTAINER_CTX_PROTOCOL)
+                    "protocol" CONTAINER_PROTOCOL)
+                  "kind" "container")
+                "actor" (canonical-actor (self)))
+              "parent" (canonical-actor (parent)))
+            "rev" (container-ctx-rev))
+          "name" (name))
+        "nick" (nick))
+      "description" (description))
+    "contents" (contents-map)))
+
+(define (send-container-ctx!)
+  (let ((p (parent)))
+    (if (equal? p "")
+        #f
+        (begin
+          (inc-prop! "ctx:rev" 1)
+          (ma-save-state!)
+          (ma-send! (canonical-actor p) (list :ctx (container-contents-ctx)))))))
+
 ; Caller and reply helpers.
 (define (owner-caller? msg)
   (let ((o (owner)))
@@ -133,7 +168,7 @@
 ; Transfer ctx is optional, but when present it must be a full room-local ctx
 ; payload so future parent displays can use stable name/nick/description data.
 (define (valid-transfer-ctx? ctx)
-  (and (actor-ctx? ctx)
+  (and (actor-ctx-shape? ctx)
        (valid-transfer-kind? (ctx-text ctx "kind"))))
 
 (define (container-ctx-for-parent target-parent)
@@ -218,7 +253,9 @@
   (if (equal? value "")
       (del-prop! key)
       (set-prop! key value))
-  (ma-save-state!))
+  (ma-save-state!)
+  (announce-parent!)
+  (send-container-ctx!))
 
 (define (handle-container-prop! msg args)
   (cond ((not (owner-caller? msg))
@@ -238,6 +275,19 @@
 (define (reply-locked msg)
   (reply-error msg (locked-message)))
 
+(define (container-look-text)
+  (string-append
+    (name) "\n"
+    (description) "\n"
+    (if (locked?) (locked-message) (contents-text))))
+
+(define (present-to-did! target text)
+  (ma-send! target (list :print text)))
+
+(define (presentation-target-arg? args)
+  (and (not (null? args))
+       (non-empty-string? (car args))))
+
 ; Public methods.
 (set-rpc-method! :about
   (lambda (args msg)
@@ -248,6 +298,14 @@
         "owner: " (if (owner) (owner) "(none)") "\n"
         "parent: " (if (equal? (parent) "") "(none)" (parent)) "\n"
         "locked: " (if (locked?) "true" "false")))))
+
+(set-rpc-method! :look
+  (lambda (args msg)
+    (if (and (presentation-target-arg? args) (local-actor-caller? msg))
+        (begin
+          (present-to-did! (car args) (container-look-text))
+          (reply-ok msg))
+        (reply-ok-with msg (container-look-text)))))
 
 (set-rpc-method! :where?
   (lambda (args msg)
@@ -282,16 +340,18 @@
            (reply-locked msg))
           ((not (child-ctx-valid? (car args)))
            (reply-error msg "child ctx must include actor, parent, kind, protocol, name, nick, description"))
-          ((not (same-actor? (msg-from msg) (ctx-text (car args) "actor")))
+          ((not (child-ctx-self-authentic? (car args) msg))
            (reply-error msg "child ctx actor must match sender"))
           ((not (same-actor? (ctx-text (car args) "parent") (self)))
            (begin
              (forget-content! (ctx-text (car args) "actor"))
+             (send-container-ctx!)
              (reply-ok msg)))
           (else
            (begin
              (remember-content! (car args))
              (ma-send! (canonical-actor (ctx-text (car args) "actor")) (list :parent (car args)))
+             (send-container-ctx!)
              (reply-ok msg))))))
 
 (set-internal-rpc-method! :report-parent
@@ -385,7 +445,7 @@
            (reply-error msg "usage: :put-in <ctx-map>"))
           ((not (child-ctx-valid? (car args)))
            (reply-error msg "put-in requires ctx-map with actor, parent, kind, protocol, name, nick, description"))
-          ((not (same-actor? (msg-from msg) (ctx-text (car args) "actor")))
+          ((not (child-ctx-self-authentic? (car args) msg))
            (reply-error msg "put-in ctx actor must match sender"))
           ((not (same-actor? (ctx-text (car args) "parent") (self)))
            (reply-error msg "put-in ctx parent must be this container"))
@@ -393,6 +453,7 @@
            (begin
              (remember-content! (car args))
              (ma-send! (canonical-actor (ctx-text (car args) "actor")) (list :parent (car args)))
+             (send-container-ctx!)
              (reply-ok-with msg "put in"))))))
 
 ; Parent-mediated transfer. The parent room asks the container to bind to a did
@@ -467,11 +528,20 @@
                   (ctx (content-ctx actor)))
              (begin
                (forget-content! actor)
+               (send-container-ctx!)
                (reply-ok-with msg ctx)))))))
 
 (define (on-signal term)
   (cond ((equal? (verb-of term) :start)
-         (announce-parent!))
+         (begin
+           (announce-parent!)
+           (send-container-ctx!)))
         ((equal? (verb-of term) :shutdown)
          (ma-save-state!))
         (else #f)))
+
+(set-internal-rpc-method! :sync-ctx
+  (lambda (args msg)
+    (begin
+      (send-container-ctx!)
+      (reply-ok msg))))

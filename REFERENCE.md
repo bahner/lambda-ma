@@ -189,6 +189,79 @@ Flow-specific ctx attributes MAY be present, including `actor`, `avatar`,
 `root`, `room`, `text`, `exit`, and `direction`. Unknown keys MUST NOT cause
 rejection by themselves.
 
+### 3.2 Room ctx snapshots
+
+Room ctx is the evented visibility snapshot sent by a room to its present
+avatars. It is a full snapshot, not a delta stream. Rooms send a fresh snapshot
+whenever visible room state changes, including avatar/agent/thing/exit entry or
+removal, display-name changes, and exit topology changes.
+
+Room ctx MUST contain these fields:
+
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `ctx` | text | The ctx shape identifier, exactly `/ma/ctx/room/0.0.1`. |
+| `protocol` | text | The room actor protocol, exactly `/ma/room/0.0.1`. |
+| `kind` | text | Exactly `room`. |
+| `actor` | DID-URL | The room actor that produced the snapshot. |
+| `parent` | DID-URL | The runtime root actor, normally `<runtime DID>#root`. |
+| `rev` | integer | Monotonic room-local revision. |
+| `name` | text | Room name. |
+| `nick` | text | Room display name, normally the same as `name`. |
+| `description` | text | Room description. |
+| `who` | list | Avatar entries visible in the room. |
+| `agents` | list | Agent entries visible in the room. |
+| `things` | list | Thing/container entries visible in the room. |
+| `exits` | list | Exit entries visible in the room. |
+
+Entries SHOULD include `actor`, `kind`, `protocol`, `name`, `nick`, and
+`description` when known. Exit entries SHOULD also include `direction`. Actor
+references in room ctx MUST be full DIDs or DID-URLs, never runtime-local
+`#fragment` shorthand.
+
+Avatars store only the newest room ctx by `rev`; older or equal revisions are
+ignored. `look <name>` is resolved by the avatar from carried inventory first,
+then from the stored room ctx. Once resolved, the avatar asks the target actor to
+present itself with `:look <viewer-did>`. Rooms do not synchronously resolve
+`look <name>` for avatars; bare `look` remains normal room presentation.
+
+Room ctx grants practical lookup and presentation authority only. It is not
+authority to mutate the referenced actors; target actors remain responsible for
+validating mutating commands.
+
+### 3.2.1 Container ctx snapshots
+
+Container ctx is the evented contents snapshot sent by a container to its
+current parent actor. It is a full snapshot, not a delta stream. Containers send
+a fresh snapshot whenever their contents cache changes, including child
+admission, child removal, stale-entry pruning, and explicit reconciliation.
+
+Container ctx MUST contain these fields:
+
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `ctx` | text | The ctx shape identifier, exactly `/ma/ctx/container/0.0.1`. |
+| `protocol` | text | The container actor protocol, exactly `/ma/container/0.0.1`. |
+| `kind` | text | Exactly `container`. |
+| `actor` | DID-URL | The container actor that produced the snapshot. |
+| `parent` | DID-URL | The parent actor the snapshot was sent to. |
+| `rev` | integer | Monotonic container-local revision. |
+| `name` | text | Container name. |
+| `nick` | text | Container display name. |
+| `description` | text | Container description. |
+| `contents` | map | Child presentation ctx entries keyed by full child DID-URL. |
+
+A parent MAY ignore container ctx. Receiving a valid container ctx is not an
+obligation to present, index, or recurse into the container. Parents that care,
+such as avatars treating one configured container as inventory, store only the
+newest snapshot by `rev`; older or equal revisions are ignored.
+
+Container contents snapshots are last-known-good presentation caches built from
+received child ctx messages. They are useful for local lookup and display, but
+they are not stronger than the child actor's own `parent` state. If a container
+contents cache disagrees with a child actor's self-authenticating ctx or own
+state, the child actor wins.
+
 All actor references crossing actor, client, or runtime message boundaries MUST
 be full DIDs or DID-URLs. Runtime-local `#fragment` shorthand MUST NOT be sent
 or persisted in ctx.
@@ -351,6 +424,7 @@ All Scheme-backed lambda-ma actors inherit the generic actor method below from
 | `:owner` / `:owner?` | none | Generic prop-based owner inspection. `:owner` returns the raw owner DID or `(none)`. `:owner?` returns display text. Both are dry RPC replies and never send `:print`; avatar/proxy code may present the reply to a user. Kind-specific actors may override this with stricter policy. |
 | `:parent` / `:parent?` | none generically; `[ctx]` on movable actors | Generic dry parent query. Returns the raw current `parent` actor reference or `(none)`, making `:parent` the relation-query counterpart to `:child`. Movable actors override `:parent` with the stable parent-change mechanism: self asks the new parent for admission with ctx, commits only after acceptance, then notifies the old parent for cleanup. |
 | `:child` | `[ctx]` | With no args, owner-gated child-cache listing. With one ctx map, registers or updates a child cache entry when `ctx.actor` is a full DID-URL, `ctx` is an actor ctx, and `msg-from` matches `ctx.actor`. The child cache is derived state; the child's own `parent` prop remains authoritative. |
+| `:ctx` | `[ctx-map]` | Hidden actor-to-actor context notification. The generic implementation is a no-op acknowledgement so parents may safely ignore ctx shapes they do not care about. Kind-specific actors override this when they consume room, movement, or container ctx. |
 | `:rpcs?` / `:cmds?` / `:metas?` / `:api?` | none | Generic public API inspection. These introspection verbs are themselves dry public RPCs and appear in `:rpcs?`. `:rpcs?` returns public RPC verbs, `:cmds?` returns avatar and world command verbs, `:metas?` returns explicit relation/repair helpers such as `:parent` or `:child`, and `:api?` returns a grouped view keyed by `:rpcs?`, `:cmds?`, and `:metas?`. Hidden actor-to-actor protocol handlers are not part of this surface. |
 
 ### 6.1 root actor
@@ -374,7 +448,7 @@ Key verbs:
 | --- | --- | --- | --- |
 | `:enter-room` | `<room>` | root or target room | Avatar receives this from root or the target room, sends room `:enter`, and waits for committed room ctx before persisting room state and forwarding `:ctx` to DID principal. |
 | `:sync-ctx` | none | root only | Emits current `:ctx` to DID principal without changing avatar state. |
-| `:ctx` | `<ctx-map>` | current room, root, or controlling DID | With no args, returns current context to authorised callers. With a movement ctx-map, validates ordinary movement ctx, optionally prints `ctx.text`, then asks `ctx.room` to admit the avatar. The avatar forwards no new `:ctx` to the DID principal until the target room commits one. |
+| `:ctx` | `<ctx-map>` | current room, root, controlling DID, or configured inventory container | With no args, returns current context to authorised callers. With a movement ctx-map, validates ordinary movement ctx, optionally prints `ctx.text`, then asks `ctx.room` to admit the avatar. With room ctx, updates the avatar's room visibility cache. With container ctx from the configured inventory container, updates the avatar's inventory cache. The avatar forwards no new `:ctx` to the DID principal until the target room commits one. |
 | `:ctx?` | none | DID principal only | Returns context term. |
 | `:child` | `[ctx]` | no args: DID principal only; ctx: child actor only | `inventory` storage surface. With child ctx, accepts only sender-matching actor ctx and stores it in the avatar's child cache. With no args, returns the child-cache listing. |
 | `:help` | `[topic]` | DID principal only | `help here` asks room `:help`. |
@@ -387,6 +461,15 @@ Key verbs:
 | `:claim` `:dig` `:fill` | varies | DID principal only | Delegates to room without owner-authority arguments; rooms recognise the owner DID or deterministic owner avatar from `msg-from`. `:owner` is mediated by the avatar's default room forwarding; it is not an avatar method and does not mutate avatar ownership. |
 | `:drop-thing` | `<did> <thing> <target-parent> [token] [ctx]` | room caller only | Parent-mediated drop helper; forwards optional DID principal ctx map. |
 | `:report-parent` | `<room> <tick> <nonce>` | room caller | Machine presence request; replies with `:parent-report <self> <room> <tick> <nonce>` using the avatar's persisted room. |
+
+Avatars create or reuse a deterministic local container as their inventory. The
+container uses `/ma/container/0.0.1`, is parented to the avatar, and is exposed
+in avatar ctx as `inventory`. Carried actors are parented to that inventory
+container, not directly to the avatar. `take` asks the current source parent to
+move the child to the inventory container; `drop` and `put` ask the inventory
+container, as current parent, to move the child to the target room or target
+container. The avatar's local inventory display is a last-known-good cache from
+that container's `/ma/ctx/container/0.0.1` snapshots.
 
 ### 6.3 room actor
 
@@ -548,6 +631,7 @@ listing, putting in, and taking out.
 | Verb | Args | Notes |
 | --- | --- | --- |
 | `:about` | none | Name, description, owner, parent, and locked summary. |
+| `:look` | `[target]` | Presentation form for looking at or into the container. With a delegated target from a local actor, prints to that target; otherwise replies with the same text. |
 | `:contents?` | none | Lists stored contents when unlocked. If locked, replies with the lock message as an error. |
 | `:put-in` | `<ctx-map>` | Admission request for a child ctx when unlocked. Accepted children still become current only when the child self commits `parent` to this container. |
 | `:take-from` | `<child>` | Container-content extraction. Removes a child by DID-URL or label and returns the stored ctx when unlocked. Does not pick up or move the child actor itself. |
@@ -556,6 +640,17 @@ listing, putting in, and taking out.
 | `:take` | `<did> <carrier-parent> [ctx]` | Pick-up request for the whole container. Caller must be current parent; the container still commits its own parent only after target admission. Owner may recover only an empty-parent orphan. |
 | `:drop` | `<did> <target-parent> [ctx]` | Drop request for the whole container. Caller must be current parent; the container still commits its own parent only after target admission. Owner may recover only an empty-parent orphan. |
 | `:child` | `[ctx]` | Contents alias. No args lists contents using the same lock rule as `:contents?`; with ctx, behaves like `:put-in`. |
+
+After any contents mutation, the container sends `/ma/ctx/container/0.0.1` to
+its current parent. This is a parent notification only; parents that do not care
+about container contents may acknowledge and ignore it. An avatar may designate
+one container actor as its inventory and use that container ctx as a local
+last-known-good inventory cache.
+
+Parent-mediated `:take` on a parent cache MAY include an explicit target parent
+after the child token. This lets an avatar ask an inventory container to move a
+carried child to a room or another container without making the avatar itself the
+child's parent.
 
 ---
 

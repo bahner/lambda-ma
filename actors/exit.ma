@@ -59,18 +59,43 @@
 (define (target-ctx ctx)
   (annotate-movement-ctx ctx (target-room) (traveller-message)))
 
+(define (about-text)
+  (string-append
+    (name) "\n"
+    (description) "\n"
+    "owner: " (if (owner) (owner) "(none)") "\n"
+    "source: " (if (source-room) (source-room) "(none)") "\n"
+    "target: " (if (target-room) (target-room) "(none)") "\n"
+    "direction: " (if (direction) (direction) "(none)") "\n"
+    "locked: " (if (locked?) "true" "false")))
+
+(define (about-recipient ctx)
+  (let ((avatar (ctx-text ctx "avatar"))
+        (did (ctx-text ctx "did"))
+        (actor (ctx-text ctx "actor")))
+    (cond ((non-empty-string? avatar) avatar)
+          ((non-empty-string? did) did)
+          ((non-empty-string? actor) actor)
+          (else #f))))
+
+(define (send-about! ctx)
+  (let ((recipient (about-recipient ctx)))
+    (if recipient
+        (ma-send! (canonical-actor recipient) (list :print (about-text)))
+        #f)))
+
 ; Public inspection methods.
 (set-rpc-method! :about
   (lambda (args msg)
-    (reply-ok-with msg
-      (string-append
-        (name) "\n"
-        (description) "\n"
-        "owner: " (if (owner) (owner) "(none)") "\n"
-        "source: " (if (source-room) (source-room) "(none)") "\n"
-        "target: " (if (target-room) (target-room) "(none)") "\n"
-        "direction: " (if (direction) (direction) "(none)") "\n"
-        "locked: " (if (locked?) "true" "false")))))
+    (if (null? args)
+        (reply-ok-with msg (about-text))
+        (begin
+          (send-about! (car args))
+          (reply-ok msg)))))
+
+(set-rpc-method! :look
+  (lambda (args msg)
+    ((find-method :about) args msg)))
 
 (set-rpc-method! :where?
   (lambda (args msg)

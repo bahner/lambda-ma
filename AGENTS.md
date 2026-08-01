@@ -77,6 +77,13 @@ When documenting or changing behaviour, keep these contracts aligned:
   split avatar/DID entry verbs).
 - Enter payload naming: one extensible map named `ctx` (not `attrs`). Direct
   non-avatar entry requires fields `kind`, `name`, `nick`, `description`.
+- Ctx trust anchor: only `msg.from` is authenticated. Treat every `ctx` field
+  as untrusted until validated against `msg.from`. For avatar-sent ctx,
+  `ctx.avatar` must equal `msg.from`; then verify `ctx.did` by deriving the
+  deterministic avatar fragment for that DID in the sender avatar's runtime.
+  Once that derivation matches, `ctx.did` has the same cryptographic authority
+  as if the bare DID had been `msg.from`. Use the standard ctx validation helper
+  before acting on received ctx.
 - Actor references crossing actor, client, or runtime message boundaries must
   be full DIDs or DID-URLs. Do not send runtime-local `#fragment` shorthand in
   messages, ctx fields such as `root`, `avatar`, `room`, or future actor/path
@@ -101,6 +108,17 @@ When documenting or changing behaviour, keep these contracts aligned:
   state only after the room sends committed ctx back.
 - Authority model: room ownership is by bare DID; avatars are delegates;
   parent authority governs `take`/`drop` flows.
+- Container ctx: containers use `/ma/container/0.0.1` and send
+  `/ma/ctx/container/0.0.1` full contents snapshots to their current parent on
+  contents changes. Parents may ignore these notifications. Avatar inventory is
+  a configured container reference in avatar ctx, not a separate inventory kind
+  or protocol; the avatar caches only valid, newer container ctx from that
+  configured container.
+- Avatar inventory lifecycle: avatars create/reuse a deterministic local
+  `/ma/container/0.0.1` actor as inventory and publish it in avatar ctx as
+  `inventory`. Carried actors should be parented to that container, not directly
+  to the avatar. `take` routes to the inventory container as carrier parent;
+  `drop`/`put` route through the inventory container as the current parent.
 - Transfer strictness (default): thing/agent transfer calls must keep strict
   input validation until explicitly relaxed:
   controlling DID must be `did:ma:...`; non-ctx parent arguments must be DID-URLs.
