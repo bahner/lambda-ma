@@ -381,6 +381,14 @@
     (ma-save-state!)
     (send-room-ctx-list! (avatar-occupants) (room-ctx))))
 
+(define (send-fresh-room-ctx-to! avatar)
+  (if (or (valid-did-url? avatar) (local-actor-ref? avatar))
+      (begin
+        (inc-prop! "ctx:rev" 1)
+        (ma-save-state!)
+        (send-room-ctx-to! avatar (room-ctx)))
+      #f))
+
 (define (names-of actors)
   (cond ((null? actors) "")
         ((null? (cdr actors)) (speaker-name (car actors)))
@@ -1554,7 +1562,9 @@
           (look-args (command-args args msg)))
       (reconcile-caller-occupant! avatar)
       (if (null? look-args)
-          (print-and-reply-ok msg (room-text))
+          (begin
+            (send-fresh-room-ctx-to! avatar)
+            (print-and-reply-ok msg (room-text)))
           (print-and-reply-ok msg "Use your avatar to inspect visible things.")))))
 
 (unset-method! :name)
@@ -1580,6 +1590,7 @@
 (set-cmd-method! :things?
   (lambda (args msg)
     (let ((avatar (msg-from msg)))
+      (send-fresh-room-ctx-to! avatar)
       (print-and-reply-ok msg (things-text)))))
 
 (set-rpc-method! :dids?

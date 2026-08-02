@@ -1174,6 +1174,46 @@ mod tests {
     }
 
     #[test]
+    fn room_look_refreshes_callers_room_ctx_snapshot() {
+        let env = room_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#room".to_string());
+        crate::state::set_config(config);
+        eval_all(
+            r#"
+            (set-prop! "ctx:rev" 4)
+            (set-thing! "Aladdins lampe" "did:ma:runtime#lamp")
+            "#,
+            &env,
+        )
+        .unwrap();
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_msg("did:ma:runtime#avatar", "did:ma:runtime#room")),
+        );
+
+        eval_all("((find-method :look) '() msg)", &env).unwrap();
+
+        assert_eq!(
+            eval_str("(get-prop \"sent-target:1\")", &env),
+            "did:ma:runtime#avatar"
+        );
+        assert_eq!(
+            eval_int(
+                "(map-ref (car (cdr (get-prop \"sent-term:1\"))) \"rev\" 0)",
+                &env
+            ),
+            5
+        );
+        assert_eq!(
+            eval_str("(ctx-text (car (map-ref (car (cdr (get-prop \"sent-term:1\"))) \"things\" '())) \"nick\")", &env),
+            "Aladdins lampe"
+        );
+    }
+
+    #[test]
     fn room_look_with_argument_does_not_dispatch_to_visible_target() {
         let env = room_env();
         install_send_reply_recorders(&env);
