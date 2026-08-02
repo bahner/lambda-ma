@@ -663,7 +663,9 @@
          (same-claim (equal? (claim-ctx actor) ctx))
          (same-label (equal? (speaker-name actor) nick)))
     (if (and was-known same-claim same-label)
-        (reply-ok msg)
+        (begin
+          (ma-send! (canonical-actor actor) (list :child ctx))
+          (reply-ok msg))
         (begin
           (set-claim! actor ctx)
           (set-label! actor nick)
@@ -692,7 +694,9 @@
           ((and bound (not (same-actor? bound actor)))
            (reply-error msg "nick token is already bound to another actor"))
           ((and (same-actor? bound actor) same-claim same-label)
-           (reply-ok msg))
+           (begin
+             (ma-send! (canonical-actor actor) (list :child ctx))
+             (reply-ok msg)))
           (else
            (set-claim! actor ctx)
            (set-label! actor label)

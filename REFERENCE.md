@@ -330,11 +330,14 @@ delivered or committed, so an implementation MUST NOT eagerly remove the child
 or publish a derived view that omits it.
 
 Parent assignment is idempotent. If `new_parent` is already self's committed
-parent and sends the same valid `:child <ctx>` confirmation again, self treats
-the operation as successfully committed and sends its current authoritative ctx
-back to that parent with `:parent <ctx>`. The actor does not repeat old-parent
-cleanup when there was no parent change. This repeated reply lets a parent
-repair a missing or stale ctx record without changing actor state.
+parent but sends a valid `:child <ctx>` that differs from self's current
+authoritative parent-facing ctx, self commits the confirmed fields and sends its
+resulting ctx back with `:parent <ctx>`. If the confirmation already exactly
+matches that ctx, self treats the operation as successfully committed and
+returns `:ok` without sending another actor message. The actor does not repeat
+old-parent cleanup when there was no parent change. A parent still answers every
+valid repeated `:parent <ctx>` with `:child <ctx>`, so a lost confirmation can be
+repaired while an exact response-to-response exchange terminates.
 
 This is a consequence of the Hewitt actor delivery model used by lambda-ma.
 Actors cannot know whether a previous message or its reply was delivered. A

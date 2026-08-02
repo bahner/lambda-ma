@@ -294,6 +294,28 @@
                 #t))
             #f))))
 
+(define (handle-stale-parent-drop did rest msg)
+  (if (or (null? rest)
+          (null? (cdr rest))
+          (not (null? (cdr (cdr rest)))))
+      #f
+      (let ((target-parent (car rest))
+            (ctx (car (cdr rest)))
+            (caller (msg-from msg)))
+        (if (and (node-owner-did? did)
+                 (node-valid-parent-ref? target-parent)
+                 (node-valid-transfer-ctx? ctx)
+                 (same-actor? (ctx-text ctx "actor") (self))
+                 (same-actor? (ctx-text ctx "parent") caller)
+                 (same-actor? target-parent (node-parent))
+                 (not (same-actor? caller (node-parent))))
+            (begin
+              (ma-send! (canonical-actor caller) (list :parent (node-ctx)))
+              (propose-node-parent! target-parent)
+              (reply-ok-with msg "drop requested")
+              #t)
+            #f))))
+
 (define (handle-node-parent args msg)
   (cond ((null? args)
          (reply-ok-with msg (if (equal? (node-parent) "") "(none)" (node-parent))))
@@ -366,6 +388,9 @@
          (reply-error msg "usage: :child [ctx]"))
         ((not (node-confirmation-valid? (car args) msg))
          (reply-error msg "child ctx must name self and come from target parent"))
+        ((and (same-actor? (node-parent) (ctx-text (car args) "parent"))
+              (equal? (node-ctx) (car args)))
+         (reply-ok msg))
         (else
          (begin
            (commit-node-parent! (car args))
