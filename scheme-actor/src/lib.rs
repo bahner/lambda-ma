@@ -281,6 +281,19 @@ mod tests {
     }
 
     #[test]
+    fn reverse_reverses_proper_lists() {
+        let env = new_root_env();
+
+        assert_eq!(
+            eval_all("(reverse (list 1 2 3))", &env).unwrap(),
+            Value::list(vec![Value::Int(3), Value::Int(2), Value::Int(1)])
+        );
+        assert_eq!(eval_all("(reverse '())", &env).unwrap(), Value::Nil);
+        assert!(eval_all("(reverse (cons 1 2))", &env).is_err());
+        assert!(eval_all("(reverse! (list 1 2 3))", &env).is_err());
+    }
+
+    #[test]
     fn actor_metadata_methods_are_generic() {
         let env = actor_env();
         let mut config = std::collections::HashMap::new();
@@ -1561,6 +1574,7 @@ mod tests {
         config.insert("self".to_string(), "did:ma:runtime#room".to_string());
         crate::state::set_config(config);
         install_send_reply_recorders(&env);
+        eval_all("(define (ma-entity-exists? actor) #t)", &env).unwrap();
         let child_ctx = eval_all(
             r#"
                         (map-set
@@ -1603,6 +1617,62 @@ mod tests {
             "did:ma:runtime#room"
         );
         assert_eq!(eval_str("(things-text)", &env), "Things: The Lamp");
+    }
+
+    #[test]
+    fn room_repeated_agent_parent_ctx_is_idempotent() {
+        let env = room_env();
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#room".to_string());
+        crate::state::set_config(config);
+        install_send_reply_recorders(&env);
+        eval_all("(define (ma-entity-exists? actor) #t)", &env).unwrap();
+        let child_ctx = eval_all(
+            r#"
+                        (map-set
+                            (map-set
+                                (map-set
+                                    (map-set
+                                        (map-set
+                                            (map-set
+                                                (map-set (make-map) "actor" "did:ma:runtime#duckie")
+                                                "kind" "agent")
+                                            "protocol" "/ma/scheme/agent/0.0.1")
+                                        "parent" "did:ma:runtime#room")
+                                    "name" "Rubber Duckie")
+                                "nick" "Duckie")
+                            "description" "A curious rubber duck.")
+                        "#,
+            &env,
+        )
+        .unwrap();
+        env.define(
+            Rc::from("children_msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:runtime#duckie",
+                "did:ma:runtime#room",
+                Value::list(vec![Value::symbol(":parent"), child_ctx.clone()]),
+            )),
+        );
+
+        eval_all("(on-message children_msg)", &env).unwrap();
+        let first_sent_count = eval_int("(get-prop \"sent-count\")", &env);
+        let first_reply_count = eval_int("(get-prop \"reply-count\")", &env);
+        let first_rev = eval_int("(get-prop \"ctx:rev\")", &env);
+
+        eval_all("(on-message children_msg)", &env).unwrap();
+
+        assert_eq!(
+            eval_int("(get-prop \"sent-count\")", &env),
+            first_sent_count
+        );
+        assert_eq!(
+            eval_int("(get-prop \"reply-count\")", &env),
+            first_reply_count + 1
+        );
+        assert_eq!(eval_int("(get-prop \"ctx:rev\")", &env), first_rev);
+        assert_eq!(eval_str("(occupants-text)", &env), "Occupants: Duckie");
     }
 
     #[test]
@@ -1722,6 +1792,53 @@ mod tests {
         eval_all("(on-message msg)", &env).unwrap();
 
         assert_eq!(eval_str("(occupants-text)", &env), "Occupants: none.");
+    }
+
+    #[test]
+    fn room_presence_tick_saves_presence_challenge_state() {
+        let env = room_env();
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#room".to_string());
+        crate::state::set_config(config);
+
+        eval_all(
+            r#"
+            (define (ma-entity-exists? actor) #t)
+            (define (ma-save-state!) (inc-prop! "save-count" 1))
+            (define (ma-send! target term)
+              (inc-prop! "sent-count" 1)
+              (set-prop! (string-append "sent-target:" (number->string (get-prop "sent-count"))) target)
+              (set-prop! (string-append "sent-term:" (number->string (get-prop "sent-count"))) term))
+            (define avatar "did:ma:runtime#avatar")
+            (set-label! avatar "Alice")
+            (add-avatar-presence! avatar)
+            "#,
+            &env,
+        )
+        .unwrap();
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:runtime#scheduler",
+                "did:ma:runtime#room",
+                Value::symbol(":presence-tick"),
+            )),
+        );
+
+        eval_all("(on-message msg)", &env).unwrap();
+
+        assert_eq!(eval_int("(get-prop \"save-count\")", &env), 1);
+        assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 1);
+        assert_eq!(
+            eval_all("(get-prop \"sent-term:1\")", &env).unwrap(),
+            Value::list(vec![
+                Value::symbol(":report-parent"),
+                Value::str("did:ma:runtime#room"),
+                Value::Int(1),
+                Value::str("ccd19035308b3ff6"),
+            ])
+        );
     }
 
     #[test]
@@ -3062,22 +3179,22 @@ mod tests {
         );
     }
 
-        #[test]
-        fn avatar_forwards_ctx_to_did_after_inventory_container_ctx_update() {
-                let env = avatar_env();
-                install_send_reply_recorders(&env);
-                let did = "did:ma:did";
-                let mut config = std::collections::HashMap::new();
-                config.insert("runtime".to_string(), "did:ma:runtime".to_string());
-                crate::state::set_config(config.clone());
+    #[test]
+    fn avatar_forwards_ctx_to_did_after_inventory_container_ctx_update() {
+        let env = avatar_env();
+        install_send_reply_recorders(&env);
+        let did = "did:ma:did";
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        crate::state::set_config(config.clone());
 
-                let avatar_id = eval_str(&format!(r#"(avatar-fragment "{did}")"#), &env);
-                let avatar = format!("did:ma:runtime#{avatar_id}");
-                config.insert("self".to_string(), avatar.clone());
-                config.insert("id".to_string(), avatar_id);
-                crate::state::set_config(config);
+        let avatar_id = eval_str(&format!(r#"(avatar-fragment "{did}")"#), &env);
+        let avatar = format!("did:ma:runtime#{avatar_id}");
+        config.insert("self".to_string(), avatar.clone());
+        config.insert("id".to_string(), avatar_id);
+        crate::state::set_config(config);
 
-                eval_all(
+        eval_all(
                         r#"
                         (set-prop! "did" "did:ma:did")
                         (set-prop! "room" "did:ma:runtime#room")
@@ -3120,44 +3237,47 @@ mod tests {
                         &env,
                 )
                 .unwrap();
-                assert_eq!(
-                        eval_str("(inventory-text)", &env),
-                        "Inventory:\nlamp = did:ma:runtime#lamp"
-                );
+        assert_eq!(
+            eval_str("(inventory-text)", &env),
+            "Inventory:\nlamp = did:ma:runtime#lamp"
+        );
 
-                env.define(
-                        Rc::from("ctx_msg"),
-                        Value::Msg(sample_term_msg(
-                                "did:ma:runtime#inventory",
-                                &avatar,
-                                eval_all("(list :parent (container-ctx 2 (make-map)))", &env).unwrap(),
-                        )),
-                );
-                eval_all("(on-message ctx_msg)", &env).unwrap();
+        env.define(
+            Rc::from("ctx_msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:runtime#inventory",
+                &avatar,
+                eval_all("(list :parent (container-ctx 2 (make-map)))", &env).unwrap(),
+            )),
+        );
+        eval_all("(on-message ctx_msg)", &env).unwrap();
 
-                assert_eq!(eval_str("(inventory-text)", &env), "Inventory: empty.");
-                assert_eq!(eval_str("(get-prop \"sent-target:1\")", &env), did);
-                assert!(eval_bool(
-                        "(equal? (car (get-prop \"sent-term:1\")) :ctx)",
-                        &env,
-                ));
-                assert_eq!(
-                        eval_str("(ctx-value (car (cdr (get-prop \"sent-term:1\"))) :inv)", &env),
-                        "did:ma:runtime#inventory"
-                );
+        assert_eq!(eval_str("(inventory-text)", &env), "Inventory: empty.");
+        assert_eq!(eval_str("(get-prop \"sent-target:1\")", &env), did);
+        assert!(eval_bool(
+            "(equal? (car (get-prop \"sent-term:1\")) :ctx)",
+            &env,
+        ));
+        assert_eq!(
+            eval_str(
+                "(ctx-value (car (cdr (get-prop \"sent-term:1\"))) :inv)",
+                &env
+            ),
+            "did:ma:runtime#inventory"
+        );
 
-                env.define(
-                    Rc::from("stale_ctx_msg"),
-                    Value::Msg(sample_term_msg(
-                        "did:ma:runtime#inventory",
-                        &avatar,
-                        eval_all("(list :parent (container-ctx 1 (make-map)))", &env).unwrap(),
-                    )),
-                );
-                eval_all("(on-message stale_ctx_msg)", &env).unwrap();
+        env.define(
+            Rc::from("stale_ctx_msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:runtime#inventory",
+                &avatar,
+                eval_all("(list :parent (container-ctx 1 (make-map)))", &env).unwrap(),
+            )),
+        );
+        eval_all("(on-message stale_ctx_msg)", &env).unwrap();
 
-                assert!(eval_bool("(not (get-prop \"sent-target:2\"))", &env));
-        }
+        assert!(eval_bool("(not (get-prop \"sent-target:2\"))", &env));
+    }
 
     #[test]
     fn avatar_look_carried_container_sends_container_look_for_controlling_did() {
@@ -3278,21 +3398,21 @@ mod tests {
         );
     }
 
-        #[test]
-        fn avatar_take_visible_actor_uses_room_ctx_without_room_take() {
-                let env = avatar_env();
-                let did = "did:ma:did";
-                let mut config = std::collections::HashMap::new();
-                config.insert("runtime".to_string(), "did:ma:runtime".to_string());
-                crate::state::set_config(config.clone());
+    #[test]
+    fn avatar_take_visible_actor_uses_room_ctx_without_room_take() {
+        let env = avatar_env();
+        let did = "did:ma:did";
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        crate::state::set_config(config.clone());
 
-                let avatar_id = eval_str(&format!(r#"(avatar-fragment "{did}")"#), &env);
-                config.insert("self".to_string(), format!("did:ma:runtime#{avatar_id}"));
-                config.insert("id".to_string(), avatar_id);
-                crate::state::set_config(config);
+        let avatar_id = eval_str(&format!(r#"(avatar-fragment "{did}")"#), &env);
+        config.insert("self".to_string(), format!("did:ma:runtime#{avatar_id}"));
+        config.insert("id".to_string(), avatar_id);
+        crate::state::set_config(config);
 
-                eval_all(
-                        r#"
+        eval_all(
+            r#"
                         (set-prop! "did" "did:ma:did")
                         (set-prop! "room" "did:ma:runtime#room")
                         (remember-room-ctx!
@@ -3330,37 +3450,34 @@ mod tests {
                                                 "description" "A warm brass lamp.")))
                                 "exits" '()))
                         "#,
-                        &env,
-                )
-                .unwrap();
+            &env,
+        )
+        .unwrap();
 
-                env.define(
-                        Rc::from("take_msg"),
-                        Value::Msg(sample_term_msg(
-                                did,
-                                "did:ma:runtime#avatar",
-                                Value::list(vec![
-                                        Value::symbol(":take"),
-                                    Value::str("Aladdins lampe"),
-                                ]),
-                        )),
-                );
-                eval_all("(on-message take_msg)", &env).unwrap();
+        env.define(
+            Rc::from("take_msg"),
+            Value::Msg(sample_term_msg(
+                did,
+                "did:ma:runtime#avatar",
+                Value::list(vec![Value::symbol(":take"), Value::str("Aladdins lampe")]),
+            )),
+        );
+        eval_all("(on-message take_msg)", &env).unwrap();
 
-                assert_eq!(
-                        eval_str("(get-prop \"sent-target:1\")", &env),
-                        "did:ma:runtime#lamp"
-                );
-                assert_eq!(
-                        eval_all("(get-prop \"sent-term:1\")", &env).unwrap(),
-                        Value::list(vec![
-                                Value::symbol(":take"),
-                                Value::str("did:ma:did"),
-                                Value::str(eval_str(&format!(r#"(inventory-for-did "{did}")"#), &env)),
-                                eval_all("(room-ctx-ref \"Aladdins lampe\")", &env).unwrap(),
-                        ]),
-                );
-        }
+        assert_eq!(
+            eval_str("(get-prop \"sent-target:1\")", &env),
+            "did:ma:runtime#lamp"
+        );
+        assert_eq!(
+            eval_all("(get-prop \"sent-term:1\")", &env).unwrap(),
+            Value::list(vec![
+                Value::symbol(":take"),
+                Value::str("did:ma:did"),
+                Value::str(eval_str(&format!(r#"(inventory-for-did "{did}")"#), &env)),
+                eval_all("(room-ctx-ref \"Aladdins lampe\")", &env).unwrap(),
+            ]),
+        );
+    }
 
     #[test]
     fn container_owner_can_take_orphan_through_local_avatar() {
@@ -3485,7 +3602,7 @@ mod tests {
         );
 
         eval_all(
-                        r#"
+            r#"
                                                 (set-prop! "did" "did:ma:did")
                                                 (set-prop! "room" "did:ma:runtime#room")
                                                 (set-prop! "room-ctx"
@@ -3502,9 +3619,9 @@ mod tests {
                                                         "things" (list bag_ctx)))
                                                 (on-message msg)
                         "#,
-                        &env,
-                )
-                .unwrap();
+            &env,
+        )
+        .unwrap();
 
         assert_eq!(
             eval_str("(get-prop \"sent-target:1\")", &env),
@@ -4437,16 +4554,16 @@ mod tests {
         );
     }
 
-        #[test]
-        fn container_parent_take_publishes_updated_container_ctx() {
-                let env = container_env();
-                install_send_reply_recorders(&env);
-                let mut config = std::collections::HashMap::new();
-                config.insert("runtime".to_string(), "did:ma:runtime".to_string());
-                config.insert("self".to_string(), "did:ma:runtime#inventory".to_string());
-                crate::state::set_config(config);
-                let child_ctx = eval_all(
-                        r#"
+    #[test]
+    fn container_parent_take_publishes_updated_container_ctx() {
+        let env = container_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#inventory".to_string());
+        crate::state::set_config(config);
+        let child_ctx = eval_all(
+            r#"
                         (map-set
                             (map-set
                                 (map-set
@@ -4461,20 +4578,20 @@ mod tests {
                                 "nick" "Aladdins lampe")
                             "description" "A warm brass lamp.")
                         "#,
-                        &env,
-                )
-                .unwrap();
-                env.define(Rc::from("child_ctx"), child_ctx.clone());
-                env.define(
-                        Rc::from("avatar_msg"),
-                        Value::Msg(sample_term_msg(
-                                "did:ma:runtime#avatar",
-                                "did:ma:runtime#inventory",
-                                Value::symbol(":take"),
-                        )),
-                );
+            &env,
+        )
+        .unwrap();
+        env.define(Rc::from("child_ctx"), child_ctx.clone());
+        env.define(
+            Rc::from("avatar_msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:runtime#avatar",
+                "did:ma:runtime#inventory",
+                Value::symbol(":take"),
+            )),
+        );
 
-                eval_all(
+        eval_all(
                         r#"
                         (set-prop! "parent" "did:ma:runtime#avatar")
                         (remember-content! child_ctx)
@@ -4484,25 +4601,25 @@ mod tests {
                 )
                 .unwrap();
 
-                assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 3);
-                assert_eq!(
-                        eval_all("(get-prop \"sent-term:1\")", &env).unwrap(),
-                        Value::list(vec![
-                        Value::symbol(":drop"),
-                                Value::str("did:ma:did"),
-                                Value::str("did:ma:runtime#room"),
-                                child_ctx,
-                        ])
-                );
-                assert_eq!(
-                        eval_str("(get-prop \"sent-target:3\")", &env),
-                        "did:ma:runtime#avatar"
-                );
-                assert!(eval_bool(
+        assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 3);
+        assert_eq!(
+            eval_all("(get-prop \"sent-term:1\")", &env).unwrap(),
+            Value::list(vec![
+                Value::symbol(":drop"),
+                Value::str("did:ma:did"),
+                Value::str("did:ma:runtime#room"),
+                child_ctx,
+            ])
+        );
+        assert_eq!(
+            eval_str("(get-prop \"sent-target:3\")", &env),
+            "did:ma:runtime#avatar"
+        );
+        assert!(eval_bool(
                     "(let ((term (get-prop \"sent-term:3\"))) (and (equal? (car term) :parent) (null? (map->alist (map-ref (car (cdr term)) \"contents\" (make-map))))))",
                         &env
                 ));
-        }
+    }
 
     #[test]
     fn container_look_can_present_contents_to_delegated_did() {
@@ -5626,7 +5743,7 @@ mod tests {
 
         env.define(
             Rc::from("msg"),
-                        Value::Msg(sample_msg("did:ma:runtime#north-exit", &avatar)),
+            Value::Msg(sample_msg("did:ma:runtime#north-exit", &avatar)),
         );
         eval_all(
             r#"
@@ -5660,15 +5777,24 @@ mod tests {
             &env
         ));
         assert_eq!(
-            eval_str("(ctx-text (car (cdr (get-prop \"sent-term:2\"))) \"did\")", &env),
+            eval_str(
+                "(ctx-text (car (cdr (get-prop \"sent-term:2\"))) \"did\")",
+                &env
+            ),
             did
         );
         assert_eq!(
-            eval_str("(ctx-text (car (cdr (get-prop \"sent-term:2\"))) \"avatar\")", &env),
+            eval_str(
+                "(ctx-text (car (cdr (get-prop \"sent-term:2\"))) \"avatar\")",
+                &env
+            ),
             avatar
         );
         assert_eq!(
-            eval_str("(ctx-text (car (cdr (get-prop \"sent-term:2\"))) \"room\")", &env),
+            eval_str(
+                "(ctx-text (car (cdr (get-prop \"sent-term:2\"))) \"room\")",
+                &env
+            ),
             "did:ma:runtime#kitchen"
         );
         assert_eq!(
@@ -5810,7 +5936,7 @@ mod tests {
 
         env.define(
             Rc::from("msg"),
-                        Value::Msg(sample_msg("did:ma:sky#cloud-exit", &avatar)),
+            Value::Msg(sample_msg("did:ma:sky#cloud-exit", &avatar)),
         );
         eval_all(
             r#"
@@ -5839,15 +5965,24 @@ mod tests {
             &env
         ));
         assert_eq!(
-            eval_str("(ctx-text (car (cdr (get-prop \"sent-term:1\"))) \"did\")", &env),
+            eval_str(
+                "(ctx-text (car (cdr (get-prop \"sent-term:1\"))) \"did\")",
+                &env
+            ),
             did
         );
         assert_eq!(
-            eval_str("(ctx-text (car (cdr (get-prop \"sent-term:1\"))) \"avatar\")", &env),
+            eval_str(
+                "(ctx-text (car (cdr (get-prop \"sent-term:1\"))) \"avatar\")",
+                &env
+            ),
             avatar
         );
         assert_eq!(
-            eval_str("(ctx-text (car (cdr (get-prop \"sent-term:1\"))) \"room\")", &env),
+            eval_str(
+                "(ctx-text (car (cdr (get-prop \"sent-term:1\"))) \"room\")",
+                &env
+            ),
             "did:ma:ma#cloud"
         );
         assert_eq!(

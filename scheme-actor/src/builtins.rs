@@ -39,6 +39,7 @@ pub fn install(env: &Rc<Env>) {
     def!("car", b_car);
     def!("cdr", b_cdr);
     def!("list", b_list);
+    def!("reverse", b_reverse);
     def!("null?", b_null_p);
     def!("pair?", b_pair_p);
 
@@ -346,6 +347,12 @@ fn b_cdr(args: &[Value]) -> EvalResult<Value> {
 
 fn b_list(args: &[Value]) -> EvalResult<Value> {
     Ok(Value::list(args.to_vec()))
+}
+
+fn b_reverse(args: &[Value]) -> EvalResult<Value> {
+    let mut items = one_arg("reverse", args)?.to_vec()?;
+    items.reverse();
+    Ok(Value::list(items))
 }
 
 fn b_null_p(args: &[Value]) -> EvalResult<Value> {
