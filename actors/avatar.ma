@@ -1079,10 +1079,15 @@
         (if (null? args)
             (send-did-text "Usage: drop <thing>")
             (let* ((token (join-words args))
-                   (actor (inventory-lookup-did-url token)))
+                   (entry (inventory-ref token))
+                   (actor (if entry
+                              (inventory-entry-actor entry)
+                              (if (valid-did-url? token) (canonical-actor token) #f))))
               (if actor
-                  (begin
-                    (ma-send! (canonical-actor actor) (list :drop (did) (canonical-actor (room)))))
+                  (ma-send! (canonical-actor actor)
+                            (if entry
+                                (list :drop (did) (canonical-actor (room)) (cdr entry))
+                                (list :drop (did) (canonical-actor (room)))))
                   (send-did-text (string-append "Unknown carried agent or thing: " token)))))
         (reply-ok-silent msg)))))
 

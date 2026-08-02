@@ -307,6 +307,28 @@ Parent changes are target-accepted and forward-moving:
 9. `old_parent` removes the committed ctx it holds for the child. It has no
    ordinary veto after commit.
 
+Parent assignment is idempotent. If `new_parent` is already self's committed
+parent and sends the same valid `:child <ctx>` confirmation again, self treats
+the operation as successfully committed and sends its current authoritative ctx
+back to that parent with `:parent <ctx>`. The actor does not repeat old-parent
+cleanup when there was no parent change. This repeated reply lets a parent
+repair a missing or stale ctx record without changing actor state.
+
+This is a consequence of the Hewitt actor delivery model used by lambda-ma.
+Actors cannot know whether a previous message or its reply was delivered. A
+sender may therefore repeat the same request indefinitely. Receivers MUST treat
+valid repeated ctx and state-setting requests as ordinary retries, apply the
+same validation, and answer from current authoritative state. If the requested
+state is already committed, the receiver replies as though that commit had just
+succeeded. It MUST NOT reject the request merely as redundant or assume that a
+repeat indicates a protocol error elsewhere.
+
+Implementations MUST NOT make retries reliable by persisting delivery history,
+deduplication records, suspended commands, or retry counters. Idempotence comes
+from computing the response from current authoritative state. Repeating the
+same request therefore produces the same authoritative ctx and can repair a
+peer whose earlier request or reply was lost.
+
 Requiring acceptance from both old and new parent is deliberately out of the
 ordinary parent-change flow. Protocols MAY define stricter protected flows, but
 the base world model is: new parent controls admission, self controls commit,
@@ -326,6 +348,9 @@ This does not prohibit authoritative actor state. Ownership, committed
 parentage, configuration, and accepted ctx records may be persisted when they
 are the durable facts owned by that actor. Such state records what has been
 committed; it does not represent a suspended operation.
+
+Stateless does not mean silent on repetition. Every valid retry is handled and
+answered from current authoritative state, even when no mutation is needed.
 
 Visible `name`, `nick`, alias, and direction values are resolver inputs and
 presentation hints only. Once resolution succeeds, the resolver produces a

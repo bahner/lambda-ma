@@ -121,7 +121,21 @@ When documenting or changing behaviour, keep these contracts aligned:
   `ctx.parent == msg.from`, commits the new parent, then sends a courtesy
   `<old-parent>:parent <departure-or-new-parent-ctx>` so the old parent can
   remove or update the ctx record it holds for that actor. Do not reverse these
-  verbs.
+  verbs. Parent assignment is idempotent: when a child receives a valid
+  `:child <ctx>` naming its already-current parent, it must still send its
+  authoritative ctx back to that parent with `:parent`. Treat the repeated
+  confirmation as a successful commit; do not suppress the ctx reply merely
+  because the parent value did not change.
+- Hewitt actor delivery and retries: actors cannot infer whether an earlier
+  message or reply was delivered. Lost messages and repeated requests are
+  normal protocol conditions, not evidence of misuse. Valid ctx and
+  state-setting requests must therefore be idempotent: answer every repetition
+  patiently from current authoritative state, including when it only restates
+  an already-committed value. Do not reject an authenticated repeat as
+  redundant, and do not add delivery tracking, deduplication logs, pending
+  commands, or retry counters merely to remember the workflow. A repeated
+  request repairs the other actor's knowledge by receiving the same current ctx
+  again.
 - Container ctx: containers use `/ma/container/0.0.1` and have one specified
   container ctx, including contents. Containers send refreshed container ctx to
   their current parent with `:parent` on contents or presentation changes. Do

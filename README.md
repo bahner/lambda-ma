@@ -50,6 +50,11 @@ committed authority facts, not pending commands or intermediate workflow state.
 Visible names and nicks are resolver inputs only; after resolution, messages and
 mutations use canonical full actor DID-URLs.
 
+Messages or replies may be lost, so valid retries are normal. Actors respond
+idempotently from current authoritative state, including when a request merely
+repeats an already-committed value; they do not keep delivery or deduplication
+state to decide whether to answer.
+
 ## Build
 
 Kubo/IPFS must be running locally.

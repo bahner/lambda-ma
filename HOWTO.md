@@ -343,6 +343,13 @@ or other intermediate step for later replay. Existing movement-specific state
 is not a pattern for parent/child, inventory, take, drop, or similar workflows;
 those flows use their explicit ctx handshakes.
 
+Assume that any actor message or reply may have been lost. A caller may repeat a
+request because it cannot know what arrived. Handle every valid retry
+idempotently and return the same current authoritative ctx even when the
+requested parent or value is already committed. Do not answer retries with
+"already done", and do not add delivery logs, deduplication state, pending
+commands, or retry counters. Recompute the response from current actor state.
+
 Resolve visible names, nicks, directions, and aliases only at the command
 boundary. After a successful lookup, discard the lookup term and use the
 canonical full actor DID or DID-URL for messages, authority checks, membership

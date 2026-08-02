@@ -144,9 +144,7 @@
     (set-prop-from-ctx! ctx "nick")
     (set-prop-from-ctx! ctx "description")
     (ma-save-state!)
-    (if (not (same-actor? old-parent target-parent))
-        (announce-parent!)
-        #f)
+    (announce-parent!)
     (if (and (non-empty-string? old-parent)
              (not (same-actor? old-parent target-parent)))
       (ma-send! (canonical-actor old-parent) (list :parent (thing-ctx)))
@@ -154,6 +152,16 @@
 
 (define (propose-parent-change! target-parent)
   (ma-send! (canonical-actor target-parent) (list :parent (thing-ctx-for-parent target-parent))))
+
+(define (clean-stale-parent-claim! ctx target-parent)
+  (let ((claimed-parent (ctx-text ctx "parent")))
+    (if (and (map? ctx)
+             (same-actor? (ctx-text ctx "actor") (self))
+             (valid-did-url? claimed-parent)
+             (not (same-actor? claimed-parent (parent)))
+             (not (same-actor? claimed-parent target-parent)))
+        (ma-send! (canonical-actor claimed-parent) (list :parent (thing-ctx)))
+        #f)))
 
 (define (owner-or-unowned? did)
   (let ((o (owner)))
@@ -357,7 +365,7 @@
              (begin
                (if (not (owner)) (set-owner! did) #f)
                (if (and (not (null? (cdr rest))) (valid-transfer-ctx? (car (cdr rest))))
-                   (set-claim! did (car (cdr rest)))
+                   (clean-stale-parent-claim! (car (cdr rest)) (car rest))
                    #f)
                (propose-parent-change! (car rest))
                  (reply-ok-with msg "drop requested")))))))

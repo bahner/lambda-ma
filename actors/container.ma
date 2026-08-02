@@ -209,9 +209,7 @@
     (set-prop-from-ctx! ctx "nick")
     (set-prop-from-ctx! ctx "description")
     (ma-save-state!)
-    (if (not (same-actor? old-parent target-parent))
-        (send-container-ctx!)
-        #f)
+    (send-container-ctx!)
     (if (and (non-empty-string? old-parent)
              (not (same-actor? old-parent target-parent)))
         (ma-send! (canonical-actor old-parent) (list :parent (container-ctx)))
@@ -342,6 +340,8 @@
           (else
            (begin
              (remember-content! (car args))
+             (ma-send! (canonical-actor (ctx-text (car args) "actor"))
+                       (list :child (car args)))
              (send-container-ctx!)
              (reply-ok msg))))))
 
