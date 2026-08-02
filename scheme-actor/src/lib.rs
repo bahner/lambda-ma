@@ -1824,6 +1824,7 @@ mod tests {
             &env,
         )
         .unwrap();
+        env.define(Rc::from("child_ctx"), child_ctx.clone());
         env.define(
             Rc::from("children_msg"),
             Value::Msg(sample_term_msg(
@@ -1847,6 +1848,54 @@ mod tests {
             "did:ma:runtime#room"
         );
         assert_eq!(eval_str("(things-text)", &env), "Things: The Lamp");
+    }
+
+    #[test]
+    fn room_removes_departed_thing_by_actor_did_url() {
+        let env = room_env();
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#room".to_string());
+        crate::state::set_config(config);
+        install_send_reply_recorders(&env);
+
+        eval_all(
+            r#"
+            (set-thing! "Aladdins lampe" "did:ma:runtime#lamp")
+            (set-claim! "did:ma:runtime#lamp"
+                (map-set
+                    (map-set
+                        (map-set
+                            (map-set
+                                (map-set
+                                    (map-set
+                                        (map-set (make-map) "actor" "did:ma:runtime#lamp")
+                                        "kind" "thing")
+                                    "protocol" "/ma/thing/0.0.1")
+                                "parent" "did:ma:runtime#inventory")
+                            "name" "lamp")
+                        "nick" "Aladdins lampe")
+                    "description" "A warm brass lamp."))
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        let departed_ctx = eval_all(r#"(claim-ctx "did:ma:runtime#lamp")"#, &env).unwrap();
+        env.define(
+            Rc::from("departure_msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:runtime#lamp",
+                "did:ma:runtime#room",
+                Value::list(vec![Value::symbol(":parent"), departed_ctx]),
+            )),
+        );
+
+        eval_all("(on-message departure_msg)", &env).unwrap();
+
+        assert!(eval_bool("(not (thing-ref \"Aladdins lampe\"))", &env));
+        assert!(eval_bool("(not (claim-ctx \"did:ma:runtime#lamp\"))", &env));
+        assert_eq!(eval_str("(things-text)", &env), "Things: none.");
     }
 
     #[test]
@@ -2672,6 +2721,7 @@ mod tests {
             r#"
             (set-prop! "did" "did:ma:did")
             (set-prop! "room" "did:ma:runtime#room")
+                        (set-prop! "inventory" (inventory-for-did (did)))
             "#,
             &env,
         )
@@ -3261,7 +3311,7 @@ mod tests {
     }
 
     #[test]
-    fn avatar_inventory_tracks_take_and_drop_tokens() {
+    fn avatar_take_does_not_add_unconfirmed_inventory_tokens() {
         let env = avatar_env();
         let did = "did:ma:did";
         let mut config = std::collections::HashMap::new();
@@ -3302,7 +3352,7 @@ mod tests {
         );
         eval_all("(on-message inventory_msg)", &env).unwrap();
 
-        assert_eq!(eval_str("(inventory-text)", &env), "Inventory:\nlamp");
+        assert_eq!(eval_str("(inventory-text)", &env), "Inventory: empty.");
 
         env.define(
             Rc::from("drop_msg"),
@@ -3315,11 +3365,24 @@ mod tests {
         eval_all("(on-message drop_msg)", &env).unwrap();
         eval_all("(on-message inventory_msg)", &env).unwrap();
 
-        assert_eq!(eval_str("(inventory-text)", &env), "Inventory:\nlamp");
+        assert_eq!(eval_str("(inventory-text)", &env), "Inventory: empty.");
+
+        env.define(
+            Rc::from("bad_take_msg"),
+            Value::Msg(sample_term_msg(
+                did,
+                "did:ma:runtime#avatar",
+                Value::list(vec![Value::symbol(":take"), Value::str("lampeTHISISABUG")]),
+            )),
+        );
+        eval_all("(on-message bad_take_msg)", &env).unwrap();
+        eval_all("(on-message inventory_msg)", &env).unwrap();
+
+        assert_eq!(eval_str("(inventory-text)", &env), "Inventory: empty.");
     }
 
     #[test]
-    fn avatar_inventory_waits_for_child_ctx_after_direct_actor_take() {
+    fn avatar_inventory_waits_for_container_ctx_after_direct_actor_take() {
         let env = avatar_env();
         let did = "did:ma:did";
         let mut config = std::collections::HashMap::new();
@@ -3367,21 +3430,41 @@ mod tests {
         );
         assert_eq!(eval_str("(inventory-text)", &env), "Inventory: empty.");
 
-        let child_ctx = eval_all(
+        eval_all(
             r#"
-            (map-set
-              (map-set
-                (map-set
-                  (map-set
+                        (define satchel-ctx
+                            (map-set
+                                (map-set
+                                    (map-set
                                         (map-set
                                             (map-set
-                                                (map-set (make-map) "actor" "did:ma:runtime#satchel")
-                                                "kind" "thing")
-                                            "protocol" "/ma/thing/0.0.1")
-                                        "parent" (local-self))
-                  "name" "Lars'ers rygsæk")
-                "nick" "Rygsækken")
-              "description" "A sturdy satchel.")
+                                                (map-set
+                                                    (map-set (make-map) "actor" "did:ma:runtime#satchel")
+                                                    "kind" "thing")
+                                                "protocol" "/ma/thing/0.0.1")
+                                              "parent" (inventory-for-did "did:ma:did"))
+                                        "name" "Lars'ers rygsæk")
+                                    "nick" "Rygsækken")
+                                "description" "A sturdy satchel."))
+                        (define inventory-test-ctx
+                            (map-set
+                                (map-set
+                                    (map-set
+                                        (map-set
+                                            (map-set
+                                                (map-set
+                                                    (map-set
+                                                        (map-set
+                                                            (map-set (make-map)
+                                                                "protocol" "/ma/container/0.0.1")
+                                                            "kind" "container")
+                                                        "actor" (inventory-for-did "did:ma:did"))
+                                                    "parent" (local-self))
+                                                "rev" 1)
+                                            "name" "Inventory")
+                                        "nick" "inventory")
+                                    "description" "A personal inventory container.")
+                                "contents" (map-set (make-map) "did:ma:runtime#satchel" satchel-ctx)))
             "#,
             &env,
         )
@@ -3389,9 +3472,9 @@ mod tests {
         env.define(
             Rc::from("children_msg"),
             Value::Msg(sample_term_msg(
-                "did:ma:runtime#satchel",
+                &eval_str(&format!(r#"(inventory-for-did "{did}")"#), &env),
                 "did:ma:runtime#avatar",
-                Value::list(vec![Value::symbol(":child"), child_ctx]),
+                eval_all("(list :parent inventory-test-ctx)", &env).unwrap(),
             )),
         );
         eval_all("(on-message children_msg)", &env).unwrap();
@@ -3502,6 +3585,47 @@ mod tests {
     }
 
     #[test]
+    fn avatar_adopts_inventory_container_as_parent_via_child_ctx() {
+        let env = avatar_env();
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#avatar".to_string());
+        crate::state::set_config(config);
+
+        eval_all(
+            r#"
+            (set-prop! "did" "did:ma:did")
+            (adopt-inventory! "did:ma:remote#inventory")
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        assert_eq!(
+            eval_str("(get-prop \"sent-target:1\")", &env),
+            "did:ma:remote#inventory"
+        );
+        assert_eq!(
+            eval_all("(car (get-prop \"sent-term:1\"))", &env).unwrap(),
+            Value::symbol(":child")
+        );
+        assert_eq!(
+            eval_str(
+                "(ctx-text (car (cdr (get-prop \"sent-term:1\"))) \"actor\")",
+                &env
+            ),
+            "did:ma:remote#inventory"
+        );
+        assert_eq!(
+            eval_str(
+                "(ctx-text (car (cdr (get-prop \"sent-term:1\"))) \"parent\")",
+                &env
+            ),
+            "did:ma:runtime#avatar"
+        );
+    }
+
+    #[test]
     fn avatar_look_carried_container_sends_container_look_for_controlling_did() {
         let env = avatar_env();
         let did = "did:ma:did";
@@ -3519,26 +3643,47 @@ mod tests {
             r#"
                         (set-prop! "did" "did:ma:did")
                         (set-prop! "room" "did:ma:runtime#room")
+                        (set-prop! "inventory" "did:ma:runtime#inventory")
                         "#,
             &env,
         )
         .unwrap();
 
-        let container_ctx = eval_all(
+        eval_all(
                         r#"
-                        (map-set
+                        (define satchel-ctx
                             (map-set
                                 (map-set
                                     (map-set
                                         (map-set
                                             (map-set
-                                                (map-set (make-map) "actor" "did:ma:runtime#satchel")
-                                                "kind" "container")
-                                            "protocol" "/ma/container/0.0.1")
-                                        "parent" (local-self))
-                                    "name" "Lars'ers rygsæk")
-                                "nick" "Rygsækken")
-                            "description" "A sturdy satchel.")
+                                                (map-set
+                                                    (map-set (make-map) "actor" "did:ma:runtime#satchel")
+                                                    "kind" "container")
+                                                "protocol" "/ma/container/0.0.1")
+                                            "parent" "did:ma:runtime#inventory")
+                                        "name" "Lars'ers rygsæk")
+                                    "nick" "Rygsækken")
+                                "description" "A sturdy satchel."))
+                        (define inventory-test-ctx
+                            (map-set
+                                (map-set
+                                    (map-set
+                                        (map-set
+                                            (map-set
+                                                (map-set
+                                                    (map-set
+                                                        (map-set
+                                                            (map-set (make-map)
+                                                                "protocol" "/ma/container/0.0.1")
+                                                            "kind" "container")
+                                                        "actor" "did:ma:runtime#inventory")
+                                                    "parent" (local-self))
+                                                "rev" 1)
+                                            "name" "Inventory")
+                                        "nick" "inventory")
+                                    "description" "A personal inventory container.")
+                                "contents" (map-set (make-map) "did:ma:runtime#satchel" satchel-ctx)))
                         "#,
                         &env,
                 )
@@ -3546,9 +3691,9 @@ mod tests {
         env.define(
             Rc::from("container_msg"),
             Value::Msg(sample_term_msg(
-                "did:ma:runtime#satchel",
+                "did:ma:runtime#inventory",
                 "did:ma:runtime#avatar",
-                Value::list(vec![Value::symbol(":child"), container_ctx]),
+                eval_all("(list :parent inventory-test-ctx)", &env).unwrap(),
             )),
         );
         eval_all("(on-message container_msg)", &env).unwrap();
@@ -3637,6 +3782,8 @@ mod tests {
             r#"
                         (set-prop! "did" "did:ma:did")
                         (set-prop! "room" "did:ma:runtime#room")
+                        (set-prop! "inventory" (inventory-for-did (did)))
+                        (define (entity-live? actor) #t)
                         (remember-room-ctx!
                             (map-set
                                 (map-set
@@ -3744,6 +3891,59 @@ mod tests {
                 Value::symbol(":print"),
                 Value::str("Unknown visible agent or thing: lamp"),
             ]),
+        );
+    }
+
+    #[test]
+    fn thing_accepts_visible_take_ctx_from_owner_avatar() {
+        let env = thing_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#lamp".to_string());
+        crate::state::set_config(config);
+        let avatar = format!(
+            "did:ma:runtime#{}",
+            eval_str(r#"(avatar-fragment "did:ma:owner")"#, &env)
+        );
+
+        eval_all(
+            r#"
+            (set-prop! "owner" "did:ma:owner")
+            (set-prop! "parent" "did:ma:runtime#room")
+            (set-prop! "name" "lamp")
+            (set-prop! "nick" "Aladdins lampe")
+            (set-prop! "description" "A warm brass lamp.")
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        let visible_ctx = eval_all("(thing-ctx)", &env).unwrap();
+        env.define(
+            Rc::from("take_msg"),
+            Value::Msg(sample_term_msg(
+                &avatar,
+                "did:ma:runtime#lamp",
+                Value::symbol(":take"),
+            )),
+        );
+        env.define(Rc::from("visible_ctx"), visible_ctx);
+        eval_all(
+            r#"((find-method :take)
+                (list "did:ma:owner" "did:ma:runtime#inventory" visible_ctx)
+                take_msg)"#,
+            &env,
+        )
+        .unwrap();
+
+        assert_eq!(
+            eval_str("(get-prop \"sent-target:1\")", &env),
+            "did:ma:runtime#inventory"
+        );
+        assert_eq!(
+            eval_all("(car (get-prop \"sent-term:1\"))", &env).unwrap(),
+            Value::symbol(":parent")
         );
     }
 
@@ -4105,8 +4305,8 @@ mod tests {
             r#"
             (set-prop! "did" "did:ma:did")
             (set-prop! "room" "did:ma:runtime#room")
-            (remember-child!
-              (map-set
+                        (define duckie-ctx
+                            (map-set
                 (map-set
                   (map-set
                     (map-set
@@ -4114,7 +4314,26 @@ mod tests {
                       "kind" "agent")
                     "name" "duckie")
                   "nick" "Duckie")
-                "description" "A small duck."))
+                                "description" "A small duck."))
+                        (remember-inventory-ctx!
+                            (map-set
+                                (map-set
+                                    (map-set
+                                        (map-set
+                                            (map-set
+                                                (map-set
+                                                    (map-set
+                                                        (map-set
+                                                            (map-set (make-map)
+                                                                "protocol" "/ma/container/0.0.1")
+                                                            "kind" "container")
+                                                        "actor" (inventory-for-did "did:ma:did"))
+                                                    "parent" (local-self))
+                                                "rev" 1)
+                                            "name" "Inventory")
+                                        "nick" "inventory")
+                                    "description" "A personal inventory container.")
+                                "contents" (map-set (make-map) "did:ma:runtime#duckie" duckie-ctx)))
             "#,
             &env,
         )
@@ -4214,8 +4433,28 @@ mod tests {
 
         eval_all(
             r#"
-                        (remember-child! lamp_ctx)
-                        (remember-child! bag_ctx)
+                        (remember-inventory-ctx!
+                            (map-set
+                                (map-set
+                                    (map-set
+                                        (map-set
+                                            (map-set
+                                                (map-set
+                                                    (map-set
+                                                        (map-set
+                                                            (map-set (make-map)
+                                                                "protocol" "/ma/container/0.0.1")
+                                                            "kind" "container")
+                                                        "actor" (inventory-for-did "did:ma:did"))
+                                                    "parent" (local-self))
+                                                "rev" 1)
+                                            "name" "Inventory")
+                                        "nick" "inventory")
+                                    "description" "A personal inventory container.")
+                                "contents"
+                                    (map-set
+                                        (map-set (make-map) "did:ma:runtime#lamp" lamp_ctx)
+                                        "did:ma:runtime#bag" bag_ctx)))
                         "#,
             &env,
         )
@@ -5216,7 +5455,7 @@ mod tests {
     }
 
     #[test]
-    fn avatar_children_registration_updates_inventory_and_rejects_forgery() {
+    fn avatar_children_registration_does_not_update_inventory_and_rejects_forgery() {
         let env = avatar_env();
         let did = "did:ma:did";
         let mut config = std::collections::HashMap::new();
@@ -5272,7 +5511,7 @@ mod tests {
             eval_all("(get-prop \"sent-term:2\")", &env).unwrap(),
             Value::list(vec![
                 Value::symbol(":print"),
-                Value::str("Inventory:\nbrass lamp = did:ma:runtime#lamp"),
+                Value::str("Inventory: empty."),
             ]),
         );
 
@@ -5326,7 +5565,7 @@ mod tests {
                                                 (map-set (make-map) "actor" "did:ma:runtime#duckie")
                                                 "kind" "thing")
                                                                                         "protocol" "/ma/thing/0.0.1")
-                                                                "parent" (local-self))
+                                                                                                                                "parent" (inventory-for-did "did:ma:did"))
                   "name" "duckie")
                                 "nick" "Aladdins lampe")
               "description" "A small duck.")
@@ -5334,6 +5573,7 @@ mod tests {
             &env,
         )
         .unwrap();
+        env.define(Rc::from("child_ctx"), child_ctx);
 
         env.define(
             Rc::from("take_msg"),
@@ -5348,9 +5588,31 @@ mod tests {
         env.define(
             Rc::from("adopt_msg"),
             Value::Msg(sample_term_msg(
-                "did:ma:runtime#duckie",
+                                &eval_str(&format!(r#"(inventory-for-did "{did}")"#), &env),
                 "did:ma:runtime#avatar",
-                Value::list(vec![Value::symbol(":child"), child_ctx.clone()]),
+                                eval_all(
+                                        "(list :parent
+                                             (map-set
+                                                 (map-set
+                                                     (map-set
+                                                         (map-set
+                                                             (map-set
+                                                                 (map-set
+                                                                     (map-set
+                                                                         (map-set
+                                                                             (map-set (make-map)
+                                                                                 \"protocol\" \"/ma/container/0.0.1\")
+                                                                             \"kind\" \"container\")
+                                                                         \"actor\" (inventory-for-did \"did:ma:did\"))
+                                                                     \"parent\" (local-self))
+                                                                 \"rev\" 1)
+                                                             \"name\" \"Inventory\")
+                                                         \"nick\" \"inventory\")
+                                                     \"description\" \"A personal inventory container.\")
+                                                 \"contents\" (map-set (make-map) \"did:ma:runtime#duckie\" child_ctx)))",
+                                        &env,
+                                )
+                                .unwrap(),
             )),
         );
         eval_all("(on-message adopt_msg)", &env).unwrap();
@@ -6440,6 +6702,45 @@ mod tests {
             eval_str("(exit-target \"north\")", &env),
             "did:ma:runtime#dead-exit"
         );
+    }
+
+    #[test]
+    fn avatar_start_initialises_deterministic_inventory_without_pending_state() {
+        let env = avatar_env();
+        let did = "did:ma:owner";
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#avatar".to_string());
+        crate::state::set_config(config);
+
+        eval_all(
+            r#"
+            (set-prop! "did" "did:ma:owner")
+            (define (entity-live? actor) #f)
+            (define (ma-create-actor kind behaviour init fragment)
+              (set-prop! "created-kind" kind)
+              (set-prop! "created-fragment" fragment)
+              fragment)
+            (on-signal (list :start))
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        let expected_fragment = eval_str(&format!(r#"(inventory-fragment "{did}")"#), &env);
+        assert_eq!(
+            eval_str("(get-prop \"inventory\")", &env),
+            format!("did:ma:runtime#{expected_fragment}")
+        );
+        assert_eq!(
+            eval_str("(get-prop \"created-kind\")", &env),
+            "/ma/container/0.0.1"
+        );
+        assert_eq!(
+            eval_str("(get-prop \"created-fragment\")", &env),
+            expected_fragment
+        );
+        assert!(eval_bool("(not (has-prop? \"pending-take\"))", &env));
     }
 
     #[test]

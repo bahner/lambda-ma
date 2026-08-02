@@ -94,11 +94,10 @@
         (begin
           (if (and current (not (same-actor? current adopted)))
               (begin
-                (set-prop! "inventory-ctx" "")
-                (set-inventory-map! (make-map)))
+                (set-prop! "inventory-ctx" ""))
               #f)
           (set-inventory-actor! adopted)
-          (ma-send! adopted (list :parent (inventory-parent-ctx adopted)))))
+            (ma-send! adopted (list :child (inventory-parent-ctx adopted)))))
       #f))
 
 (define (ensure-inventory-ref!)
@@ -300,10 +299,6 @@
     (if (> rev (stored-inventory-ctx-rev))
         (begin
           (set-prop! "inventory-ctx" ctx)
-          (let ((contents (map-ref ctx "contents" #f)))
-            (if (map? contents)
-                (set-inventory-map! contents)
-                #f))
           (ma-save-state!)
           #t)
         #f)))
@@ -624,22 +619,9 @@
   (ma-send! (did) (list :print text)))
 
 (define (inventory-map)
-  (children-map))
-
-(define (set-inventory-map! m)
-  (set-children-map! m))
-
-(define (remember-inventory! token actor)
-  (if (and (non-empty-string? token) (non-empty-string? actor))
-      (let ((ctx (map-set
-                   (map-set
-                     (map-set
-                       (map-set (make-map) "actor" (canonical-actor actor))
-                       "kind" "thing")
-                     "name" token)
-                   "nick" token)))
-        (set-inventory-map! (map-set (inventory-map) (canonical-actor actor) ctx)))
-      #f))
+  (let* ((ctx (stored-inventory-ctx))
+         (contents (if ctx (map-ref ctx "contents" #f) #f)))
+    (if (map? contents) contents (make-map))))
 
 (define (inventory-label-matches? token label)
   (and (non-empty-string? token)
@@ -678,39 +660,14 @@
            (car entries))
           (else (loop (cdr entries))))))
 
-(define (inventory-ref-any token)
-  (let loop ((entries (map->alist (inventory-map))))
-    (cond ((null? entries) #f)
-          ((inventory-entry-matches? token (car entries)) (car entries))
-          (else (loop (cdr entries))))))
-
 (define (inventory-ref token)
-  (let ((resolved (inventory-ref-resolved token)))
-    (if resolved resolved (inventory-ref-any token))))
+  (inventory-ref-resolved token))
 
 (define (inventory-lookup-did-url token)
   (cond ((valid-did-url? token) (canonical-actor token))
         (else
          (let ((entry (inventory-ref token)))
            (if entry (inventory-entry-actor entry) #f)))))
-
-(define (forget-inventory! actor)
-  (if (non-empty-string? actor)
-      (set-inventory-map! (map-delete (inventory-map) (canonical-actor actor)))
-      #f))
-
-(define (forget-inventory-token! token)
-  (let ((entry (inventory-ref-any token)))
-    (if entry
-        (forget-inventory! (car entry))
-        #f)))
-
-(define (forget-inventory-ctx-labels! ctx)
-  (begin
-    (forget-inventory-token! (ctx-text ctx "actor"))
-    (forget-inventory-token! (ctx-text ctx "name"))
-    (forget-inventory-token! (ctx-text ctx "nick"))
-    (forget-inventory-token! (child-label ctx))))
 
 (define (entry-lines xs)
   (cond ((null? xs) "")
@@ -747,11 +704,10 @@
           (reply-error msg "child ctx actor must match sender"))
         ((not (same-actor? (ctx-text (car args) "parent") (local-self)))
          (begin
-           (forget-inventory-ctx-labels! (car args))
+           (forget-child! (ctx-text (car args) "actor"))
            (reply-ok msg)))
         (else
          (begin
-           (forget-inventory-ctx-labels! (car args))
            (remember-child! (car args))
            (ma-send! (canonical-actor (ctx-text (car args) "actor")) (list :child (car args)))
            (reply-ok msg)))))
@@ -778,7 +734,6 @@
                      (else
                       (let* ((fragment (ma-create-actor kind #f init))
                              (actor (entity-url fragment)))
-                       (remember-inventory! actor actor)
                         (send-did-text (string-append "Create requested: " actor "."))
                         (reply-ok-with msg actor))))))))))
 
@@ -1105,11 +1060,7 @@
       (lambda ()
         (if (not (take-args-valid? args))
             (send-did-text "Usage: take <thing> [from <parent>]")
-            (begin
-              (if (valid-did-url? (take-token args))
-                  #f
-                  (remember-inventory! (take-token args) (take-token args)))
-              (send-take args)))
+          (send-take args))
         (reply-ok-silent msg)))))
 
 (set-cmd-method! :put
@@ -1186,3 +1137,10 @@
         (if *default-method*
             (*default-method* verb args msg)
             (ma-reply! msg (list :error "unknown verb"))))))
+
+(define (on-signal term)
+  (cond ((equal? (verb-of term) :start)
+         (ensure-inventory!))
+        ((equal? (verb-of term) :shutdown)
+         (ma-save-state!))
+        (else #f)))

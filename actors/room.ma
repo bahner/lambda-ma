@@ -762,7 +762,7 @@
           ((not (same-actor? (child-parent-target ctx) (self)))
            (begin
              (remove-claim! actor)
-             (remove-thing! name)
+             (remove-thing-actor! actor)
              (ma-save-state!)
              (broadcast-room-ctx!)
              (reply-ok msg)))
@@ -817,6 +817,16 @@
 
 (define (remove-thing! token)
   (set-things-map! (map-delete (things-map) token)))
+
+(define (remove-thing-actor! actor)
+  (let loop ((tokens (map-keys (things-map)))
+             (remaining (things-map)))
+    (cond ((null? tokens)
+           (set-things-map! remaining))
+          ((same-actor? (map-ref remaining (car tokens) #f) actor)
+           (loop (cdr tokens) (map-delete remaining (car tokens))))
+          (else
+           (loop (cdr tokens) remaining)))))
 
 (define (things-text)
   (token-list-text "Things" (map-keys (things-map))))

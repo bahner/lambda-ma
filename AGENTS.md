@@ -134,6 +134,19 @@ When documenting or changing behaviour, keep these contracts aligned:
   parent-facing ctx, such as `parent`, `name`, `nick`, or `description`, it must
   send refreshed ctx to its current parent so the parent's authoritative ctx
   records stay current.
+- Functional, stateless ctx flow: actor workflows must pass ctx directly through
+  messages and complete from the ctx currently being handled. Do not persist,
+  queue, or replay commands or intermediate workflow state such as `pending-take`,
+  pending transfer payloads, deferred drops, or resolver results. Persistent
+  actor state is reserved for authoritative facts that must survive messages,
+  such as ownership, committed parentage, configuration, and accepted ctx
+  records. Lifecycle readiness belongs in actor initialisation and protocol
+  handshakes, never in a saved user command.
+- Resolve once, then use actor identity: `name`, `nick`, aliases, directions,
+  and other visible labels may be accepted only as resolver input. A successful
+  resolver must immediately produce a canonical full DID or DID-URL. All later
+  messages, ctx references, authority checks, membership changes, cleanup, and
+  persistent keys must use that DID or DID-URL, never the lookup term.
 - Authoritative ctx over maintained lists: actors must not maintain separate
   persistent membership or presentation lists when those lists can be derived
   from authoritative ctx records. Lists such as room occupants, `who`, container

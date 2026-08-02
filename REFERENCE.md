@@ -314,6 +314,26 @@ old parent receives cleanup.
 
 ### 3.5 Authoritative ctx and derived views
 
+Actor workflows are functional and stateless between messages. An actor handles
+the ctx in the current message, sends the next ctx message in the protocol, and
+does not persist, queue, or replay the command or an intermediate workflow
+payload. In particular, implementations MUST NOT introduce `pending-take`,
+pending transfer/drop commands, deferred resolver results, or equivalent saved
+workflow state. Readiness is established by actor initialisation and explicit
+ctx handshakes, not by storing a user command for later execution.
+
+This does not prohibit authoritative actor state. Ownership, committed
+parentage, configuration, and accepted ctx records may be persisted when they
+are the durable facts owned by that actor. Such state records what has been
+committed; it does not represent a suspended operation.
+
+Visible `name`, `nick`, alias, and direction values are resolver inputs and
+presentation hints only. Once resolution succeeds, the resolver produces a
+canonical full DID or DID-URL and the lookup term is discarded. Subsequent
+messages, ctx actor references, authority checks, membership changes, cleanup,
+and persistent keys MUST use the resolved DID or DID-URL. Implementations MUST
+NOT perform ordinary world mutations against `name` or `nick`.
+
 Parent/child membership, container contents, room occupants, `who`, inventory
 views, labels, and similar lookup or presentation surfaces are derived from
 authoritative ctx records at use time. Actors must not maintain a second
@@ -674,6 +694,12 @@ add a separate inventory drop verb.
 ---
 
 ## 7. State keys and authority boundaries
+
+The keys below hold durable authoritative facts or explicitly documented
+derived operational metadata. They MUST NOT be extended with saved commands,
+pending transfer payloads, resolver results, or other suspended workflow state.
+Actor-to-actor workflows pass ctx in messages and progress through protocol
+handshakes instead.
 
 ### 7.1 root keys
 

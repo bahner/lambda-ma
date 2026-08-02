@@ -335,6 +335,19 @@ Why this works well:
   principals can adjust it safely when creating entities.
 Agents can use exits, but they do not expose `:dig`.
 
+## Pass ctx without workflow state
+
+New actor-to-actor workflows should handle the current ctx and send the next ctx
+message directly. Do not persist a command, resolver result, transfer payload,
+or other intermediate step for later replay. Existing movement-specific state
+is not a pattern for parent/child, inventory, take, drop, or similar workflows;
+those flows use their explicit ctx handshakes.
+
+Resolve visible names, nicks, directions, and aliases only at the command
+boundary. After a successful lookup, discard the lookup term and use the
+canonical full actor DID or DID-URL for messages, authority checks, membership
+changes, cleanup, and persistent keys.
+
 ## Add custom code to one actor
 
 Sometimes you want one room to have a special method or two without changing

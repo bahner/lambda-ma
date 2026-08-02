@@ -45,6 +45,11 @@ For the canonical lambda-ma world protocol contract (routing, ctx shapes,
 authority model, actor verbs, and state-key conventions), see
 [REFERENCE.md](REFERENCE.md).
 
+Lambda-ma actor workflows pass ctx functionally through messages. Actors persist
+committed authority facts, not pending commands or intermediate workflow state.
+Visible names and nicks are resolver inputs only; after resolution, messages and
+mutations use canonical full actor DID-URLs.
+
 ## Build
 
 Kubo/IPFS must be running locally.
