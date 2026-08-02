@@ -107,13 +107,13 @@ root-cid: $(OUT)
 
 $(KINDS_CID_FILE): $(OUT) | $(CID_DIR)
 	tmp="$@.tmp"; \
-	$(MA) --gen-kinds-cid "$(OUT)" > "$$tmp"; \
+	$(MA) --gen-kinds-cid "$(OUT)" | awk '/^bafy/ { cid = $$0 } END { if (cid == "") exit 1; print cid }' > "$$tmp"; \
 	test -s "$$tmp"; \
 	mv "$$tmp" "$@"
 
 kinds-cid: FORCE $(OUT) | $(CID_DIR)
 	@tmp="$(KINDS_CID_FILE).tmp"; \
-	$(MA) --gen-kinds-cid "$(OUT)" > "$$tmp"; \
+	$(MA) --gen-kinds-cid "$(OUT)" | awk '/^bafy/ { cid = $$0 } END { if (cid == "") exit 1; print cid }' > "$$tmp"; \
 	test -s "$$tmp"; \
 	mv "$$tmp" "$(KINDS_CID_FILE)"; \
 	printf '%s\n' "$$(cat "$(KINDS_CID_FILE)")"

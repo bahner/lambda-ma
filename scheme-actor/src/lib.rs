@@ -1253,6 +1253,40 @@ mod tests {
     }
 
     #[test]
+    fn room_claim_from_recorded_avatar_uses_controlling_did() {
+        let env = room_env();
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#room".to_string());
+        crate::state::set_config(config);
+        install_send_reply_recorders(&env);
+        eval_all(
+            r#"
+            (define owner-did "did:ma:owner")
+            (define owner-avatar (avatar-for-did owner-did))
+            (set-avatar-did! owner-avatar owner-did)
+            (set-label! owner-avatar "Pondus")
+            (add-avatar-presence! owner-avatar)
+            "#,
+            &env,
+        )
+        .unwrap();
+        let owner_avatar = eval_str("owner-avatar", &env);
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_msg(&owner_avatar, "did:ma:runtime#room")),
+        );
+
+        eval_all("((find-method :claim) '() msg)", &env).unwrap();
+
+        assert_eq!(eval_str("(owner)", &env), "did:ma:owner");
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
+            Value::symbol(":ok")
+        );
+    }
+
+    #[test]
     fn room_leave_occupant_canonicalises_sender() {
         let env = room_env();
         let mut config = std::collections::HashMap::new();

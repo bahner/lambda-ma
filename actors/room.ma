@@ -30,10 +30,21 @@
 
 (define (label-key actor) (string-append "label:" (canonical-actor actor)))
 
+(define (avatar-did-key actor) (string-append "avatar-did:" (canonical-actor actor)))
+
 (define (set-label! actor label)
   (if (non-empty-string? label)
       (set-prop! (label-key actor) label)
       #f))
+
+(define (set-avatar-did! avatar did)
+  (if (valid-did? did)
+      (set-prop! (avatar-did-key avatar) did)
+      #f))
+
+(define (avatar-did avatar)
+  (let ((did (get-prop (avatar-did-key avatar))))
+    (if (valid-did? did) did #f)))
 
 (define (has-label? actor)
   (let ((label (get-prop (label-key actor))))
@@ -283,26 +294,34 @@
       "direction" direction)))
 
 (define (avatar-entry-list actors)
-  (if (null? actors)
-      '()
-      (cons (avatar-entry-ctx (car actors)) (avatar-entry-list (cdr actors)))))
+  (let loop ((xs actors)
+             (acc '()))
+    (if (null? xs)
+        (reverse acc)
+        (loop (cdr xs) (cons (avatar-entry-ctx (car xs)) acc)))))
 
 (define (agent-entry-list actors)
-  (cond ((null? actors) '())
-        ((member-entry? (car actors) (avatar-occupants))
-         (agent-entry-list (cdr actors)))
-        (else
-         (cons (agent-entry-ctx (car actors)) (agent-entry-list (cdr actors))))))
+  (let loop ((xs actors)
+             (acc '()))
+    (cond ((null? xs) (reverse acc))
+          ((member-entry? (car xs) (avatar-occupants))
+           (loop (cdr xs) acc))
+          (else
+           (loop (cdr xs) (cons (agent-entry-ctx (car xs)) acc))))))
 
 (define (thing-entry-list tokens)
-  (if (null? tokens)
-      '()
-      (cons (thing-entry-ctx (car tokens)) (thing-entry-list (cdr tokens)))))
+  (let loop ((xs tokens)
+             (acc '()))
+    (if (null? xs)
+        (reverse acc)
+        (loop (cdr xs) (cons (thing-entry-ctx (car xs)) acc)))))
 
 (define (exit-entry-list directions)
-  (if (null? directions)
-      '()
-      (cons (exit-entry-ctx (car directions)) (exit-entry-list (cdr directions)))))
+  (let loop ((xs directions)
+             (acc '()))
+    (if (null? xs)
+        (reverse acc)
+        (loop (cdr xs) (cons (exit-entry-ctx (car xs)) acc)))))
 
 (define (room-ctx)
   (map-set
@@ -394,6 +413,9 @@
   (arg-at-or-false args 3))
 
 (define (entry-did-inventory args)
+  (arg-at-or-false args 4))
+
+(define (entry-avatar-did args)
   (arg-at-or-false args 4))
 
 (define (entry-inventory args)
@@ -538,17 +560,16 @@
 (define (direct-did-enter-args? args msg)
   (and (valid-did? (msg-from msg))
        (or (null? args)
-           (and (not (null? args))
-                (string? (car args))
+           (and (string? (car args))
                 (or (null? (cdr args))
-                    (and (string? (car (cdr args)))
-                         (null? (cdr (cdr args)))))))))
+                    (and (string? (cadr args))
+                         (null? (cddr args))))))))
 
 (define (direct-did-enter-nick args)
   (if (null? args) #f (car args)))
 
 (define (direct-did-enter-inventory args)
-  (if (or (null? args) (null? (cdr args))) #f (car (cdr args))))
+  (if (or (null? args) (null? (cdr args))) #f (cadr args)))
 
 (define (enter-ctx-args? args)
   (and (not (null? args)) (map? (car args))))
@@ -595,8 +616,11 @@
   (let ((avatar (car args))
         (old-room (entry-old-room args))
     (nick (entry-nick args))
-    (inventory (entry-inventory args)))
-  (commit-avatar-entry! avatar old-room nick inventory)))
+    (inventory (entry-inventory args))
+    (did (entry-avatar-did args)))
+    (begin
+      (set-avatar-did! avatar did)
+      (commit-avatar-entry! avatar old-room nick inventory))))
 
 (define (handle-did-avatar-entry! args)
   (let* ((did (entry-did args))
@@ -617,31 +641,41 @@
 
 (define (handle-agent-enter! msg did ctx)
   (let* ((actor (canonical-actor did))
-         (nick (ctx-text ctx "nick")))
-    (set-claim! actor ctx)
-    (set-label! actor nick)
-    (if (add-occupant! actor)
+         (nick (ctx-text ctx "nick"))
+         (was-known (member-entry? actor (occupants)))
+         (same-claim (equal? (claim-ctx actor) ctx))
+         (same-label (equal? (speaker-name actor) nick)))
+    (if (and was-known same-claim same-label)
+        (reply-ok msg)
         (begin
-          (presence-touch! actor (presence-tick))
-          (broadcast-except actor (string-append (speaker-name actor) " arrives.")))
-        #f)
-    (ma-save-state!)
-    (ma-send! (canonical-actor actor) (list :child ctx))
-    (ma-send! (canonical-actor actor) (direct-room-ctx "agent" nick (arrival-text)))
-    (broadcast-room-ctx!)
-    (ma-reply! msg (list :ok "entered"))))
+          (set-claim! actor ctx)
+          (set-label! actor nick)
+          (if (add-occupant! actor)
+              (begin
+                (presence-touch! actor (presence-tick))
+                (broadcast-except actor (string-append (speaker-name actor) " arrives.")))
+              #f)
+          (ma-save-state!)
+          (ma-send! (canonical-actor actor) (list :child ctx))
+          (ma-send! (canonical-actor actor) (direct-room-ctx "agent" nick (arrival-text)))
+          (broadcast-room-ctx!)
+          (ma-reply! msg (list :ok "entered"))))))
 
 (define (handle-thing-enter! msg did ctx name)
   (let* ((actor (canonical-actor did))
          (label (ctx-text ctx "nick"))
          (token (if (non-empty-string? label) label name))
-         (bound (thing-ref token)))
+         (bound (thing-ref token))
+         (same-claim (equal? (claim-ctx actor) ctx))
+         (same-label (equal? (speaker-name actor) label)))
     (cond ((not (actor-token-valid? name))
            (reply-error msg "enter requires non-empty name token"))
           ((not (actor-token-valid? token))
            (reply-error msg "enter requires non-empty nick token"))
           ((and bound (not (same-actor? bound actor)))
            (reply-error msg "nick token is already bound to another actor"))
+          ((and (same-actor? bound actor) same-claim same-label)
+           (reply-ok msg))
           (else
            (set-claim! actor ctx)
            (set-label! actor label)
@@ -995,6 +1029,16 @@
   (set-prop! "owner" did)
   (ma-save-state!))
 
+(define (claim-owner-did args msg)
+  (let ((from (msg-from msg)))
+    (cond ((valid-did? from) from)
+          ((avatar-did from) (avatar-did from))
+          ((and (not (null? args))
+                (valid-did? (car args))
+                (did-avatar? (car args) from))
+           (car args))
+          (else #f))))
+
 (define (set-room-prop! key value)
   (set-prop! key value)
   (ma-save-state!))
@@ -1218,7 +1262,7 @@
           (else
            (begin
              (presence-request! (car xs) tick (presence-nonce-for (car xs) tick))
-             (loop (cdr xs) changed))))))
+             (loop (cdr xs) #t))))))
 
 (define (broadcast text)
   (let loop ((xs (occupants))
@@ -1667,14 +1711,14 @@
 
 (set-cmd-method! :claim
   (lambda (args msg)
-    (let ((did (msg-from msg)))
-      (require-valid-owner did msg
-        (lambda ()
+    (let ((did (claim-owner-did args msg)))
+      (if (valid-owner? did)
           (if (owned?)
               (print-and-reply-ok msg (string-append "This room is already owned by " (owner) "."))
               (begin
                 (set-owner! did)
-                (print-and-reply-ok msg (string-append "You now own " (room-name) ".")))))))))
+                (print-and-reply-ok msg (string-append "You now own " (room-name) "."))))
+          (reply-error msg "Owner must be a DID.")))))
 
 (set-rpc-method! :owner
   (lambda (args msg)

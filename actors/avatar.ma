@@ -820,7 +820,8 @@
                           (local-self)
                           (canonical-actor old-room)
                           (nick)
-                          (qualified-actor (inventory-actor)))))
+                            (qualified-actor (inventory-actor))
+                            (did))))
         #f)))
 
 (set-internal-rpc-method! :ctx
