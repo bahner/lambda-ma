@@ -1084,10 +1084,15 @@
                               (inventory-entry-actor entry)
                               (if (valid-did-url? token) (canonical-actor token) #f))))
               (if actor
-                  (ma-send! (canonical-actor actor)
-                            (if entry
-                                (list :drop (did) (canonical-actor (room)) (cdr entry))
-                                (list :drop (did) (canonical-actor (room)))))
+                  (if (and entry (inventory-parent))
+                    (ma-send! (canonical-actor (inventory-parent))
+                        (list :take
+                            (did)
+                            (canonical-actor actor)
+                            (canonical-actor (room))
+                            :drop))
+                    (ma-send! (canonical-actor actor)
+                        (list :drop (did) (canonical-actor (room)))))
                   (send-did-text (string-append "Unknown carried agent or thing: " token)))))
         (reply-ok-silent msg)))))
 

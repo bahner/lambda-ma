@@ -162,116 +162,6 @@
 (define (actor-kind) (actor-config-or-none "kind"))
 
 (define (actor-owner) (actor-prop-or-none "owner"))
-(define (actor-parent) (actor-prop-or-none "parent"))
-
-(define (children-map)
-  (prop-map "children"))
-
-(define (set-children-map! children)
-  (set-prop-map! "children" children)
-  (ma-save-state!))
-
-(define (child-ctx-valid? ctx)
-  (and (actor-ctx-shape? ctx)
-       (valid-did-url? (ctx-text ctx "actor"))))
-
-(define (child-ctx-self-authentic? ctx msg)
-  (and (child-ctx-valid? ctx)
-       (ctx-sender-valid? ctx msg)))
-
-(define (child-ctx-parent-is-self? ctx)
-  (same-actor? (ctx-text ctx "parent") (self)))
-
-(define (remember-child! ctx)
-  (set-children-map! (map-set (children-map) (canonical-actor (ctx-text ctx "actor")) ctx)))
-
-(define (forget-child! actor)
-  (set-children-map! (map-delete (children-map) (canonical-actor actor))))
-
-(define (child-ctx actor)
-  (map-ref (children-map) (canonical-actor actor) #f))
-
-(define (child-label ctx)
-  (let ((nick (ctx-text ctx "nick"))
-        (name (ctx-text ctx "name"))
-        (actor (ctx-text ctx "actor")))
-    (cond ((non-empty-string? nick) nick)
-          ((non-empty-string? name) name)
-          (else actor))))
-
-(define (child-line entry)
-  (let ((actor (car entry))
-        (ctx (cdr entry)))
-    (string-append (child-label ctx) " = " (canonical-actor actor))))
-
-(define (actor-entry-lines xs)
-  (cond ((null? xs) "")
-        ((null? (cdr xs)) (car xs))
-        (else (string-append (car xs) "\n" (actor-entry-lines (cdr xs))))))
-
-(define (child-lines entries)
-  (cond ((null? entries) '())
-        (else (cons (child-line (car entries)) (child-lines (cdr entries))))))
-
-(define (children-text)
-  (let ((lines (child-lines (map->alist (children-map)))))
-    (if (null? lines)
-        "Children: none."
-        (string-append "Children:\n" (actor-entry-lines lines)))))
-
-(define (child-token-text-matches? token text)
-  (and (non-empty-string? token)
-       (non-empty-string? text)
-       (equal? (string-downcase token) (string-downcase text))))
-
-(define (child-token-matches? token ctx)
-  (and (non-empty-string? token)
-       (or (same-actor? token (ctx-text ctx "actor"))
-           (child-token-text-matches? token (child-label ctx))
-           (child-token-text-matches? token (ctx-text ctx "name"))
-           (child-token-text-matches? token (ctx-text ctx "nick")))))
-
-(define (child-ref token)
-  (if (valid-did-url? token)
-      (if (child-ctx token) (canonical-actor token) #f)
-      (let loop ((entries (map->alist (children-map))))
-        (cond ((null? entries) #f)
-              ((child-token-matches? token (cdr (car entries)))
-               (canonical-actor (car (car entries))))
-              (else (loop (cdr entries)))))))
-
-(define (take-target-parent rest msg)
-  (let ((candidate (if (or (null? rest) (null? (cdr rest))) #f (car (cdr rest)))))
-    (if (and (non-empty-string? candidate)
-             (or (valid-did-url? candidate) (local-actor-ref? candidate)))
-        (canonical-actor candidate)
-        (canonical-actor (msg-from msg)))))
-
-(define (take-feedback-verb rest)
-  (let ((hint (if (or (null? rest) (null? (cdr rest)) (null? (cdr (cdr rest)))) #f (car (cdr (cdr rest))))))
-    (if (equal? hint :drop) "drop" "take")))
-
-(define (take-transfer-verb rest)
-  (let ((hint (if (or (null? rest) (null? (cdr rest)) (null? (cdr (cdr rest)))) #f (car (cdr (cdr rest))))))
-    (if (equal? hint :drop) :drop :take)))
-
-(define (handle-parent-take did rest msg)
-  (if (null? rest)
-      #f
-      (let* ((token (car rest))
-             (actor (child-ref token)))
-        (if actor
-            (let ((ctx (child-ctx actor))
-                  (target-parent (take-target-parent rest msg))
-                  (feedback-verb (take-feedback-verb rest))
-                  (transfer-verb (take-transfer-verb rest)))
-              (begin
-                (forget-child! actor)
-                (ma-send! (canonical-actor actor) (list transfer-verb did target-parent ctx))
-                (ma-send! (canonical-actor (msg-from msg)) (list :print (string-append "You " feedback-verb " " (child-label ctx) ".")))
-                (reply-ok msg)
-                #t))
-            #f))))
 
 (define (owner-authority)
   (let ((owner (get-prop "owner")))
@@ -309,35 +199,6 @@
   (if (null? args)
       (reply-ok-with msg (string-append "Owner: " (actor-owner)))
       (reply-error msg "usage: :owner?")))
-
-(define (handle-actor-parent args msg)
-  (reply-ok-with msg (actor-parent)))
-
-(define (handle-actor-parent? args msg)
-  (if (null? args)
-  (reply-ok-with msg (actor-parent))
-      (reply-error msg "usage: :parent?")))
-
-(define (handle-actor-children args msg)
-  (cond ((null? args)
-         (if (owner-authorised? msg)
-             (reply-ok-with msg (children-text))
-             (reply-error msg "only owner may list children")))
-        ((not (null? (cdr args)))
-         (reply-error msg "usage: :child [ctx]"))
-        ((not (child-ctx-valid? (car args)))
-         (reply-error msg "child ctx must include actor, parent, kind, protocol, name, nick, description"))
-        ((not (child-ctx-self-authentic? (car args) msg))
-         (reply-error msg "child ctx actor must match sender"))
-        ((not (child-ctx-parent-is-self? (car args)))
-         (begin
-           (forget-child! (ctx-text (car args) "actor"))
-           (reply-ok msg)))
-        (else
-         (begin
-           (remember-child! (car args))
-           (ma-send! (canonical-actor (ctx-text (car args) "actor")) (list :child (car args)))
-           (reply-ok msg)))))
 
 (define (handle-actor-behaviour! args msg)
   (cond ((null? args)
@@ -452,9 +313,6 @@
 (set-internal-rpc-method! :ctx
   (lambda (args msg)
     (reply-ok msg)))
-(set-meta-method! :parent handle-actor-parent)
-(set-rpc-method! :parent? handle-actor-parent?)
-(set-meta-method! :child handle-actor-children)
 (set-rpc-method! :behaviour handle-actor-behaviour!)
 (set-rpc-method! :rpcs? handle-actor-rpcs?)
 (set-rpc-method! :cmds? handle-actor-cmds?)

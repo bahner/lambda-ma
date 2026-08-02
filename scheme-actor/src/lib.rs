@@ -93,6 +93,7 @@ mod tests {
         eval_all(include_str!("../stdlib.ma"), &env).unwrap();
         eval_all(include_str!("../actor.ma"), &env).unwrap();
         eval_all(include_str!("../state.ma"), &env).unwrap();
+        eval_all(include_str!("../node.ma"), &env).unwrap();
         eval_all(include_str!("../../actors/room.ma"), &env).unwrap();
         eval_all(
                         r#"
@@ -115,13 +116,9 @@ mod tests {
                                     "nick" nick)
                                 "description" description))
                         (define (test-avatar-claim! actor nick)
-                            (begin
-                                (set-label! actor nick)
-                                (set-claim! actor (test-actor-claim "avatar" "/ma/avatar/0.0.1" actor nick "An avatar."))))
+                            (set-claim! actor (test-actor-claim "avatar" "/ma/avatar/0.0.1" actor nick "An avatar.")))
                         (define (test-agent-claim! actor nick)
-                            (begin
-                                (set-label! actor nick)
-                                (set-claim! actor (test-actor-claim "agent" "/ma/agent/0.0.1" actor nick "A test agent."))))
+                            (set-claim! actor (test-actor-claim "agent" "/ma/agent/0.0.1" actor nick "A test agent.")))
                         "#,
                         &env,
                 )
@@ -137,6 +134,7 @@ mod tests {
         eval_all(include_str!("../stdlib.ma"), &env).unwrap();
         eval_all(include_str!("../actor.ma"), &env).unwrap();
         eval_all(include_str!("../state.ma"), &env).unwrap();
+        eval_all(include_str!("../node.ma"), &env).unwrap();
         eval_all(include_str!("../../actors/agent.ma"), &env).unwrap();
         eval_all(
             "(define (ma-send! target term) #f) (define (ma-reply! msg term) #f) (define (ma-save-state!) #f) (define (ma-end) (set-prop! \"ended\" \"yes\"))",
@@ -154,6 +152,7 @@ mod tests {
         eval_all(include_str!("../stdlib.ma"), &env).unwrap();
         eval_all(include_str!("../actor.ma"), &env).unwrap();
         eval_all(include_str!("../state.ma"), &env).unwrap();
+        eval_all(include_str!("../node.ma"), &env).unwrap();
         eval_all(include_str!("../../actors/thing.ma"), &env).unwrap();
         eval_all(
             "(define (ma-send! target term) #f) (define (ma-reply! msg term) #f) (define (ma-save-state!) #f) (define (ma-end) (set-prop! \"ended\" \"yes\"))",
@@ -171,6 +170,7 @@ mod tests {
         eval_all(include_str!("../stdlib.ma"), &env).unwrap();
         eval_all(include_str!("../actor.ma"), &env).unwrap();
         eval_all(include_str!("../state.ma"), &env).unwrap();
+        eval_all(include_str!("../node.ma"), &env).unwrap();
         eval_all(include_str!("../../actors/container.ma"), &env).unwrap();
         eval_all(
             "(define (ma-send! target term) #f) (define (ma-reply! msg term) #f) (define (ma-save-state!) #f) (define (ma-end) (set-prop! \"ended\" \"yes\"))",
@@ -216,6 +216,7 @@ mod tests {
         eval_all(include_str!("../stdlib.ma"), &env).unwrap();
         eval_all(include_str!("../actor.ma"), &env).unwrap();
         eval_all(include_str!("../state.ma"), &env).unwrap();
+        eval_all(include_str!("../node.ma"), &env).unwrap();
         eval_all(include_str!("../../actors/avatar.ma"), &env).unwrap();
         eval_all(
                         r#"
@@ -244,6 +245,7 @@ mod tests {
         eval_all(include_str!("../stdlib.ma"), &env).unwrap();
         eval_all(include_str!("../actor.ma"), &env).unwrap();
         eval_all(include_str!("../state.ma"), &env).unwrap();
+        eval_all(include_str!("../node.ma"), &env).unwrap();
         eval_all(include_str!("../../actors/exit.ma"), &env).unwrap();
         eval_all(
             "(define (ma-send! target term) #f) (define (ma-end) (set-prop! \"ended\" \"yes\"))",
@@ -278,6 +280,23 @@ mod tests {
         crate::msg::install(&env);
         eval_all(include_str!("../stdlib.ma"), &env).unwrap();
         eval_all(include_str!("../actor.ma"), &env).unwrap();
+        eval_all(
+            "(define (ma-send! target term) #f) (define (ma-reply! msg term) #f) (define (ma-save-state!) #f)",
+            &env,
+        )
+        .unwrap();
+        env
+    }
+
+    fn node_env() -> Rc<Env> {
+        crate::state::load_from_cbor(&empty_state_cbor()).unwrap();
+        let env = new_root_env();
+        crate::state::install(&env);
+        crate::msg::install(&env);
+        eval_all(include_str!("../stdlib.ma"), &env).unwrap();
+        eval_all(include_str!("../actor.ma"), &env).unwrap();
+        eval_all(include_str!("../state.ma"), &env).unwrap();
+        eval_all(include_str!("../node.ma"), &env).unwrap();
         eval_all(
             "(define (ma-send! target term) #f) (define (ma-reply! msg term) #f) (define (ma-save-state!) #f)",
             &env,
@@ -392,6 +411,262 @@ mod tests {
         assert_eq!(
             eval_str("(get-prop \"description\")", &env),
             "A warm desk lamp"
+        );
+    }
+
+    #[test]
+    fn actor_layer_does_not_expose_tree_methods() {
+        let env = actor_env();
+
+        assert!(eval_bool("(not (find-method :parent))", &env));
+        assert!(eval_bool("(not (find-method :parent?))", &env));
+        assert!(eval_bool("(not (find-method :child))", &env));
+    }
+
+    #[test]
+    fn node_parent_admits_non_room_child_and_confirms_ctx() {
+        let env = node_env();
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#dog".to_string());
+        config.insert("kind".to_string(), "/ma/agent/0.0.1".to_string());
+        crate::state::set_config(config);
+        install_send_reply_recorders(&env);
+        let collar_ctx = eval_all(
+            r#"
+                        (map-set
+                            (map-set
+                                (map-set
+                                    (map-set
+                                        (map-set
+                                            (map-set
+                                                (map-set (make-map) "actor" "did:ma:runtime#collar")
+                                                "kind" "thing")
+                                            "protocol" "/ma/thing/0.0.1")
+                                        "parent" "did:ma:runtime#dog")
+                                    "name" "collar")
+                                "nick" "Halsbånd")
+                            "description" "Et rødt halsbånd.")
+                        "#,
+            &env,
+        )
+        .unwrap();
+        env.define(Rc::from("collar_ctx"), collar_ctx.clone());
+        env.define(
+            Rc::from("collar_msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:runtime#collar",
+                "did:ma:runtime#dog",
+                Value::list(vec![Value::symbol(":parent"), collar_ctx.clone()]),
+            )),
+        );
+
+        eval_all("(on-message collar_msg)", &env).unwrap();
+
+        assert!(eval_bool(
+            "(map? (child-ctx \"did:ma:runtime#collar\"))",
+            &env
+        ));
+        assert_eq!(
+            eval_str("(get-prop \"sent-target:1\")", &env),
+            "did:ma:runtime#collar"
+        );
+        assert_eq!(
+            eval_all("(get-prop \"sent-term:1\")", &env).unwrap(),
+            Value::list(vec![Value::symbol(":child"), collar_ctx])
+        );
+    }
+
+    #[test]
+    fn node_child_commits_parent_and_notifies_both_parents() {
+        let env = node_env();
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#collar".to_string());
+        config.insert("kind".to_string(), "/ma/thing/0.0.1".to_string());
+        crate::state::set_config(config);
+        install_send_reply_recorders(&env);
+        let committed_ctx = eval_all(
+            r#"
+                        (map-set
+                            (map-set
+                                (map-set
+                                    (map-set
+                                        (map-set
+                                            (map-set
+                                                (map-set (make-map) "actor" "did:ma:runtime#collar")
+                                                "kind" "thing")
+                                            "protocol" "/ma/thing/0.0.1")
+                                        "parent" "did:ma:runtime#dog")
+                                    "name" "collar")
+                                "nick" "Halsbånd")
+                            "description" "Et rødt halsbånd.")
+                        "#,
+            &env,
+        )
+        .unwrap();
+        env.define(
+            Rc::from("parent_msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:runtime#dog",
+                "did:ma:runtime#collar",
+                Value::list(vec![Value::symbol(":child"), committed_ctx]),
+            )),
+        );
+
+        eval_all(
+            r#"
+                        (set-prop! "parent" "did:ma:runtime#inventory")
+                        (set-prop! "name" "collar")
+                        (set-prop! "nick" "Halsbånd")
+                        (set-prop! "description" "Et rødt halsbånd.")
+                        (on-message parent_msg)
+                        "#,
+            &env,
+        )
+        .unwrap();
+
+        assert_eq!(eval_str("(node-parent)", &env), "did:ma:runtime#dog");
+        assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 2);
+        assert_eq!(
+            eval_str("(get-prop \"sent-target:1\")", &env),
+            "did:ma:runtime#dog"
+        );
+        assert_eq!(
+            eval_str("(get-prop \"sent-target:2\")", &env),
+            "did:ma:runtime#inventory"
+        );
+    }
+
+    #[test]
+    fn node_children_debug_returns_full_map_to_owner_and_filters_by_kind() {
+        let env = node_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#room".to_string());
+        crate::state::set_config(config);
+        env.define(
+            Rc::from("owner_msg"),
+            Value::Msg(sample_msg("did:ma:owner", "did:ma:runtime#room")),
+        );
+        env.define(
+            Rc::from("other_msg"),
+            Value::Msg(sample_msg("did:ma:other", "did:ma:runtime#room")),
+        );
+
+        eval_all(
+            r#"
+            (set-prop! "owner" "did:ma:owner")
+            (define avatar-ctx
+              (make-map "actor" "did:ma:runtime#avatar"
+                        "kind" "avatar"
+                        "protocol" "/ma/avatar/0.0.1"
+                        "parent" "did:ma:runtime#room"
+                        "name" "Alice"
+                        "nick" "Alice"
+                        "description" "An avatar."))
+            (define thing-ctx
+              (make-map "actor" "did:ma:runtime#lamp"
+                        "kind" "thing"
+                        "protocol" "/ma/thing/0.0.1"
+                        "parent" "did:ma:runtime#room"
+                        "name" "lamp"
+                        "nick" "Lamp"
+                        "description" "A lamp."))
+            (remember-child! avatar-ctx)
+            (remember-child! thing-ctx)
+            ((find-method :children?) '() owner_msg)
+            ((find-method :children?) '() other_msg)
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        assert_eq!(eval_int("(list-length (map-keys (children-map)))", &env), 2);
+        assert_eq!(eval_int("(list-length (child-ctxs-by-kind \"avatar\"))", &env), 1);
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
+            eval_all("(list :ok (children-map))", &env).unwrap()
+        );
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:2\")", &env).unwrap(),
+            Value::list(vec![
+                Value::symbol(":error"),
+                Value::str("only owner may inspect children"),
+            ])
+        );
+        assert!(eval_bool("(not (has-prop? \"claims\"))", &env));
+        assert!(eval_bool("(not (has-prop? \"things\"))", &env));
+    }
+
+    #[test]
+    fn node_room_parent_is_locked_to_root_and_root_accepts_rooms() {
+        let room = node_env();
+        let mut room_config = std::collections::HashMap::new();
+        room_config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        room_config.insert("self".to_string(), "did:ma:runtime#room".to_string());
+        room_config.insert("kind".to_string(), "/ma/room/0.0.1".to_string());
+        crate::state::set_config(room_config);
+
+        assert!(eval_bool(
+            "(node-parent-admissible? \"did:ma:runtime#root\")",
+            &room
+        ));
+        assert!(eval_bool(
+            "(not (node-parent-admissible? \"did:ma:runtime#bag\"))",
+            &room
+        ));
+        assert!(eval_bool(
+            "(not (node-parent-admissible? \"did:ma:runtime#room\"))",
+            &room
+        ));
+
+        let root = node_env();
+        let mut root_config = std::collections::HashMap::new();
+        root_config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        root_config.insert("self".to_string(), "did:ma:runtime#root".to_string());
+        root_config.insert("kind".to_string(), "/ma/root/0.0.1".to_string());
+        crate::state::set_config(root_config);
+        install_send_reply_recorders(&root);
+        let room_ctx = eval_all(
+            r#"
+                        (map-set
+                            (map-set
+                                (map-set
+                                    (map-set
+                                        (map-set
+                                            (map-set
+                                                (map-set (make-map) "actor" "did:ma:runtime#room")
+                                                "kind" "room")
+                                            "protocol" "/ma/room/0.0.1")
+                                        "parent" "did:ma:runtime#root")
+                                    "name" "room")
+                                "nick" "Room")
+                            "description" "A room.")
+                        "#,
+            &root,
+        )
+        .unwrap();
+        root.define(Rc::from("room_ctx"), room_ctx);
+        root.define(
+            Rc::from("room_msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:runtime#room",
+                "did:ma:runtime#root",
+                eval_all("(list :parent room_ctx)", &root).unwrap(),
+            )),
+        );
+
+        eval_all("(on-message room_msg)", &root).unwrap();
+
+        assert!(eval_bool(
+            "(map? (child-ctx \"did:ma:runtime#room\"))",
+            &root
+        ));
+        assert_eq!(
+            eval_str("(get-prop \"sent-target:1\")", &root),
+            "did:ma:runtime#room"
         );
     }
 
@@ -1459,7 +1734,6 @@ mod tests {
             r#"
             (set-prop! "owner" "did:ma:owner")
             (define avatar "did:ma:runtime#avatar")
-            (set-label! avatar "Alice")
             (test-avatar-claim! avatar "Alice")
             (presence-touch! avatar 1)
             "#,
@@ -1479,10 +1753,10 @@ mod tests {
 
         assert_eq!(eval_str("(occupants-text)", &env), "Occupants: none.");
         assert_eq!(eval_str("(who-text)", &env), "Who: none.");
-        assert_eq!(
-            eval_str("(get-prop \"label:did:ma:runtime#avatar\")", &env),
-            "Alice"
-        );
+        assert!(eval_bool(
+            "(not (has-prop? \"label:did:ma:runtime#avatar\"))",
+            &env
+        ));
 
         eval_all("(test-avatar-claim! avatar \"Alice\")", &env).unwrap();
 
@@ -2145,7 +2419,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 2);
+        assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 4);
         assert_eq!(
             eval_str("(get-prop \"sent-target:1\")", &env),
             "did:ma:runtime#scheduler"
@@ -2161,10 +2435,21 @@ mod tests {
         );
         assert_eq!(
             eval_str("(get-prop \"sent-target:2\")", &env),
+            "did:ma:runtime#root"
+        );
+        assert!(eval_bool(
+            r#"(let ((term (get-prop "sent-term:2")))
+                 (and (equal? (car term) :parent)
+                      (equal? (ctx-text (car (cdr term)) "actor") "did:ma:runtime#room")
+                      (equal? (ctx-text (car (cdr term)) "parent") "did:ma:runtime#root")))"#,
+            &env,
+        ));
+        assert_eq!(
+            eval_str("(get-prop \"sent-target:3\")", &env),
             "did:ma:runtime#scheduler"
         );
         assert_eq!(
-            eval_all("(get-prop \"sent-term:2\")", &env).unwrap(),
+            eval_all("(get-prop \"sent-term:3\")", &env).unwrap(),
             Value::list(vec![
                 Value::str("presence"),
                 Value::symbol(":interval"),
@@ -2172,6 +2457,17 @@ mod tests {
                 Value::symbol(":presence-tick"),
             ])
         );
+        assert_eq!(
+            eval_str("(get-prop \"sent-target:4\")", &env),
+            "did:ma:runtime#root"
+        );
+        assert!(eval_bool(
+            r#"(let ((term (get-prop "sent-term:4")))
+                 (and (equal? (car term) :parent)
+                      (equal? (ctx-text (car (cdr term)) "actor") "did:ma:runtime#room")
+                      (equal? (ctx-text (car (cdr term)) "parent") "did:ma:runtime#root")))"#,
+            &env,
+        ));
     }
 
     #[test]
@@ -2387,7 +2683,7 @@ mod tests {
         eval_all(
             r#"
             (set-prop! "direction" "north")
-            (set-prop! "source-room" "did:ma:runtime#room")
+            (set-prop! "parent" "did:ma:runtime#room")
             (set-prop! "target-room" "did:ma:runtime#kitchen")
             ((find-method :about)
               (list
@@ -2589,7 +2885,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(eval_str("(parent)", &env), "did:ma:runtime#room-a");
+        assert_eq!(eval_str("(node-parent)", &env), "did:ma:runtime#room-a");
         assert_eq!(eval_str("(pending-room)", &env), "");
         assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 3);
         assert_eq!(
@@ -3919,7 +4215,7 @@ mod tests {
         )
         .unwrap();
 
-        let visible_ctx = eval_all("(thing-ctx)", &env).unwrap();
+        let visible_ctx = eval_all("(node-ctx)", &env).unwrap();
         env.define(
             Rc::from("take_msg"),
             Value::Msg(sample_term_msg(
@@ -4053,7 +4349,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(eval_str("(parent)", &env), "");
+        assert_eq!(eval_str("(node-parent)", &env), "");
         assert_eq!(
             eval_str("(get-prop \"sent-target:1\")", &env),
             "did:ma:runtime#avatar"
@@ -4093,7 +4389,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(eval_str("(parent)", &env), "");
+        assert_eq!(eval_str("(node-parent)", &env), "");
         assert_eq!(
             eval_str("(get-prop \"sent-target:1\")", &env),
             "did:ma:runtime#avatar"
@@ -4179,7 +4475,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_parent_take_picks_up_carried_child() {
+    fn agent_parent_take_keeps_child_until_committed_departure() {
         let env = agent_env();
         install_send_reply_recorders(&env);
         let mut config = std::collections::HashMap::new();
@@ -4233,7 +4529,10 @@ mod tests {
                 child_ctx,
             ]),
         );
-        assert_eq!(eval_str("(children-text)", &env), "Children: none.");
+        assert_eq!(
+            eval_str("(children-text)", &env),
+            "Children:\nThe Lamp = did:ma:runtime#lamp"
+        );
     }
 
     #[test]
@@ -4632,7 +4931,7 @@ mod tests {
         );
         assert_eq!(
             eval_str("(things-text)", &env),
-            "Things: Lars'ers rygsæk, The Golden Lamp"
+            "Things: The Golden Lamp, Lars'ers rygsæk"
         );
     }
 
@@ -4881,7 +5180,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(eval_str("(parent)", &env), "");
+        assert_eq!(eval_str("(node-parent)", &env), "");
         assert_eq!(eval_str("(get-prop \"ended\")", &env), "yes");
         assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 1);
         assert_eq!(
@@ -4949,7 +5248,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(eval_str("(parent)", &env), "");
+        assert_eq!(eval_str("(node-parent)", &env), "");
         assert_eq!(
             eval_str("(get-prop \"sent-target:1\")", &env),
             "did:ma:runtime#room"
@@ -5262,7 +5561,7 @@ mod tests {
         )
         .unwrap();
         let stale_ctx =
-            eval_all(r#"(thing-ctx-for-parent "did:ma:runtime#inventory")"#, &env).unwrap();
+            eval_all(r#"(node-ctx-for-parent "did:ma:runtime#inventory")"#, &env).unwrap();
         env.define(Rc::from("stale_ctx"), stale_ctx);
         let avatar = eval_str(r#"(avatar-for-did "did:ma:did")"#, &env);
         env.define(
@@ -5302,7 +5601,7 @@ mod tests {
     }
 
     #[test]
-    fn container_parent_take_publishes_updated_container_ctx() {
+    fn container_parent_take_keeps_ctx_until_committed_departure() {
         let env = container_env();
         install_send_reply_recorders(&env);
         let mut config = std::collections::HashMap::new();
@@ -5348,7 +5647,7 @@ mod tests {
                 )
                 .unwrap();
 
-        assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 3);
+        assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 2);
         assert_eq!(
             eval_all("(get-prop \"sent-term:1\")", &env).unwrap(),
             Value::list(vec![
@@ -5358,14 +5657,10 @@ mod tests {
                 child_ctx,
             ])
         );
-        assert_eq!(
-            eval_str("(get-prop \"sent-target:3\")", &env),
-            "did:ma:runtime#avatar"
-        );
         assert!(eval_bool(
-                    "(let ((term (get-prop \"sent-term:3\"))) (and (equal? (car term) :parent) (null? (map->alist (map-ref (car (cdr term)) \"contents\" (make-map))))))",
-                        &env
-                ));
+            "(map? (child-ctx \"did:ma:runtime#lamp\"))",
+            &env
+        ));
     }
 
     #[test]
@@ -5451,7 +5746,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(eval_str("(parent)", &env), "did:ma:runtime#room");
+        assert_eq!(eval_str("(node-parent)", &env), "did:ma:runtime#room");
         assert_eq!(
             eval_str("(get-prop \"sent-target:1\")", &env),
             "did:ma:runtime#avatar"
@@ -5518,7 +5813,7 @@ mod tests {
 
         eval_all("(on-message owner_msg)", &env).unwrap();
 
-        assert_eq!(eval_str("(parent)", &env), "did:ma:runtime#room");
+        assert_eq!(eval_str("(node-parent)", &env), "did:ma:runtime#room");
         assert_eq!(
             eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
             Value::symbol(":ok"),
@@ -5554,7 +5849,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(eval_str("(parent)", &env), "");
+        assert_eq!(eval_str("(node-parent)", &env), "");
         assert_eq!(
             eval_str("(get-prop \"sent-target:1\")", &env),
             "did:ma:runtime#room"
@@ -5566,6 +5861,63 @@ mod tests {
             ),
             "did:ma:runtime#bag"
         );
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
+            Value::list(vec![Value::symbol(":ok"), Value::str("drop requested")])
+        );
+    }
+
+    #[test]
+    fn container_accepts_owner_avatar_drop_delegation_from_inventory() {
+        let env = container_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#bag".to_string());
+        crate::state::set_config(config);
+
+        eval_all(
+            r#"
+            (set-prop! "owner" "did:ma:did")
+            (set-prop! "parent" "did:ma:runtime#inventory")
+            (set-prop! "name" "bag")
+            (set-prop! "nick" "Vadsekk")
+            (set-prop! "description" "A sturdy canvas bag.")
+            "#,
+            &env,
+        )
+        .unwrap();
+        let avatar = eval_str(r#"(avatar-for-did "did:ma:did")"#, &env);
+        let carried_ctx = eval_all("(container-ctx)", &env).unwrap();
+        env.define(Rc::from("carried_ctx"), carried_ctx);
+        env.define(
+            Rc::from("avatar_msg"),
+            Value::Msg(sample_term_msg(
+                &avatar,
+                "did:ma:runtime#bag",
+                Value::symbol(":drop"),
+            )),
+        );
+
+        eval_all(
+            r#"
+            ((find-method :drop)
+                (list "did:ma:did" "did:ma:runtime#room" carried_ctx)
+                avatar_msg)
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 1);
+        assert_eq!(
+            eval_str("(get-prop \"sent-target:1\")", &env),
+            "did:ma:runtime#room"
+        );
+        assert!(eval_bool(
+            "(let ((term (get-prop \"sent-term:1\"))) (and (equal? (car term) :parent) (equal? (map-ref (car (cdr term)) \"parent\" \"\") \"did:ma:runtime#room\")))",
+            &env,
+        ));
         assert_eq!(
             eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
             Value::list(vec![Value::symbol(":ok"), Value::str("drop requested")])
@@ -5800,15 +6152,16 @@ mod tests {
 
         assert_eq!(
             eval_str("(get-prop \"sent-target:3\")", &env),
-            "did:ma:runtime#duckie"
+            eval_str(r#"(inventory-for-did "did:ma:did")"#, &env)
         );
         assert_eq!(
             eval_all("(get-prop \"sent-term:3\")", &env).unwrap(),
             Value::list(vec![
-                Value::symbol(":drop"),
+                Value::symbol(":take"),
                 Value::str("did:ma:did"),
+                Value::str("did:ma:runtime#duckie"),
                 Value::str("did:ma:runtime#room"),
-                eval_all("child_ctx", &env).unwrap(),
+                Value::symbol(":drop"),
             ]),
         );
 
@@ -5924,7 +6277,7 @@ mod tests {
         );
         eval_all("(on-message parent_msg)", &env).unwrap();
 
-        assert_eq!(eval_str("(parent)", &env), "did:ma:runtime#mother");
+        assert_eq!(eval_str("(node-parent)", &env), "did:ma:runtime#mother");
         assert_eq!(eval_str("(nick)", &env), "new lamp");
         assert_eq!(
             eval_str("(get-prop \"sent-target:1\")", &env),
@@ -6010,13 +6363,13 @@ mod tests {
         );
         eval_all("(on-message forged_parent_msg)", &env).unwrap();
 
-        assert_eq!(eval_str("(parent)", &env), "did:ma:runtime#father");
+        assert_eq!(eval_str("(node-parent)", &env), "did:ma:runtime#father");
         assert!(eval_bool("(not (has-prop? \"sent-count\"))", &env));
         assert_eq!(
             eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
             Value::list(vec![
                 Value::symbol(":error"),
-                Value::str("child ctx must come from target parent"),
+                Value::str("child ctx must name self and come from target parent"),
             ]),
         );
     }
@@ -6061,7 +6414,7 @@ mod tests {
         );
         eval_all("(on-message parent_msg)", &env).unwrap();
 
-        assert_eq!(eval_str("(parent)", &env), "did:ma:runtime#mother");
+        assert_eq!(eval_str("(node-parent)", &env), "did:ma:runtime#mother");
         assert_eq!(eval_str("(nick)", &env), "rms-on-tour");
         assert_eq!(
             eval_str("(get-prop \"sent-target:1\")", &env),
@@ -6109,12 +6462,12 @@ mod tests {
         );
 
         assert_eq!(
-            eval_str("(effective-did (list \"did:ma:did\" \"north\") msg)", &env),
+            eval_str("(node-effective-did (list \"did:ma:did\" \"north\") msg)", &env),
             "did:ma:did"
         );
         assert_eq!(
             eval_str(
-                "(car (effective-args (list \"did:ma:did\" \"north\") msg))",
+                "(car (node-effective-args (list \"did:ma:did\" \"north\") msg))",
                 &env
             ),
             "north"
@@ -6175,7 +6528,7 @@ mod tests {
 
         assert_eq!(
             eval_str("(exit-init \"dør\" \"did:ma:runtime#kitchen\")", &env),
-            "(set-prop! \"direction\" \"dør\")\n(set-prop! \"source-room\" \"did:ma:runtime#source\")\n(set-prop! \"target-room\" \"did:ma:runtime#kitchen\")\n(ma-save-state!)\n"
+            "(set-prop! \"direction\" \"dør\")\n(set-prop! \"parent\" \"did:ma:runtime#source\")\n(set-prop! \"target-room\" \"did:ma:runtime#kitchen\")\n(ma-save-state!)\n"
         );
     }
 
@@ -6197,7 +6550,7 @@ mod tests {
 
         assert_eq!(
             eval_str("(exit-init \"north\" \"did:ma:runtime#kitchen\")", &env),
-            "(set-prop! \"direction\" \"north\")\n(set-prop! \"owner\" \"did:ma:owner\")\n(set-prop! \"source-room\" \"did:ma:runtime#source\")\n(set-prop! \"target-room\" \"did:ma:runtime#kitchen\")\n(ma-save-state!)\n"
+            "(set-prop! \"direction\" \"north\")\n(set-prop! \"owner\" \"did:ma:owner\")\n(set-prop! \"parent\" \"did:ma:runtime#source\")\n(set-prop! \"target-room\" \"did:ma:runtime#kitchen\")\n(ma-save-state!)\n"
         );
     }
 
@@ -6359,7 +6712,7 @@ mod tests {
         config.insert("runtime".to_string(), "did:ma:runtime".to_string());
         config.insert("self".to_string(), "did:ma:runtime#north-exit".to_string());
         crate::state::set_config(config);
-        eval_all("(set-prop! \"source-room\" \"did:ma:runtime#room\")", &env).unwrap();
+        eval_all("(set-prop! \"parent\" \"did:ma:runtime#room\")", &env).unwrap();
 
         env.define(
             Rc::from("msg"),
@@ -6395,7 +6748,7 @@ mod tests {
         eval_all(
             r#"
             (set-prop! "direction" "north")
-            (set-prop! "source-room" "did:ma:runtime#room")
+            (set-prop! "parent" "did:ma:runtime#room")
             (set-prop! "target-room" "did:ma:runtime#kitchen")
             (set-prop! "traveller-message" "You pass through the oak door.")
             (define (ma-send! target term)

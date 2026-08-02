@@ -23,11 +23,17 @@ actors/avatar.ma        avatar-mediated command endpoint
 actors/room.ma          room policy, occupants, claim/owner, dig/go, exit ownership
 actors/exit.ma          traversal between rooms
 kinds/                  kind definitions used by the generated bootstrap
-scheme-actor/           generic ma-scheme actor Wasm crate and stdlib
+scheme-actor/           actor, state, and node Scheme layers plus the Wasm host
 Makefile                publishes actor sources and generates dist/lambda-ma.yaml
 ```
 
 The generated bootstrap reads its kind registry from `kinds/*.yaml`, then fills in CIDs for the local ma-scheme actor and actor behaviour sources. It currently includes the generic ma-scheme actor kind built from `scheme-actor/`, the λ-間 actor kinds, the scheduler, `#root`, and the initial `#construct` room.
+
+World actors opt into the persistent hierarchy through `/ma/node/0.0.1`, which
+extends the tree-neutral `/ma/scheme/state/0.0.1`. Parenting means actor
+subordination, not necessarily containment: rooms and containers may present
+children spatially, while another actor may use the same relationship for
+attachments, delegation, or composition.
 
 The bundled ma-scheme actor implements the core `random` builtin from
 `ma-scheme-v1`: `(random n)` returns a non-cryptographic integer in `[0,n)`.
@@ -41,9 +47,10 @@ For a full first-run guide, including Kubo/IPFS setup, installing `ma`,
 generating `dist/lambda-ma.yaml`, bootstrapping a runtime, generating a reusable
 root CID, and changing your first rooms, see [HOWTO.md](HOWTO.md).
 
-For the canonical lambda-ma world protocol contract (routing, ctx shapes,
-authority model, actor verbs, and state-key conventions), see
-[REFERENCE.md](REFERENCE.md).
+For the normative interoperability contract, see the
+[lambda-ma world profile](https://github.com/bahner/ma-spec/blob/main/runtime/ma-lambda-ma-v1.md).
+For actor verbs, state keys, bootstrap details, and the concrete implementation,
+see [REFERENCE.md](REFERENCE.md).
 
 Lambda-ma actor workflows pass ctx functionally through messages. Actors persist
 committed authority facts, not pending commands or intermediate workflow state.
@@ -105,7 +112,8 @@ The command prints a runtime root CID. Start `ma` with that CID or save it in th
 `make bootstrap` is kept as an alias for `make root-cid`.
 
 For an existing runtime, prefer the kinds-only upgrade path after changing
-`kinds/*.yaml`, `actors/*.ma`, or the scheme actor shared runtime:
+`kinds/*.yaml`, `actors/*.ma`, or the scheme actor shared runtime. Apply the
+complete tree when adding a base kind and derived kinds together:
 
 ```sh
 make kinds-cid
@@ -114,7 +122,7 @@ make kinds-cid
 Then apply the printed CID live with CRUD:
 
 ```text
-@runtime/kinds: /ipfs/<printed-kinds-cid>
+@runtime/kinds: <printed-kinds-cid>
 ```
 
 or pass it at the next daemon start:

@@ -8,10 +8,12 @@ SCHEME_ACTOR_WASM := $(SCHEME_ACTOR_DIR)/actor.wasm
 SCHEME_STDLIB := $(SCHEME_ACTOR_DIR)/stdlib.ma
 SCHEME_ACTOR_LIB := $(SCHEME_ACTOR_DIR)/actor.ma
 SCHEME_STATE := $(SCHEME_ACTOR_DIR)/state.ma
+SCHEME_NODE := $(SCHEME_ACTOR_DIR)/node.ma
 SCHEME_ACTOR_CID_FILE := $(CID_DIR)/scheme-actor.cid
 SCHEME_STDLIB_CID_FILE := $(CID_DIR)/scheme-stdlib.cid
 SCHEME_ACTOR_LIB_CID_FILE := $(CID_DIR)/scheme-actor-lib.cid
 SCHEME_STATE_CID_FILE := $(CID_DIR)/scheme-state.cid
+SCHEME_NODE_CID_FILE := $(CID_DIR)/node.cid
 KINDS_CID_FILE := $(CID_DIR)/kinds.cid
 
 ACTORS := root avatar room exit agent rms duck thing container
@@ -19,6 +21,7 @@ CID_FILES := $(ACTORS:%=$(CID_DIR)/%.cid)
 BOOTSTRAP_KIND_FILES := \
 	kinds/ma-scheme-actor.yaml \
 	kinds/ma-scheme-state.yaml \
+	kinds/ma-node.yaml \
 	kinds/ma-scheme-root.yaml \
 	kinds/ma-scheme-avatar.yaml \
 	kinds/ma-scheme-room.yaml \
@@ -35,7 +38,7 @@ all: $(OUT)
 fmt:
 	$(MAKE) -C scheme-actor
 
-publish: $(SCHEME_ACTOR_CID_FILE) $(SCHEME_STDLIB_CID_FILE) $(SCHEME_ACTOR_LIB_CID_FILE) $(SCHEME_STATE_CID_FILE) $(CID_FILES)
+publish: $(SCHEME_ACTOR_CID_FILE) $(SCHEME_STDLIB_CID_FILE) $(SCHEME_ACTOR_LIB_CID_FILE) $(SCHEME_STATE_CID_FILE) $(SCHEME_NODE_CID_FILE) $(CID_FILES)
 
 $(CID_DIR):
 	mkdir -p "$@"
@@ -58,10 +61,13 @@ $(SCHEME_ACTOR_LIB_CID_FILE): $(SCHEME_STDLIB) $(SCHEME_ACTOR_LIB) | $(CID_DIR)
 $(SCHEME_STATE_CID_FILE): $(SCHEME_STATE) | $(CID_DIR)
 	$(IPFS) add --quieter "$<" > "$@"
 
+$(SCHEME_NODE_CID_FILE): $(SCHEME_NODE) | $(CID_DIR)
+	$(IPFS) add --quieter "$<" > "$@"
+
 $(CID_DIR)/%.cid: actors/%.ma | $(CID_DIR)
 	$(IPFS) add --quieter "$<" > "$@"
 
-$(OUT): lambda-ma.template.yaml Makefile $(BOOTSTRAP_KIND_FILES) $(SCHEME_ACTOR_CID_FILE) $(SCHEME_STDLIB_CID_FILE) $(SCHEME_ACTOR_LIB_CID_FILE) $(SCHEME_STATE_CID_FILE) $(CID_FILES)
+$(OUT): lambda-ma.template.yaml Makefile $(BOOTSTRAP_KIND_FILES) $(SCHEME_ACTOR_CID_FILE) $(SCHEME_STDLIB_CID_FILE) $(SCHEME_ACTOR_LIB_CID_FILE) $(SCHEME_STATE_CID_FILE) $(SCHEME_NODE_CID_FILE) $(CID_FILES)
 	mkdir -p "$(dir $@)"
 	kind_defs=$$(mktemp); \
 	for kind_file in $(BOOTSTRAP_KIND_FILES); do \
@@ -72,6 +78,7 @@ $(OUT): lambda-ma.template.yaml Makefile $(BOOTSTRAP_KIND_FILES) $(SCHEME_ACTOR_
 	scheme_stdlib_cid=$$(cat "$(SCHEME_STDLIB_CID_FILE)"); \
 	scheme_actor_lib_cid=$$(cat "$(SCHEME_ACTOR_LIB_CID_FILE)"); \
 	scheme_state_cid=$$(cat "$(SCHEME_STATE_CID_FILE)"); \
+	node_cid=$$(cat "$(SCHEME_NODE_CID_FILE)"); \
 	root_cid=$$(cat "$(CID_DIR)/root.cid"); \
 	avatar_cid=$$(cat "$(CID_DIR)/avatar.cid"); \
 	room_cid=$$(cat "$(CID_DIR)/room.cid"); \
@@ -90,6 +97,7 @@ $(OUT): lambda-ma.template.yaml Makefile $(BOOTSTRAP_KIND_FILES) $(SCHEME_ACTOR_
 	  -e "s|__SCHEME_STDLIB_CID__|$$scheme_stdlib_cid|g" \
 	  -e "s|__SCHEME_ACTOR_LIB_CID__|$$scheme_actor_lib_cid|g" \
 	  -e "s|__SCHEME_STATE_CID__|$$scheme_state_cid|g" \
+	  -e "s|__NODE_CID__|$$node_cid|g" \
 	  -e "s|__ROOT_BEHAVIOUR_CID__|$$root_cid|g" \
 	  -e "s|__AVATAR_BEHAVIOUR_CID__|$$avatar_cid|g" \
 	  -e "s|__ROOM_BEHAVIOUR_CID__|$$room_cid|g" \
@@ -123,11 +131,12 @@ bootstrap: root-cid
 check: $(OUT)
 	@test -z "$$(grep -n '__[A-Z_]*__' "$(OUT)" || true)"
 
-show-cids: $(SCHEME_ACTOR_CID_FILE) $(SCHEME_STDLIB_CID_FILE) $(SCHEME_ACTOR_LIB_CID_FILE) $(SCHEME_STATE_CID_FILE) $(CID_FILES)
+show-cids: $(SCHEME_ACTOR_CID_FILE) $(SCHEME_STDLIB_CID_FILE) $(SCHEME_ACTOR_LIB_CID_FILE) $(SCHEME_STATE_CID_FILE) $(SCHEME_NODE_CID_FILE) $(CID_FILES)
 	@printf '%-14s %s\n' "scheme-actor" "$$(cat "$(SCHEME_ACTOR_CID_FILE)")"
 	@printf '%-14s %s\n' "scheme-stdlib" "$$(cat "$(SCHEME_STDLIB_CID_FILE)")"
 	@printf '%-14s %s\n' "scheme-actor-lib" "$$(cat "$(SCHEME_ACTOR_LIB_CID_FILE)")"
 	@printf '%-14s %s\n' "scheme-state" "$$(cat "$(SCHEME_STATE_CID_FILE)")"
+	@printf '%-14s %s\n' "node" "$$(cat "$(SCHEME_NODE_CID_FILE)")"
 	@for name in $(ACTORS); do printf '%-8s %s\n' "$$name" "$$(cat "$(CID_DIR)/$$name.cid")"; done
 	@if test -f "$(KINDS_CID_FILE)"; then printf '%-14s %s\n' "kinds" "$$(cat "$(KINDS_CID_FILE)")"; fi
 

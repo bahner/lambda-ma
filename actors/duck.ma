@@ -21,7 +21,7 @@
 
 ; Duck-specific room speech and action.
 (define (duck-say msg text)
-  (let ((p (parent)))
+  (let ((p (node-parent)))
     (if (equal? p "")
         (reply-error msg "duck is nowhere")
         (begin
@@ -29,7 +29,7 @@
           (reply-ok msg)))))
 
 (define (duck-emote msg text)
-  (let ((p (parent)))
+  (let ((p (node-parent)))
     (if (equal? p "")
         (reply-error msg "duck is nowhere")
         (begin

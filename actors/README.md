@@ -7,21 +7,28 @@ DID principal's avatar DID-URL from the bare DID via the runtime-scoped entity-f
 derivation, creates the avatar only if absent, and otherwise only returns the
 avatar DID-URL.
 
-Rooms store authoritative occupant ctx claims and derive room-local presentation
-lists from those claims when needed. There is no separate maintained occupants
-or avatar-presence list for broadcast, `who`, or `look`. `parent` alone is not
-room presence; a movable actor is present only after it sends the room `:enter`
-and the room stores the accepted ctx claim.
+Every node stores one child ctx map under the state key `children`. Rooms derive
+all room-local presentation from that map: `who` filters `kind=avatar`, things
+filter `kind=thing|container`, and occupants traverse all admitted child ctx.
+There is no separate occupants, aliases, labels, or avatar-presence list.
+`parent` alone is not room presence; a movable actor is present only after the
+room stores its accepted ctx in `children`.
 
 Actors do not have to be root-tracked occupants to speak. Any actor that knows
 the room DID-URL can send `:say` or `:emote`; the room broadcasts the text to
-the avatars derived from current room-local ctx claims.
+the avatars derived from current room `children` ctx.
 
 Only actors are nodes in the parent tree. A bare DID principal is a controller,
 owner, and authorisation subject, not an embodied world actor. User presence in
 the world is through the deterministic avatar actor; the DID controls the
 avatar, but the avatar is the body whose ctx can be admitted by rooms and
 parents.
+
+The reusable hierarchy contract is `/ma/node/0.0.1`, above the tree-neutral
+`/ma/scheme/state/0.0.1`. A stateful counter or set may remain outside the
+hierarchy by extending state directly. Parenting means one actor is subordinate
+to another; it does not by itself mean inside, carried, visible, or spatially
+located. Those meanings are behaviour-specific projections of child ctx.
 
 ## Actor categories
 
@@ -74,7 +81,7 @@ The golden rule is: movable actors know and own their own state.
 The minimal structural props for a movable actor are:
 
 - `owner` — DID allowed to perform protected owner operations.
-- `parent` — DID-URL of the thing's immediate location/container.
+- `parent` — DID-URL of the actor's immediate hierarchy parent.
 
 Avatar-mediated creation uses the avatar verb `make <kind> <init...>`. The
 avatar calls `ma-create-actor` directly with all arguments after `kind` joined
@@ -85,10 +92,11 @@ to that bare DID in the init text. To create a thing the avatar is holding, set
 `parent` to the avatar DID-URL; to create it in the room, set `parent` to the
 room DID-URL.
 
-`parent` is location. If a duck is inside a chest, the duck stores the chest as
-its parent. If that chest is in a room, the chest stores the room as its parent.
-Location is found by walking upward from child to parent until a room or other
-world anchor is reached.
+`parent` is hierarchy, not intrinsically location. If a duck is inside a chest,
+the duck may store the chest as its parent, but a dog may likewise parent its
+collar as an attachment. Spatial location is a behaviour-specific
+interpretation obtained by walking or projecting the hierarchy until a room or
+other world anchor is reached.
 
 Containers, rooms, backpacks, and chests may keep `contents` caches for display
 or search, but those caches are derived presentation state only. If a container
@@ -293,7 +301,7 @@ Agent movement is actor-owned and room-visible:
 3. The room sends ctx to the exit's internal `:ctx` handler.
 4. The exit sends `:ctx <ctx>` to the agent.
 5. The agent sends `:leave-occupant` to the old room, then sends map-shaped
-   `:enter` with `agent-ctx` to the target room.
+   `:enter` with its node ctx to the target room.
 6. The old room broadcasts `<nick> leaves.` and the target room broadcasts
    `<nick> arrives.`; the agent commits its new `parent` only after target-room
    `:ctx`.

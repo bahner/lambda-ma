@@ -3,7 +3,6 @@
 
 ; Persistent endpoint state.
 (define (target-room) (get-prop "target-room"))
-(define (source-room) (get-prop "source-room"))
 (define (direction) (get-prop "direction"))
 (define (owner) (get-prop "owner"))
 
@@ -27,7 +26,7 @@
     (if text text "The way is locked.")))
 
 (define (source-room-caller? msg)
-  (same-actor? (msg-from msg) (source-room)))
+  (same-actor? (msg-from msg) (node-parent)))
 
 (define (ctx-recipient ctx)
   (let ((avatar (ctx-text ctx "avatar"))
@@ -51,7 +50,7 @@
   (equal? (ctx-text ctx "kind") "avatar")
   (non-empty-string? (ctx-text ctx "did"))
   (non-empty-string? (ctx-text ctx "avatar"))
-       (same-actor? (ctx-text ctx "room") (source-room))))
+      (same-actor? (ctx-text ctx "room") (node-parent))))
 
 (define (annotate-avatar-ctx ctx room text)
   (map-set
@@ -63,7 +62,7 @@
     "direction" (direction)))
 
 (define (blocked-ctx ctx)
-  (annotate-avatar-ctx ctx (source-room) (blocked-message)))
+  (annotate-avatar-ctx ctx (node-parent) (blocked-message)))
 
 (define (target-ctx ctx)
   (annotate-avatar-ctx ctx (target-room) (traveller-message)))
@@ -73,7 +72,7 @@
     (name) "\n"
     (description) "\n"
     "owner: " (if (owner) (owner) "(none)") "\n"
-    "source: " (if (source-room) (source-room) "(none)") "\n"
+    "source: " (if (non-empty-string? (node-parent)) (node-parent) "(none)") "\n"
     "target: " (if (target-room) (target-room) "(none)") "\n"
     "direction: " (if (direction) (direction) "(none)") "\n"
     "locked: " (if (locked?) "true" "false")))
@@ -108,7 +107,7 @@
 
 (set-rpc-method! :where?
   (lambda (args msg)
-    (reply-ok-with msg (if (source-room) (source-room) "(none)"))))
+    (reply-ok-with msg (if (non-empty-string? (node-parent)) (node-parent) "(none)"))))
 
 (set-rpc-method! :owner
   (lambda (args msg)
@@ -127,7 +126,7 @@
     (let ((tick (if (or (null? args) (null? (cdr args))) "" (car (cdr args))))
           (nonce (if (or (null? args) (null? (cdr args)) (null? (cdr (cdr args)))) "" (car (cdr (cdr args))))))
       (ma-send! (canonical-actor (msg-from msg))
-                (list :parent-report (canonical-actor (self)) (source-room) tick nonce)))))
+                (list :parent-report (canonical-actor (self)) (node-parent) tick nonce)))))
 
 (set-rpc-method! :locked?
   (lambda (args msg)
@@ -192,5 +191,11 @@
             (else
              (begin
                (ma-send! (canonical-actor (ctx-recipient ctx))
-                         (list :ctx (annotate-avatar-ctx ctx (source-room) "This exit leads nowhere.")))
+                         (list :ctx (annotate-avatar-ctx ctx (node-parent) "This exit leads nowhere.")))
                (reply-ok msg)))))))
+
+(define (node-protocol) "/ma/exit/0.0.1")
+(define (node-kind) "actor")
+(define (node-name) (name))
+(define (node-nick) (name))
+(define (node-description) (description))

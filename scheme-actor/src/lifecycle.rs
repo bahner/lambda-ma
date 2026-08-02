@@ -652,6 +652,7 @@ mod tests {
             include_str!("../stdlib.ma"),
             include_str!("../actor.ma"),
             include_str!("../state.ma"),
+            include_str!("../node.ma"),
             "(define (ma-save-state!) #f)\n(define (ma-send! target term) #f)\n(define (ma-reply! msg term) #f)",
             include_str!("../../actors/agent.ma"),
             include_str!("../../actors/duck.ma"),

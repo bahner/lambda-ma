@@ -103,7 +103,7 @@
 
 (set-cmd-method! :fortune
   (lambda (args msg)
-    (let ((p (parent))
+    (let ((p (node-parent))
           (fortune (next-fortune)))
       (if (equal? p "")
           (reply-error msg "rms is nowhere")

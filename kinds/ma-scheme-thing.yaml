@@ -1,4 +1,4 @@
 protocol: /ma/thing/0.0.1
-extends: /ma/scheme/state/0.0.1
+extends: /ma/node/0.0.1
 behaviour:
   "/": __THING_BEHAVIOUR_CID__

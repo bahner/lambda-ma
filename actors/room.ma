@@ -7,11 +7,10 @@
 (define PRESENCE_INTERVAL "30s")
 (define PRESENCE_TIMEOUT_TICKS 10)
 
-; Presence is derived from stored ctx claims. `claims` is authoritative room
-; membership; labels and presence keys are only presentation/liveness metadata.
-(define (claims-map) (prop-map "claims"))
+; Room membership and presentation are derived from the node's child ctx map.
+(define (claims-map) (children-map))
 
-(define (set-claims-map! claims) (set-prop! "claims" claims))
+(define (set-claims-map! claims) (set-children-map! claims))
 
 (define (claim-key actor)
   (canonical-actor actor))
@@ -21,51 +20,45 @@
        (same-actor? (child-parent-target ctx) (self))))
 
 (define (claim-ctx actor)
-  (let ((ctx (map-ref (claims-map) (claim-key actor) #f)))
+  (let ((ctx (child-ctx actor)))
     (if (map? ctx) ctx #f)))
 
 (define (set-claim! actor ctx)
   (begin
-    (set-claims-map! (map-set (claims-map) (claim-key actor) ctx))
+    (remember-child! ctx)
     (ma-save-state!)))
 
 (define (remove-claim! actor)
-  (set-claims-map! (map-delete (claims-map) (claim-key actor))))
+  (forget-child! actor))
 
 (define (claim-actors-by-kind kind)
-  (let loop ((keys (map-keys (claims-map)))
-             (acc '()))
-    (cond ((null? keys) (reverse acc))
+  (let loop ((ctxs (child-ctxs-by-kind kind)) (acc '()))
+    (cond ((null? ctxs) (reverse acc))
+          ((room-claim? (car ctxs))
+           (loop (cdr ctxs)
+                 (cons (canonical-actor (ctx-text (car ctxs) "actor")) acc)))
           (else
-           (let* ((actor (car keys))
-                  (ctx (claim-ctx actor)))
-             (if (and (room-claim? ctx)
-                      (equal? (ctx-text ctx "kind") kind))
-                 (loop (cdr keys) (cons actor acc))
-                 (loop (cdr keys) acc)))))))
+           (loop (cdr ctxs) acc)))))
 
 (define (occupants)
-  (let loop ((keys (map-keys (claims-map)))
-             (acc '()))
-    (cond ((null? keys) (unique-actor-entries (reverse acc)))
+  (let loop ((ctxs (child-ctxs)) (acc '()))
+    (cond ((null? ctxs) (unique-actor-entries (reverse acc)))
+          ((room-claim? (car ctxs))
+           (loop (cdr ctxs)
+                 (cons (canonical-actor (ctx-text (car ctxs) "actor")) acc)))
           (else
-           (let* ((actor (car keys))
-                  (ctx (claim-ctx actor)))
-             (if (room-claim? ctx)
-                 (loop (cdr keys) (cons actor acc))
-                 (loop (cdr keys) acc)))))))
+           (loop (cdr ctxs) acc)))))
 
 (define (avatar-occupants)
   (claim-actors-by-kind "avatar"))
 
-(define (label-key actor) (string-append "label:" (canonical-actor actor)))
-
 (define (avatar-did-key actor) (string-append "avatar-did:" (canonical-actor actor)))
 
 (define (set-label! actor label)
-  (if (non-empty-string? label)
-      (set-prop! (label-key actor) label)
-      #f))
+  (let ((ctx (child-ctx actor)))
+    (if (and (map? ctx) (non-empty-string? label))
+        (remember-child! (map-set ctx "nick" label))
+        #f)))
 
 (define (set-avatar-did! avatar did)
   (if (valid-did? did)
@@ -77,8 +70,8 @@
     (if (valid-did? did) did #f)))
 
 (define (has-label? actor)
-  (let ((label (get-prop (label-key actor))))
-    (non-empty-string? label)))
+  (let ((ctx (child-ctx actor)))
+    (and (map? ctx) (non-empty-string? (ctx-text ctx "nick")))))
 
 ; Presence liveness. Rooms periodically challenge occupants; stale local actors
 ; are removed before they produce repeated delivery failures.
@@ -150,8 +143,8 @@
 
 ; Presentation helpers.
 (define (speaker-name actor)
-  (let ((label (get-prop (label-key actor))))
-    (if (non-empty-string? label) label actor)))
+  (let ((ctx (child-ctx actor)))
+    (if (map? ctx) (child-label ctx) actor)))
 
 (define (visible-occupant-matches token)
   (let loop ((xs (occupants)))
@@ -365,6 +358,9 @@
       "things" (thing-entry-list (thing-token-names)))
     "exits" (exit-entry-list (exit-directions))))
 
+(define (node-ctx-for-parent target-parent)
+  (map-set (room-ctx) "parent" (canonical-actor target-parent)))
+
 (define (send-room-ctx-to! avatar ctx)
   (ma-send! (canonical-actor avatar) (list :ctx ctx)))
 
@@ -398,10 +394,6 @@
   (if (null? names)
       (string-append label ": none.")
       (string-append label ": " (names-of names))))
-
-(define (things-map) (prop-map "things"))
-
-(define (set-things-map! m) (set-prop-map! "things" m))
 
 ; Entry argument helpers. Historical avatar entry forms are still accepted, but
 ; new direct entry uses the ctx map path below.
@@ -795,9 +787,19 @@
   (non-empty-string? token))
 
 (define (thing-ref token)
-  (if (string-prefix? "did:ma:" token)
-      token
-      (map-ref (things-map) token #f)))
+  (if (valid-did-url? token)
+      (let ((ctx (child-ctx token)))
+        (if (and (map? ctx)
+                 (or (thing-kind? (ctx-text ctx "kind"))
+                     (container-kind? (ctx-text ctx "kind"))))
+            (canonical-actor token)
+            #f))
+      (let loop ((ctxs (list-append (child-ctxs-by-kind "thing")
+                                    (child-ctxs-by-kind "container"))))
+        (cond ((null? ctxs) #f)
+              ((child-token-matches? token (car ctxs))
+               (canonical-actor (ctx-text (car ctxs) "actor")))
+              (else (loop (cdr ctxs)))))))
 
 (define (movable-ref token)
   (let ((thing (thing-ref token)))
@@ -813,23 +815,21 @@
     (ma-save-state!)))
 
 (define (set-thing! token did)
-  (set-things-map! (map-set (things-map) token did)))
+  (let ((existing (child-ctx did)))
+    (remember-child!
+      (if (map? existing)
+          (map-set existing "nick" token)
+          (presentation-entry "thing" "/ma/thing/0.0.1" did token token token)))))
 
 (define (remove-thing! token)
-  (set-things-map! (map-delete (things-map) token)))
+  (let ((actor (thing-ref token)))
+    (if actor (forget-child! actor) #f)))
 
 (define (remove-thing-actor! actor)
-  (let loop ((tokens (map-keys (things-map)))
-             (remaining (things-map)))
-    (cond ((null? tokens)
-           (set-things-map! remaining))
-          ((same-actor? (map-ref remaining (car tokens) #f) actor)
-           (loop (cdr tokens) (map-delete remaining (car tokens))))
-          (else
-           (loop (cdr tokens) remaining)))))
+  (forget-child! actor))
 
 (define (things-text)
-  (token-list-text "Things" (map-keys (things-map))))
+  (token-list-text "Things" (thing-token-names)))
 
 (define (dids-text)
   (let ((lines (list-append (list-append (occupant-did-lines) (thing-did-lines)) (exit-did-lines))))
@@ -1002,7 +1002,12 @@
 
       ; Room-facing text surfaces.
 (define (thing-token-names)
-  (map-keys (things-map)))
+  (let loop ((ctxs (list-append (child-ctxs-by-kind "thing")
+                                (child-ctxs-by-kind "container")))
+             (acc '()))
+    (if (null? ctxs)
+        (reverse acc)
+        (loop (cdr ctxs) (cons (child-label (car ctxs)) acc)))))
 
 (define (occupants-text)
   (let ((actors (occupants)))
@@ -1405,7 +1410,7 @@
   (string-append
     "(set-prop! \"direction\" \"" direction "\")\n"
     (if (owner) (string-append "(set-prop! \"owner\" \"" (owner) "\")\n") "")
-    "(set-prop! \"source-room\" \"" (canonical-actor (self)) "\")\n"
+    "(set-prop! \"parent\" \"" (canonical-actor (self)) "\")\n"
     "(set-prop! \"target-room\" \"" (canonical-actor target-room) "\")\n"
     "(ma-save-state!)\n"))
 
@@ -1973,13 +1978,15 @@
            (reply-error msg "usage: :child <ctx>"))
           ((not (null? (cdr args)))
            (reply-error msg "usage: :child <ctx>"))
+          ((same-actor? (ctx-text (car args) "actor") (self))
+           (handle-node-child args msg))
           (else
            (handle-child-announcement! msg (car args))))))
 
 (set-meta-method! :parent
   (lambda (args msg)
     (cond ((null? args)
-           (reply-ok-with msg (actor-parent)))
+          (reply-ok-with msg (room-ctx-parent)))
           ((not (null? (cdr args)))
            (reply-error msg "usage: :parent [ctx]"))
           ((not (equal? (ctx-text (car args) "kind") "avatar"))
@@ -2005,7 +2012,9 @@
 (define (on-signal term)
   (cond ((or (equal? (verb-of term) :init)
              (equal? (verb-of term) :start))
-         (schedule-presence!))
+         (begin
+           (schedule-presence!)
+           (propose-node-parent! (room-ctx-parent))))
         ((equal? (verb-of term) :shutdown)
          (ma-save-state!))
         (else #f)))

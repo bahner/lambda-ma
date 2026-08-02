@@ -60,13 +60,18 @@ substitutes those CIDs into `dist/lambda-ma.yaml`.
 ## Documentation contract (lambda-ma profile)
 
 `lambda-ma` is one world/profile on top of `ma-runtime`, not the runtime spec
-itself. Keep world semantics documented here, not in `ma-spec`, unless we later
-decide to standardize them across multiple worlds.
+itself. The interoperable lambda-ma world profile is standardised in
+`ma-spec/runtime/ma-lambda-ma-v1.md`.
 
-- `REFERENCE.md` is the canonical protocol reference for lambda-ma world
-  behaviour.
+- `ma-spec/runtime/ma-lambda-ma-v1.md` is the normative interoperability
+  profile.
+- `REFERENCE.md` is the implementation reference for the shipped lambda-ma
+  actors, including actor APIs, state keys, and bootstrap details.
 - `README.md` and `HOWTO.md` are onboarding/operations docs and should link to
-  `REFERENCE.md` for normative behaviour.
+  both references where protocol behaviour matters.
+- Changes to interoperable profile behaviour MUST keep the ma-spec profile and
+  local implementation reference aligned. Implementation-only details remain
+  local unless they alter the profile contract.
 
 When documenting or changing behaviour, keep these contracts aligned:
 
@@ -103,9 +108,15 @@ When documenting or changing behaviour, keep these contracts aligned:
   not reply `:ok` itself; `ctx.kind = "avatar"` follows the same room-local
   avatar entry flow; `ctx.kind` of `"thing"` or `"agent"` is categorized by
   room-local policy.
-- Root actor boundary: root may create/find an avatar and ask that avatar to
-  send its current ctx to the controlling DID, but root must not send messages
-  to rooms.
+- Node hierarchy: `/ma/node/0.0.1` is the opt-in stateful parenting base above
+  `/ma/scheme/state/0.0.1`. Pure scheme actors and stateful utilities need not
+  be nodes. Parenting means subordination in the actor hierarchy, not physical
+  containment; kind behaviours decide how children are presented.
+- Root actor boundary: root is the only parentless lambda-ma node. Rooms always
+  parent to their runtime's canonical full `#root` DID-URL and cannot be
+  reparented. Root stores room ctx and may send the corresponding `:child <ctx>`
+  confirmation to a room, but it must not perform room entry or movement on an
+  avatar's behalf.
 - Avatar placement boundary: do not reintroduce generic avatar setter verbs such
   as `:set-location` or `:set-nick`. Root or the target room may ask an existing
   avatar to enter that room with narrow `:enter-room`; the avatar persists room
@@ -170,6 +181,11 @@ When documenting or changing behaviour, keep these contracts aligned:
   fields. Mutations should add/update the relevant ctx or remove that ctx; they
   must not append/remove bare actor refs in a second list that can drift out of
   sync.
+- One child store: every node has exactly one persisted child ctx map named
+  `children`, keyed by canonical full actor DID-URL. Kind-specific views such as
+  room `who`, room things, and container contents filter or traverse that map.
+  Node owners may inspect the complete map with `:children?`; no behaviour may
+  introduce a parallel child, occupant, contents, alias, or label collection.
 - Avatar inventory lifecycle: avatar ctx carries `inv` as a baton during
   `:go`/`:enter`. Target-runtime avatars adopt that supplied container
   reference when present, and create/reuse a deterministic local
@@ -181,9 +197,11 @@ When documenting or changing behaviour, keep these contracts aligned:
   ctx algorithm above: the carried actor requests the target parent with
   `:parent <ctx>`, the target parent confirms with `:child <ctx>`, and the old
   inventory container removes or updates its stored ctx record from the actor's
-  committed ctx update. Avatar carried `drop` must not invent a new verb, call the current
-  room, or use an avatar room-helper. Rooms must not expose `:take` or `:drop`;
-  the current room DID-URL may be passed only as target-parent data.
+  committed ctx update. Avatar carried `drop` asks the inventory parent to
+  dispatch the child's existing `:drop` flow; it must not contact the child
+  directly, invent a new verb, call the current room, or use an avatar
+  room-helper. Rooms must not expose `:take` or `:drop`; the current room
+  DID-URL may be passed only as target-parent data.
 - Transfer strictness (default): thing/agent transfer calls must keep strict
   input validation until explicitly relaxed:
   controlling DID must be `did:ma:...`; non-ctx parent arguments must be DID-URLs.

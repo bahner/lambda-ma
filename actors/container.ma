@@ -6,9 +6,6 @@
 
 ; Persistent state accessors.
 (define (owner) (get-prop "owner"))
-(define (parent)
-  (let ((p (get-prop "parent")))
-    (if p p "")))
 
 (define (name)
   (let ((n (get-prop "name")))
@@ -33,14 +30,6 @@
 
 (define (set-owner! did)
   (set-prop! "owner" did)
-  (ma-save-state!))
-
-(define (set-parent! did)
-  (set-prop! "parent" (canonical-actor did))
-  (ma-save-state!))
-
-(define (clear-parent!)
-  (del-prop! "parent")
   (ma-save-state!))
 
 (define (set-locked! value)
@@ -101,152 +90,63 @@
   (let ((value (get-prop "ctx:rev")))
     (if (number? value) value 0)))
 
-(define (container-ctx-for-parent target-parent)
+(define (extend-node-ctx ctx)
   (map-set
-    (map-set
-      (map-set
-        (map-set
-          (map-set
-            (map-set
-              (map-set
-                (map-set
-                  (map-set
-                    (make-map)
-                    "protocol" CONTAINER_PROTOCOL)
-                  "kind" "container")
-                "actor" (canonical-actor (self)))
-              "parent" (canonical-actor target-parent))
-            "rev" (container-ctx-rev))
-          "name" (name))
-        "nick" (nick))
-      "description" (description))
+    (map-set ctx "rev" (container-ctx-rev))
     "contents" (contents-map)))
 
+(define (node-protocol) CONTAINER_PROTOCOL)
+(define (node-kind) "container")
+(define (node-name) (name))
+(define (node-nick) (nick))
+(define (node-description) (description))
+
+(define (container-ctx-for-parent target-parent)
+  (node-ctx-for-parent target-parent))
+
+(define (container-ctx)
+  (node-ctx))
+
 (define (send-container-ctx!)
-  (let ((p (parent)))
+  (let ((p (node-parent)))
     (if (equal? p "")
         #f
         (begin
           (inc-prop! "ctx:rev" 1)
           (ma-save-state!)
-          (ma-send! (canonical-actor p) (list :parent (container-ctx)))))))
+          (announce-node-parent!)))))
+
+  (define (node-child-admission-error ctx msg)
+    (if (locked?) (locked-message) #f))
+
+  (define (node-children-changed!)
+    (send-container-ctx!))
+
+  (define (node-parent-committed!)
+    (begin
+      (inc-prop! "ctx:rev" 1)
+      (ma-save-state!)))
+
+  (define (node-children-query-error msg)
+    (if (locked?) (locked-message) #f))
+
+  (define (node-children-query-authorised? msg) #t)
+  (define (node-children-query-text) (contents-text))
 
 ; Caller and reply helpers.
 (define (owner-caller? msg)
   (let ((o (owner)))
     (and o (equal? (msg-from msg) o))))
 
-(define (owner-did? did)
-  (let ((o (owner)))
-    (and o (equal? did o))))
-
-(define (delegated-did-arg? args)
-  (and (not (null? args)) (string-prefix? "did:ma:" (car args))))
-
 (define (local-actor-caller? msg)
   (local-actor-ref? (msg-from msg)))
 
-(define (effective-did args msg)
-  (if (and (delegated-did-arg? args) (local-actor-caller? msg))
-      (car args)
-      (msg-from msg)))
-
-(define (effective-args args msg)
-  (if (and (delegated-did-arg? args) (local-actor-caller? msg))
-      (cdr args)
-      args))
-
-(define (valid-parent-ref? ref)
-  (and (non-empty-string? ref)
-       (or (valid-did-url? ref)
-           (local-actor-ref? ref))))
-
-(define (valid-transfer-kind? kind)
-  (or (equal? kind "avatar")
-      (equal? kind "thing")
-  (equal? kind "agent")
-  (equal? kind "container")
-  (equal? kind "actor")))
-
-; Transfer ctx is optional, but when present it must be a full room-local ctx
-; payload so future parent displays can use stable name/nick/description data.
-(define (valid-transfer-ctx? ctx)
-  (and (actor-ctx-shape? ctx)
-       (valid-transfer-kind? (ctx-text ctx "kind"))))
-
-(define (container-ctx)
-  (container-ctx-for-parent (parent)))
-
-(define (announce-parent!)
-  (let ((p (parent)))
-    (if (equal? p "")
-        #f
-        (ma-send! (canonical-actor p) (list :parent (container-ctx))))))
-
-(define (parent-target-from-ctx ctx)
-  (let ((target (ctx-text ctx "parent")))
-    (if (non-empty-string? target)
-        target
-        (ctx-text ctx "room"))))
-
-(define (valid-parent-ctx? ctx)
-  (let ((target-parent (parent-target-from-ctx ctx)))
-    (and (map? ctx)
-         (valid-parent-ref? target-parent))))
-
-(define (set-prop-from-ctx! ctx key)
-  (let ((value (ctx-text ctx key)))
-    (if (non-empty-string? value)
-        (set-prop! key value)
-        #f)))
-
-(define (apply-parent-ctx! ctx)
-  (let ((old-parent (parent))
-        (target-parent (parent-target-from-ctx ctx)))
-  (begin
-    (set-parent! target-parent)
-    (set-prop-from-ctx! ctx "name")
-    (set-prop-from-ctx! ctx "nick")
-    (set-prop-from-ctx! ctx "description")
-    (ma-save-state!)
-    (send-container-ctx!)
-    (if (and (non-empty-string? old-parent)
-             (not (same-actor? old-parent target-parent)))
-        (ma-send! (canonical-actor old-parent) (list :parent (container-ctx)))
-      #f)
-    #t)))
-
-(define (propose-parent-change! target-parent)
-  (ma-send! (canonical-actor target-parent) (list :parent (container-ctx-for-parent target-parent))))
-
-(define (owner-or-unowned? did)
-  (let ((o (owner)))
-    (or (not o) (equal? o did))))
-
-(define (caller-is-parent? msg)
-  (let ((p (parent)))
-    (and (not (equal? p "")) (same-actor? (msg-from msg) p))))
-
-(define (orphan-owner-recovery? did)
-  (and (equal? (parent) "") (owner-did? did)))
-
-(define (owner-avatar-delegation? did msg)
-  (and (owner-did? did) (msg-from-owner? did msg)))
-
-(define (transfer-caller-authorised? did msg)
-  (or (caller-is-parent? msg)
-      (orphan-owner-recovery? did)
-      (owner-avatar-delegation? did msg)))
-
-(define (recycle-caller-authorised? did msg)
-  (and (caller-is-parent? msg) (owner-did? did)))
-
 (define (recycle! msg)
-  (let ((old-parent (parent)))
+  (let ((old-parent (node-parent)))
     (begin
-      (clear-parent!)
+      (set-node-parent! "")
       (if (non-empty-string? old-parent)
-          (ma-send! (canonical-actor old-parent) (list :parent (container-ctx-for-parent "")))
+          (ma-send! (canonical-actor old-parent) (list :parent (node-ctx-for-parent "")))
           #f)
       (reply-ok-with msg "recycled")
       (ma-end))))
@@ -303,7 +203,7 @@
         (name) "\n"
         (description) "\n"
         "owner: " (if (owner) (owner) "(none)") "\n"
-        "parent: " (if (equal? (parent) "") "(none)" (parent)) "\n"
+        "parent: " (if (equal? (node-parent) "") "(none)" (node-parent)) "\n"
         "locked: " (if (locked?) "true" "false")))))
 
 (set-rpc-method! :look
@@ -316,57 +216,14 @@
 
 (set-rpc-method! :where?
   (lambda (args msg)
-    (reply-ok-with msg (if (equal? (parent) "") "(none)" (parent)))))
-
-(set-meta-method! :parent
-  (lambda (args msg)
-    (cond ((null? args)
-           (if (owner-caller? msg)
-               (reply-ok-with msg (if (equal? (parent) "") "(none)" (parent)))
-               (reply-error msg "only owner may inspect parent")))
-          ((not (null? (cdr args)))
-           (reply-error msg "usage: :parent [ctx]"))
-          ((locked?)
-           (reply-locked msg))
-          ((not (child-ctx-valid? (car args)))
-           (reply-error msg "parent ctx must include actor, parent, kind, protocol, name, nick, description"))
-          ((not (child-ctx-self-authentic? (car args) msg))
-           (reply-error msg "parent ctx actor must match sender"))
-          ((not (same-actor? (ctx-text (car args) "parent") (self)))
-           (begin
-             (forget-content! (ctx-text (car args) "actor"))
-             (send-container-ctx!)
-             (reply-ok msg)))
-          (else
-           (begin
-             (remember-content! (car args))
-             (ma-send! (canonical-actor (ctx-text (car args) "actor"))
-                       (list :child (car args)))
-             (send-container-ctx!)
-             (reply-ok msg))))))
-
-(set-meta-method! :child
-  (lambda (args msg)
-    (cond ((null? args)
-           (if (locked?)
-               (reply-locked msg)
-               (reply-ok-with msg (contents-text))))
-          ((not (null? (cdr args)))
-           (reply-error msg "usage: :child [ctx]"))
-          ((and (valid-parent-ctx? (car args))
-                (same-actor? (msg-from msg) (parent-target-from-ctx (car args))))
-           (begin
-             (apply-parent-ctx! (car args))
-             (reply-ok msg)))
-          (else
-           (reply-error msg "child ctx must come from target parent")))))
+    (reply-ok-with msg (if (equal? (node-parent) "") "(none)" (node-parent)))))
 
 (set-internal-rpc-method! :report-parent
   (lambda (args msg)
     (let ((tick (if (or (null? args) (null? (cdr args))) "" (car (cdr args))))
           (nonce (if (or (null? args) (null? (cdr args)) (null? (cdr (cdr args)))) "" (car (cdr (cdr args))))))
       (ma-send! (canonical-actor (msg-from msg))
-                (list :parent-report (canonical-actor (self)) (parent) tick nonce)))))
+                (list :parent-report (canonical-actor (self)) (node-parent) tick nonce)))))
 
 (set-rpc-method! :owner
   (lambda (args msg)
@@ -396,11 +253,11 @@
 
 (set-rpc-method! :lock
   (lambda (args msg)
-    (let ((did (effective-did args msg))
-          (rest (effective-args args msg)))
+        (let ((did (node-effective-did args msg))
+          (rest (node-effective-args args msg)))
       (cond ((not (valid-did? did))
              (reply-error msg "lock requires DID with did:ma: prefix"))
-            ((not (owner-or-unowned? did))
+            ((not (node-owner-or-unowned? did))
              (reply-error msg "only owner may lock this container"))
             (else
              (begin
@@ -411,10 +268,10 @@
 
 (set-rpc-method! :unlock
   (lambda (args msg)
-    (let ((did (effective-did args msg)))
+    (let ((did (node-effective-did args msg)))
       (cond ((not (valid-did? did))
              (reply-error msg "unlock requires DID with did:ma: prefix"))
-            ((not (owner-or-unowned? did))
+            ((not (node-owner-or-unowned? did))
              (reply-error msg "only owner may unlock this container"))
             (else
              (begin
@@ -467,73 +324,70 @@
 ; or move to another parent; direct did calls are deliberately rejected.
 (set-cmd-method! :take
   (lambda (args msg)
-    (let ((did (effective-did args msg))
-          (rest (effective-args args msg)))
+        (let ((did (node-effective-did args msg))
+          (rest (node-effective-args args msg)))
       (cond ((and (not (null? rest)) (child-ref (car rest)) (locked?))
              (reply-locked msg))
-            ((handle-parent-take did rest msg)
-             (begin
-               (send-container-ctx!)
-               #t))
-            ((not (transfer-caller-authorised? did msg))
+            ((handle-parent-take did rest msg) #t)
+            ((not (node-transfer-caller-authorised? did msg))
              (reply-error msg "take must be requested by current parent"))
             ((not (valid-did? did))
              (reply-error msg "take requires DID with did:ma: prefix"))
-            ((not (owner-or-unowned? did))
+            ((not (node-owner-or-unowned? did))
              (reply-error msg "only owner may take this container"))
             ((null? rest)
              (reply-error msg "usage: :take <did> <carrier-parent-did-url> [ctx-map]"))
-            ((not (valid-parent-ref? (car rest)))
+            ((not (node-valid-parent-ref? (car rest)))
              (reply-error msg "take requires carrier parent as DID-URL"))
             ((and (not (null? (cdr rest))) (not (null? (cdr (cdr rest)))))
              (reply-error msg "take accepts at most one optional ctx-map"))
-            ((and (not (null? (cdr rest))) (not (valid-transfer-ctx? (car (cdr rest)))))
+            ((and (not (null? (cdr rest))) (not (node-valid-transfer-ctx? (car (cdr rest)))))
              (reply-error msg "ctx-map must include non-empty parent, kind, protocol, name, nick, description"))
             (else
              (begin
                (if (not (owner)) (set-owner! did) #f)
-               (if (and (not (null? (cdr rest))) (valid-transfer-ctx? (car (cdr rest))))
+               (if (and (not (null? (cdr rest))) (node-valid-transfer-ctx? (car (cdr rest))))
                    (set-claim! did (car (cdr rest)))
                    #f)
-               (propose-parent-change! (car rest))
+               (propose-node-parent! (car rest))
                (reply-ok-with msg "take requested")))))))
 
 (set-cmd-method! :drop
   (lambda (args msg)
-    (let ((did (effective-did args msg))
-          (rest (effective-args args msg)))
-      (cond ((not (transfer-caller-authorised? did msg))
+    (let ((did (node-effective-did args msg))
+        (rest (node-effective-args args msg)))
+      (cond ((not (node-transfer-caller-authorised? did msg))
              (reply-error msg "drop must be requested by current parent"))
             ((not (valid-did? did))
              (reply-error msg "drop requires DID with did:ma: prefix"))
-            ((not (owner-or-unowned? did))
+            ((not (node-owner-or-unowned? did))
              (reply-error msg "only owner may drop this container"))
             ((null? rest)
              (reply-error msg "usage: :drop <target-parent-did-url> [ctx-map]"))
-            ((not (valid-parent-ref? (car rest)))
+            ((not (node-valid-parent-ref? (car rest)))
              (reply-error msg "drop requires target parent as DID-URL"))
             ((and (not (null? (cdr rest))) (not (null? (cdr (cdr rest)))))
              (reply-error msg "drop accepts at most one optional ctx-map"))
-            ((and (not (null? (cdr rest))) (not (valid-transfer-ctx? (car (cdr rest)))))
+            ((and (not (null? (cdr rest))) (not (node-valid-transfer-ctx? (car (cdr rest)))))
              (reply-error msg "ctx-map must include non-empty parent, kind, protocol, name, nick, description"))
             (else
              (begin
                (if (not (owner)) (set-owner! did) #f)
-               (if (and (not (null? (cdr rest))) (valid-transfer-ctx? (car (cdr rest))))
+               (if (and (not (null? (cdr rest))) (node-valid-transfer-ctx? (car (cdr rest))))
                    (set-claim! did (car (cdr rest)))
                    #f)
-               (propose-parent-change! (car rest))
+               (propose-node-parent! (car rest))
                (reply-ok-with msg "drop requested")))))))
 
 (set-cmd-method! :recycle
   (lambda (args msg)
-    (let ((did (effective-did args msg))
-          (rest (effective-args args msg)))
+        (let ((did (node-effective-did args msg))
+          (rest (node-effective-args args msg)))
       (cond ((not (null? rest))
              (reply-error msg "usage: :recycle <did>"))
             ((not (valid-did? did))
              (reply-error msg "recycle requires DID with did:ma: prefix"))
-            ((not (recycle-caller-authorised? did msg))
+            ((not (node-recycle-caller-authorised? did msg))
              (reply-error msg "only owner via current parent may recycle this container"))
             (else
              (recycle! msg))))))
@@ -556,8 +410,8 @@
 
 (set-cmd-method! :recycle-from
   (lambda (args msg)
-    (let ((did (effective-did args msg))
-          (rest (effective-args args msg)))
+    (let ((did (node-effective-did args msg))
+          (rest (node-effective-args args msg)))
       (cond ((locked?)
              (reply-locked msg))
             ((or (null? rest) (not (null? (cdr rest))))

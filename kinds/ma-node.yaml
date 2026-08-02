@@ -1,0 +1,4 @@
+protocol: /ma/node/0.0.1
+extends: /ma/scheme/state/0.0.1
+behaviour:
+  "/": __NODE_CID__

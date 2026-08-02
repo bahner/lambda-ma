@@ -325,7 +325,7 @@ Why this works well:
 
 - `enter` records the target as pending, sends room `:enter`, and commits the
   new `parent` only after a valid room `:ctx` ack.
-- `:enter` with `agent-ctx` informs the room how to present the occupant.
+- `:enter` with the agent's node ctx informs the room how to present the occupant.
 - `:move` uses ordinary room exits. It asks the current room to choose one of
   the exits it knows with practical, non-security random choice. The room and
   exit use implementation-local movement traffic; the moving actor then
@@ -482,14 +482,23 @@ custom code. To add code to an already-existing room, enter it and use
 ## Modify λ-間 itself
 
 The kind definitions live in `kinds/`, and the actor behaviours live in
-`actors/`:
+`actors/`. Shared Scheme layers live in `scheme-actor/`:
 
 ```text
 actors/root.ma
 actors/avatar.ma
 actors/room.ma
 actors/exit.ma
+scheme-actor/actor.ma
+scheme-actor/state.ma
+scheme-actor/node.ma
 ```
+
+Use `/ma/node/0.0.1` as the base for a stateful actor that participates in the
+parent hierarchy. Parenting is not automatically physical containment; the
+concrete behaviour decides whether and how child ctx is displayed. Extend
+`/ma/scheme/state/0.0.1` directly for a stateful utility actor that should stay
+outside the hierarchy.
 
 To change the default room behaviour, edit `actors/room.ma`. To change movement
 or avatar-mediated commands, start with `actors/avatar.ma` and `actors/room.ma`. To change
@@ -523,7 +532,8 @@ ma --root-cid <printed-cid>
 
 If you are only updating kinds or behaviours for an existing runtime, generate
 and apply a kinds CID instead. This patches the runtime's kind registry without
-replacing existing entities or their state:
+replacing existing entities or their state. Apply the complete tree when a new
+base kind such as `/ma/node/0.0.1` and its derived kinds are introduced:
 
 ```sh
 make kinds-cid
@@ -532,7 +542,7 @@ make kinds-cid
 Apply it live from zion or another CRUD client:
 
 ```text
-@runtime/kinds: /ipfs/<printed-kinds-cid>
+@runtime/kinds: <printed-kinds-cid>
 ```
 
 or apply it on the next daemon start:
