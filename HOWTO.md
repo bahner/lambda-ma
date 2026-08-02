@@ -231,10 +231,9 @@ Expected shape in output:
 
 - An `Occupants:` line that includes live room occupants, including avatar
   presence and agents such as `rms` after those agents have entered the room.
-- A separate `Things:` line for room-local non-avatar aliases.
+- A separate `Things:` line for room-local things and containers.
 
-Use `who?` when you specifically mean people/avatar presence. Use `occupants?`
-when you want the broader room occupant list.
+Use `who?` for avatars only. Use `occupants?` for avatars and agents.
 
 If `look` only shows `Things: none.` or misses expected occupants while actors
 are clearly active in the room, the room behaviour is stale. Rebuild and

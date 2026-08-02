@@ -40,10 +40,15 @@
           (else
            (loop (cdr ctxs) acc)))))
 
+(define (occupant-kind? kind)
+  (or (equal? kind "avatar")
+      (equal? kind "agent")))
+
 (define (occupants)
   (let loop ((ctxs (child-ctxs)) (acc '()))
     (cond ((null? ctxs) (unique-actor-entries (reverse acc)))
-          ((room-claim? (car ctxs))
+          ((and (room-claim? (car ctxs))
+                (occupant-kind? (ctx-text (car ctxs) "kind")))
            (loop (cdr ctxs)
                  (cons (canonical-actor (ctx-text (car ctxs) "actor")) acc)))
           (else
@@ -52,21 +57,14 @@
 (define (avatar-occupants)
   (claim-actors-by-kind "avatar"))
 
-(define (avatar-did-key actor) (string-append "avatar-did:" (canonical-actor actor)))
-
 (define (set-label! actor label)
   (let ((ctx (child-ctx actor)))
     (if (and (map? ctx) (non-empty-string? label))
         (remember-child! (map-set ctx "nick" label))
         #f)))
 
-(define (set-avatar-did! avatar did)
-  (if (valid-did? did)
-      (set-prop! (avatar-did-key avatar) did)
-      #f))
-
 (define (avatar-did avatar)
-  (let ((did (get-prop (avatar-did-key avatar))))
+  (let ((did (ctx-text (child-ctx avatar) "did")))
     (if (valid-did? did) did #f)))
 
 (define (has-label? actor)
@@ -536,9 +534,9 @@
       #f
       (broadcast-except avatar (string-append (speaker-name avatar) " arrives."))))
 
-(define (avatar-claim-ctx avatar nick inventory)
+(define (avatar-claim-ctx avatar did nick inventory)
   (let ((n (nick-or-default nick))
-        (did (avatar-did avatar)))
+  (owner-did (if (valid-did? did) did "")))
     (map-set
       (map-set
         (map-set
@@ -551,16 +549,16 @@
                     "parent" (canonical-actor (self)))
                   "room" (canonical-actor (self)))
                 "root" (canonical-actor (root)))
-              "did" (if (valid-did? did) did ""))
+              "did" owner-did)
             "avatar" (canonical-actor avatar))
           "inv" (if (valid-did-url? inventory) (canonical-actor inventory) ""))
         "text" (arrival-text))
       "actor" (canonical-actor avatar))))
 
-(define (commit-avatar-entry! avatar old-room nick inventory)
+(define (commit-avatar-entry! avatar did old-room nick inventory)
   (let ((was-present (member-entry? avatar (avatar-occupants))))
     (set-label! avatar nick)
-    (set-claim! avatar (avatar-claim-ctx avatar nick inventory))
+    (set-claim! avatar (avatar-claim-ctx avatar did nick inventory))
     (announce-avatar-presence! avatar was-present)
     (presence-touch! avatar (presence-tick))
     (ma-save-state!)
@@ -569,7 +567,7 @@
 
 (define (record-avatar-presence! avatar old-room)
   (let ((was-present (member-entry? avatar (avatar-occupants))))
-    (set-claim! avatar (avatar-claim-ctx avatar (speaker-name avatar) #f))
+    (set-claim! avatar (avatar-claim-ctx avatar (avatar-did avatar) (speaker-name avatar) #f))
     (announce-avatar-presence! avatar was-present)
     (presence-touch! avatar (presence-tick))
     (ma-save-state!)
@@ -639,9 +637,7 @@
     (nick (entry-nick args))
     (inventory (entry-inventory args))
     (did (entry-avatar-did args)))
-    (begin
-      (set-avatar-did! avatar did)
-      (commit-avatar-entry! avatar old-room nick inventory))))
+    (commit-avatar-entry! avatar did old-room nick inventory)))
 
 (define (handle-did-avatar-entry! args)
   (let* ((did (entry-did args))
@@ -838,7 +834,7 @@
         (string-append "DIDs:\n" (entry-lines lines)))))
 
 (define (handle-dids! msg args)
-  (let ((mediated #f))
+  (let ((mediated (avatar-caller? msg)))
     (cond ((not (owned?))
            (reply-command-error msg mediated "This room is unowned. Claim it before listing DIDs."))
           ((not (valid-owner? (owner)))
@@ -849,7 +845,7 @@
            (reply-command-ok msg mediated (dids-text))))))
 
 (define (handle-did! msg args)
-  (let ((mediated #f)
+  (let ((mediated (avatar-caller? msg))
         (did-args args))
    (cond ((null? did-args)
         (reply-command-error msg mediated "Usage: did? [exit|thing|occupant] <name>"))
@@ -878,7 +874,7 @@
               (reply-command-ok msg mediated (string-append "Ambiguous name: " token "\n" (entry-lines lines))))))))))
 
 (define (handle-owner-query! msg args)
-  (let ((mediated #f)
+  (let ((mediated (avatar-caller? msg))
         (owner-args args))
     (if (null? owner-args)
         (let ((current-owner (owner)))
@@ -1020,8 +1016,8 @@
     (room-name) " help\n"
     "  look              look around\n"
     "  exits?            list exits\n"
-    "  who?              show people here\n"
-    "  occupants?        show all occupants (avatars, agents, DIDs)\n"
+    "  who?              show avatars here\n"
+    "  occupants?        show avatars and agents here\n"
     "  things?           list known things\n"
     "  did? [kind] <name> show the DID for a visible occupant, thing, or exit\n"
     "  owner? <name>     show who owns a visible occupant, thing, or exit\n"
@@ -1089,24 +1085,20 @@
     (reply-ok msg)))
 
 (define (reply-command-ok msg delegated text)
-  (if delegated
-      (reply-to-sender msg text)
-  (reply-ok-with msg text)))
+  (begin
+    (if delegated (reply-to-sender msg text) #f)
+    (reply-ok-with msg text)))
 
 (define (reply-command-error msg delegated text)
-  (if delegated
-      (reply-to-sender msg text)
-      (reply-error msg text)))
+  (begin
+    (if delegated (reply-to-sender msg text) #f)
+    (reply-error msg text)))
 
 (define (reply-room-prop-ok msg delegated text)
-  (if delegated
-      (reply-to-sender msg text)
-  (reply-ok-with msg text)))
+  (reply-command-ok msg delegated text))
 
 (define (reply-room-prop-error msg delegated text)
-  (if delegated
-      (reply-to-sender msg text)
-      (reply-error msg text)))
+  (reply-command-error msg delegated text))
 
 (define (apply-room-prop! msg key value-args delegated)
   (if (null? value-args)
@@ -1766,24 +1758,25 @@
 
 (set-rpc-method! :owner
   (lambda (args msg)
-    (let ((owner-args args))
+    (let ((owner-args args)
+          (mediated (avatar-caller? msg)))
       (cond ((null? owner-args)
              (let ((current-owner (owner)))
                (if current-owner
-                   (reply-ok-with msg current-owner)
-                   (reply-ok-with msg "(none)"))))
+                   (reply-command-ok msg mediated current-owner)
+                   (reply-command-ok msg mediated "(none)"))))
             ((not (owned?))
-             (reply-error msg "This room is unowned. Claim it before transferring ownership."))
+             (reply-command-error msg mediated "This room is unowned. Claim it before transferring ownership."))
             ((not (valid-owner? (owner)))
-             (reply-error msg "Owner must be a DID."))
+             (reply-command-error msg mediated "Owner must be a DID."))
             ((not (owner-message? msg))
-             (reply-error msg "Only this room's owner can transfer ownership."))
+             (reply-command-error msg mediated "Only this room's owner can transfer ownership."))
             ((not (valid-owner? (car owner-args)))
-             (reply-error msg "New owner must be a DID."))
+             (reply-command-error msg mediated "New owner must be a DID."))
             (else
              (let ((new-owner (car owner-args)))
                (set-owner! new-owner)
-               (reply-ok-with msg (string-append "Owner set to " new-owner "."))))))))
+               (reply-command-ok msg mediated (string-append "Owner set to " new-owner "."))))))))
 
 (set-rpc-method! :prop
   (lambda (args msg)

@@ -9,7 +9,7 @@ avatar DID-URL.
 
 Every node stores one child ctx map under the state key `children`. Rooms derive
 all room-local presentation from that map: `who` filters `kind=avatar`, things
-filter `kind=thing|container`, and occupants traverse all admitted child ctx.
+filter `kind=thing|container`, and occupants filter `kind=avatar|agent`.
 There is no separate occupants, aliases, labels, or avatar-presence list.
 `parent` alone is not room presence; a movable actor is present only after the
 room stores its accepted ctx in `children`.

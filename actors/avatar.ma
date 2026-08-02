@@ -750,8 +750,8 @@
     "  look <thing|exit> inspect a carried thing or visible exit\n"
     "  exits?            list exits\n"
     "  here?             show where you are\n"
-    "  who?              show who is here\n"
-    "  things?           list local non-avatar occupants\n"
+    "  who?              show avatars here\n"
+    "  things?           list known things\n"
     "  did? [kind] <name> show the DID for a visible occupant, thing, or exit\n"
     "  owner? <name>     show who owns a visible occupant, thing, or exit\n"
     "  make <kind> <init...> create an actor from init text\n"
@@ -973,14 +973,16 @@
         (send-room :claim args)
         (reply-ok-silent msg)))))
 
-(set-rpc-method! :owner?
+(set-cmd-method! :owner?
   (lambda (args msg)
-    (cond ((not (null? args))
-           (reply-error msg "usage: :owner?"))
-          ((equal? (msg-from msg) (did))
-           (reply-ok-with msg (actor-owner)))
-          (else
-           (reply-error msg "avatar command denied")))))
+    (if (and (room? msg) (not (null? args)))
+        (begin
+          (ma-send! (canonical-actor (car args)) (list :print (string-append "Owner: " (did))))
+          (reply-ok-silent msg))
+        (require-did msg
+          (lambda ()
+            (send-room :owner? args)
+            (reply-ok-silent msg))))))
 
 (set-cmd-method! :make
   avatar-make)
