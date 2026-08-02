@@ -304,25 +304,28 @@ Parent changes are target-accepted and forward-moving:
 6. On acceptance, self commits `parent = new_parent` in its own state/model.
 7. Self sends committed ctx to `new_parent`.
 8. Self sends a departure or ctx update to `old_parent`.
-9. `old_parent` clears derived caches. It has no ordinary veto after commit.
+9. `old_parent` removes the committed ctx it holds for the child. It has no
+   ordinary veto after commit.
 
 Requiring acceptance from both old and new parent is deliberately out of the
 ordinary parent-change flow. Protocols MAY define stricter protected flows, but
 the base world model is: new parent controls admission, self controls commit,
 old parent receives cleanup.
 
-### 3.5 Derived caches
+### 3.5 Authoritative ctx and derived views
 
-Parent `children`, container `contents`, room `occupants`, room
-`avatar-occupants`, labels, and similar indexes are derived state. If such a
-cache disagrees with the child actor's self-authenticating ctx or own state, the
-child actor wins.
+Parent/child membership, container contents, room occupants, `who`, inventory
+views, labels, and similar lookup or presentation surfaces are derived from
+authoritative ctx records at use time. Actors must not maintain a second
+persistent list of bare actor refs when the list can be generated from ctx; such
+lists drift from the authority-bearing data.
 
 Whenever an actor changes any field that appears in its parent-facing ctx, such
 as `parent`, `name`, `nick`, or `description`, it sends refreshed ctx to its
-current parent with `:parent`. Parents update their derived caches from that
-ctx. Container contents are part of container ctx, so contents changes are
-ordinary container ctx changes.
+current parent with `:parent`. Parents update or remove the stored ctx record;
+presentation lists are generated from those ctx records when read. Container
+contents are part of container ctx, so contents changes are ordinary container
+ctx changes.
 
 A previous parent that receives a self-authenticating ctx where `parent` is no
 longer itself MUST treat its local cache entry for that actor as stale.
@@ -496,8 +499,8 @@ Key verbs:
 | `:enter` | `<ctx-map>` | Room-first enter endpoint. Avatar ctx maps include full DID/DID-URL actor references and a `did` DID; target rooms create or reuse that DID principal's deterministic local avatar. `agent`/`thing` require ctx required keys. |
 | `:enter` | `<avatar-did-url> [old-room-did-url]` | Admit known avatar flow. |
 | `:leave` | none | Caller-origin live-presence departure. Removes the caller's local deterministic avatar from this room, but does not change avatar state or client ctx; the saved room remains the next-login return point. |
-| `:remove` | `<occupant>` | Owner-gated manual presence cleanup. Resolves an occupant by DID/DID-URL or by a unique current display label; ambiguous labels are rejected. Removes the occupant from room-local presence caches and does not change actor state. The occupant may re-enter later through normal `:enter` flow. |
-| `:leave-occupant` | none | Sender-origin cache removal for non-avatar occupants such as agents after actor-owned parent changes. |
+| `:remove` | `<occupant>` | Owner-gated manual presence cleanup. Resolves an occupant by DID/DID-URL or by a unique current display label; ambiguous labels are rejected. Removes the room's stored ctx claim for that occupant and does not change actor state. The occupant may re-enter later through normal `:enter` flow. |
+| `:leave-occupant` | none | Sender-origin ctx-claim removal for non-avatar occupants such as agents after actor-owned parent changes. |
 | `:look` | `[exit-direction]` | No args prints room text plus `Occupants:`, `Things:`, and `Exits:`. With an exit direction, forwards inspection to the first-class exit actor. |
 | `:exits?` `:who?` `:occupants?` `:things?` | none | Local presentation. `exits?` lists directions known to the room; `who?` is people/avatar-oriented; `occupants?` includes avatars plus room-local agents/occupants. |
 | `:did?` | `[exit\|thing\|occupant] <name>` | Explicit visible reference lookup. Resolves a visible exit direction, room-local thing alias, or occupant display label to a DID/DID-URL. Without a kind, one unambiguous match is returned; ambiguous names list every matching kind. |
@@ -516,14 +519,16 @@ Room callbacks such as `:child-alive`, `:ping`, `:pong`, `:authorise-link`,
 `:parent`, and `:leave-occupant` are internal protocol handlers. They are
 not part of `:api?`.
 
-Room presence cache rules:
+Room presence rules:
 
-1. `occupants` and `avatar-occupants` are room-local derived caches.
+1. Room membership is stored as accepted actor ctx claims. `occupants`, `who`,
+   broadcast recipients, and room ctx presentation are generated from those
+   claims when used; there is no separate persisted room-local membership list.
 2. DID principal-facing `:leave` removes only live room presence. It deliberately leaves
    avatar state and zion `.my.ctx.*` unchanged so the remembered room remains the
    return point on a later login.
-3. Owner-facing `:remove <occupant>` is manual cleanup only. It removes cached
-   room presence, not actor state or future admission rights. If multiple
+3. Owner-facing `:remove <occupant>` is manual cleanup only. It removes the
+   room's stored ctx claim, not actor state or future admission rights. If multiple
    occupants share the same nick/display label, the owner must use a DID or
    DID-URL to identify the target.
 4. `:did? [exit|thing|occupant] <name>` is an explicit lookup for a visible
@@ -687,9 +692,7 @@ world-level actor names.
 | `exit-target:<direction>` | DID-URL | target room used for local exit healing |
 | `exit-target-name:<direction>` | string | optional deterministic new-room target name |
 | `things` map | map | room-local alias map to non-avatar occupant DID-URLs |
-| `claim:<actor>` | map | stored enter claim/context |
-| `occupants` | list | derived cache (presentation/broadcast), root-fed |
-| `avatar-occupants` | list | derived avatar-only presence cache for people-oriented presentation |
+| `claims` | map | actor DID-URL to accepted room ctx; source for occupants, `who`, and broadcast recipients |
 | `label:<actor>` | string | derived display cache |
 | `presence:tick` | integer | room-local scheduled presence counter |
 | `presence:last-report:<actor>` | integer | last tick where actor reported this room as parent |

@@ -7,26 +7,56 @@
 (define PRESENCE_INTERVAL "30s")
 (define PRESENCE_TIMEOUT_TICKS 10)
 
-; Presence caches. `occupants` contains every visible local actor, while
-; `avatar-occupants` is the person/avatar subset used by who?.
+; Presence is derived from stored ctx claims. `claims` is authoritative room
+; membership; labels and presence keys are only presentation/liveness metadata.
+(define (claims-map) (prop-map "claims"))
+
+(define (set-claims-map! claims) (set-prop! "claims" claims))
+
+(define (claim-key actor)
+  (canonical-actor actor))
+
+(define (room-claim? ctx)
+  (and (actor-ctx-shape? ctx)
+       (same-actor? (child-parent-target ctx) (self))))
+
+(define (claim-ctx actor)
+  (let ((ctx (map-ref (claims-map) (claim-key actor) #f)))
+    (if (map? ctx) ctx #f)))
+
+(define (set-claim! actor ctx)
+  (begin
+    (set-claims-map! (map-set (claims-map) (claim-key actor) ctx))
+    (ma-save-state!)))
+
+(define (remove-claim! actor)
+  (set-claims-map! (map-delete (claims-map) (claim-key actor))))
+
+(define (claim-actors-by-kind kind)
+  (let loop ((keys (map-keys (claims-map)))
+             (acc '()))
+    (cond ((null? keys) (reverse acc))
+          (else
+           (let* ((actor (car keys))
+                  (ctx (claim-ctx actor)))
+             (if (and (room-claim? ctx)
+                      (equal? (ctx-text ctx "kind") kind))
+                 (loop (cdr keys) (cons actor acc))
+                 (loop (cdr keys) acc)))))))
+
 (define (occupants)
-  (let ((xs (get-prop "occupants")))
-    (if xs (unique-actor-entries xs) '())))
+  (let loop ((keys (map-keys (claims-map)))
+             (acc '()))
+    (cond ((null? keys) (unique-actor-entries (reverse acc)))
+          (else
+           (let* ((actor (car keys))
+                  (ctx (claim-ctx actor)))
+             (if (room-claim? ctx)
+                 (loop (cdr keys) (cons actor acc))
+                 (loop (cdr keys) acc)))))))
 
-(define (add-occupant! actor)
-  (if (member-entry? actor (occupants))
-      #f
-      (begin
-        (set-prop! "occupants" (cons (canonical-actor actor) (occupants)))
-        #t)))
-
-(define (remove-occupant! actor)
-  (set-prop! "occupants" (without-entries (occupants) (list actor))))
-
-(define (add-avatar-presence! avatar)
-  (let ((occupant-added (add-occupant! avatar))
-        (avatar-added (add-avatar-occupant! avatar)))
-    (or occupant-added avatar-added)))
+(define (avatar-occupants)
+  (claim-actors-by-kind "avatar"))
 
 (define (label-key actor) (string-append "label:" (canonical-actor actor)))
 
@@ -49,20 +79,6 @@
 (define (has-label? actor)
   (let ((label (get-prop (label-key actor))))
     (non-empty-string? label)))
-
-(define (avatar-occupants)
-  (let ((xs (get-prop "avatar-occupants")))
-    (if xs (unique-actor-entries xs) '())))
-
-(define (add-avatar-occupant! avatar)
-  (if (member-entry? avatar (avatar-occupants))
-      #f
-      (begin
-        (set-prop! "avatar-occupants" (cons (canonical-actor avatar) (avatar-occupants)))
-        #t)))
-
-(define (remove-avatar-occupant! avatar)
-  (set-prop! "avatar-occupants" (without-entries (avatar-occupants) (list avatar))))
 
 ; Presence liveness. Rooms periodically challenge occupants; stale local actors
 ; are removed before they produce repeated delivery failures.
@@ -102,8 +118,7 @@
 
 (define (presence-remove! actor)
   (begin
-    (remove-occupant! actor)
-    (remove-avatar-occupant! actor)
+    (remove-claim! actor)
     (del-prop! (presence-last-report-key actor))
     (del-prop! (presence-last-request-key actor))
     (del-prop! (presence-nonce-key actor))
@@ -380,18 +395,6 @@
 
 (define (set-things-map! m) (set-prop-map! "things" m))
 
-; Claim ctx records agent/thing room-local metadata after direct :enter ctx.
-(define (claim-key actor)
-  (string-append "claim:" (canonical-actor actor)))
-
-(define (set-claim! actor ctx)
-  (set-prop! (claim-key actor) ctx)
-  (ma-save-state!))
-
-(define (claim-ctx actor)
-  (let ((ctx (get-prop (claim-key actor))))
-    (if (map? ctx) ctx #f)))
-
 ; Entry argument helpers. Historical avatar entry forms are still accepted, but
 ; new direct entry uses the ctx map path below.
 (define (entry-old-room args)
@@ -459,11 +462,6 @@
   (let* ((avatar (avatar-for-did did))
          (n (nick-or-default nick)))
     (set-label! avatar n)
-    (if (add-avatar-presence! avatar)
-        (begin
-          (presence-touch! avatar (presence-tick))
-          (broadcast-except avatar (string-append (speaker-name avatar) " arrives.")))
-        #f)
     (ma-save-state!)
     (if (entity-live? avatar)
         avatar
@@ -533,23 +531,46 @@
   (ma-send! (canonical-actor avatar) (list :enter-room (canonical-actor (self)) did (nick-or-default nick) inventory))
   (request-avatar-entry! did nick inventory)))
 
-(define (announce-avatar-presence! avatar)
-  (if (add-avatar-presence! avatar)
-      (broadcast-except avatar (string-append (speaker-name avatar) " arrives."))
-      #f))
+(define (announce-avatar-presence! avatar was-present)
+  (if was-present
+      #f
+      (broadcast-except avatar (string-append (speaker-name avatar) " arrives."))))
+
+(define (avatar-claim-ctx avatar nick inventory)
+  (let ((n (nick-or-default nick))
+        (did (avatar-did avatar)))
+    (map-set
+      (map-set
+        (map-set
+          (map-set
+            (map-set
+              (map-set
+                (map-set
+                  (map-set
+                    (presentation-entry "avatar" AVATAR_KIND avatar n n "An avatar.")
+                    "parent" (canonical-actor (self)))
+                  "room" (canonical-actor (self)))
+                "root" (canonical-actor (root)))
+              "did" (if (valid-did? did) did ""))
+            "avatar" (canonical-actor avatar))
+          "inv" (if (valid-did-url? inventory) (canonical-actor inventory) ""))
+        "text" (arrival-text))
+      "actor" (canonical-actor avatar))))
 
 (define (commit-avatar-entry! avatar old-room nick inventory)
-  (begin
+  (let ((was-present (member-entry? avatar (avatar-occupants))))
     (set-label! avatar nick)
-    (announce-avatar-presence! avatar)
+    (set-claim! avatar (avatar-claim-ctx avatar nick inventory))
+    (announce-avatar-presence! avatar was-present)
     (presence-touch! avatar (presence-tick))
     (ma-save-state!)
     (ma-send! (canonical-actor avatar) (avatar-room-ctx-with-inventory avatar nick (arrival-text) inventory))
     (broadcast-room-ctx!)))
 
 (define (record-avatar-presence! avatar old-room)
-  (begin
-    (announce-avatar-presence! avatar)
+  (let ((was-present (member-entry? avatar (avatar-occupants))))
+    (set-claim! avatar (avatar-claim-ctx avatar (speaker-name avatar) #f))
+    (announce-avatar-presence! avatar was-present)
     (presence-touch! avatar (presence-tick))
     (ma-save-state!)
     #f))
@@ -650,11 +671,11 @@
         (begin
           (set-claim! actor ctx)
           (set-label! actor nick)
-          (if (add-occupant! actor)
+          (if was-known
+              #f
               (begin
                 (presence-touch! actor (presence-tick))
-                (broadcast-except actor (string-append (speaker-name actor) " arrives.")))
-              #f)
+                (broadcast-except actor (string-append (speaker-name actor) " arrives."))))
           (ma-save-state!)
           (ma-send! (canonical-actor actor) (list :child ctx))
           (ma-send! (canonical-actor actor) (direct-room-ctx "agent" nick (arrival-text)))
@@ -705,15 +726,14 @@
            (reply-error msg "avatar parent ctx must include actor, parent, kind, protocol, name, nick, description and match sender"))
           ((not (same-actor? (child-parent-target ctx) (self)))
            (begin
-             (remove-occupant! actor)
-             (remove-avatar-occupant! actor)
+             (remove-claim! actor)
              (ma-save-state!)
              (broadcast-room-ctx!)
              (reply-ok msg)))
           (else
            (begin
              (set-label! actor new-nick)
-             (add-avatar-presence! actor)
+             (set-claim! actor ctx)
              (presence-touch! actor (presence-tick))
              (ma-save-state!)
              (broadcast-room-ctx!)
@@ -733,8 +753,7 @@
            (reply-error msg "child ctx actor must match sender"))
           ((not (same-actor? (child-parent-target ctx) (self)))
            (begin
-             (remove-occupant! actor)
-             (remove-avatar-occupant! actor)
+             (remove-claim! actor)
              (remove-thing! name)
              (ma-save-state!)
              (broadcast-room-ctx!)
@@ -781,8 +800,7 @@
     (if (same-actor? (thing-ref token) actor)
         (remove-thing! token)
         #f)
-    (remove-occupant! actor)
-    (remove-avatar-occupant! actor)
+    (remove-claim! actor)
     (broadcast-room-ctx!)
     (ma-save-state!)))
 
@@ -862,13 +880,9 @@
                  (reply-command-ok msg mediated (string-append "Ambiguous name: " token "\n" (entry-lines lines)))))))))
 
 (define (reconcile-caller-occupant! actor)
-  (cond ((member-entry? actor (occupants)) #f)
-        ((not (has-label? actor)) #f)
-        (else
-         (begin
-           (add-occupant! actor)
-           (presence-touch! actor (presence-tick))
-           (ma-save-state!)))))
+  (if (member-entry? actor (occupants))
+      (presence-touch! actor (presence-tick))
+      #f))
 
 ; Exit state and traversal helpers.
 (define (exits)
@@ -1265,7 +1279,7 @@
              (loop (cdr xs) #t))))))
 
 (define (broadcast text)
-  (let loop ((xs (occupants))
+  (let loop ((xs (avatar-occupants))
              (changed #f))
     (cond ((null? xs)
            (if changed (ma-save-state!) #f))
@@ -1279,7 +1293,7 @@
              (loop (cdr xs) changed))))))
 
 (define (broadcast-except excluded text)
-  (let loop ((xs (occupants))
+  (let loop ((xs (avatar-occupants))
              (changed #f))
     (cond ((null? xs)
            (if changed (ma-save-state!) #f))
@@ -1598,10 +1612,14 @@
             ((equal? (car (cdr thing-args)) "")
              (begin
                (remove-thing! (car thing-args))
+               (ma-save-state!)
+               (broadcast-room-ctx!)
                (reply-ok-with msg "thing alias removed")))
             (else
              (begin
                (set-thing! (car thing-args) (car (cdr thing-args)))
+               (ma-save-state!)
+               (broadcast-room-ctx!)
                (reply-ok-with msg "thing alias set")))))))
 
 (set-cmd-method! :recycle

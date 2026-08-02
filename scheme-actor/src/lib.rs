@@ -95,9 +95,36 @@ mod tests {
         eval_all(include_str!("../state.ma"), &env).unwrap();
         eval_all(include_str!("../../actors/room.ma"), &env).unwrap();
         eval_all(
-            "(define (ma-send! target term) #f) (define (ma-reply! msg term) #f) (define (ma-save-state!) #f) (define (ma-end) (set-prop! \"ended\" \"yes\"))",
-            &env,
-        )
+                        r#"
+                        (define (ma-send! target term) #f)
+                        (define (ma-reply! msg term) #f)
+                        (define (ma-save-state!) #f)
+                        (define (ma-end) (set-prop! "ended" "yes"))
+                        (define (test-actor-claim kind protocol actor nick description)
+                            (map-set
+                                (map-set
+                                    (map-set
+                                        (map-set
+                                            (map-set
+                                                (map-set
+                                                    (map-set (make-map) "actor" actor)
+                                                    "kind" kind)
+                                                "protocol" protocol)
+                                            "parent" (canonical-actor (self)))
+                                        "name" nick)
+                                    "nick" nick)
+                                "description" description))
+                        (define (test-avatar-claim! actor nick)
+                            (begin
+                                (set-label! actor nick)
+                                (set-claim! actor (test-actor-claim "avatar" "/ma/avatar/0.0.1" actor nick "An avatar."))))
+                        (define (test-agent-claim! actor nick)
+                            (begin
+                                (set-label! actor nick)
+                                (set-claim! actor (test-actor-claim "agent" "/ma/agent/0.0.1" actor nick "A test agent."))))
+                        "#,
+                        &env,
+                )
         .unwrap();
         env
     }
@@ -721,6 +748,10 @@ mod tests {
     #[test]
     fn room_presence_uses_labels_and_keeps_who_avatar_only() {
         let env = room_env();
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#room".to_string());
+        crate::state::set_config(config);
         assert_eq!(eval_str("(occupants-text)", &env), "Occupants: none.");
         assert_eq!(eval_str("(who-text)", &env), "Who: none.");
 
@@ -728,26 +759,43 @@ mod tests {
             r#"
                         (define avatar "did:ma:runtime#avatar1")
                         (set-label! avatar "Alice")
-                        (add-occupant! avatar)
-                        (add-avatar-occupant! avatar)
-                        (define rms "did:ma:runtime#rms")
-                        (set-label! rms "rms")
-                        (set-prop! (claim-key rms)
+                        (set-claim! avatar
                             (map-set
                                 (map-set
                                     (map-set
-                                        (map-set (make-map) "kind" "agent")
+                                        (map-set
+                                            (map-set
+                                                (map-set
+                                                    (map-set (make-map) "actor" avatar)
+                                                    "kind" "avatar")
+                                                "protocol" "/ma/avatar/0.0.1")
+                                            "parent" "did:ma:runtime#room")
+                                        "name" "Alice")
+                                    "nick" "Alice")
+                                "description" "An avatar."))
+                        (define rms "did:ma:runtime#rms")
+                        (set-label! rms "rms")
+                        (set-claim! rms
+                            (map-set
+                                (map-set
+                                    (map-set
+                                        (map-set
+                                            (map-set
+                                                (map-set
+                                                    (map-set (make-map) "actor" rms)
+                                                    "kind" "agent")
+                                                "protocol" "/ma/agent/0.0.1")
+                                            "parent" "did:ma:runtime#room")
                                         "name" "Richard Stallman")
                                     "nick" "rms")
                                 "description" "A roaming free software sage."))
-                        (add-occupant! rms)
                         "#,
             &env,
         )
         .unwrap();
 
         assert_eq!(eval_str("(who-text)", &env), "Who: Alice");
-        assert_eq!(eval_str("(occupants-text)", &env), "Occupants: rms, Alice");
+        assert_eq!(eval_str("(occupants-text)", &env), "Occupants: Alice, rms");
         assert!(eval_bool("(movable-occupant? rms)", &env));
         assert!(!eval_bool("(movable-occupant? avatar)", &env));
         assert_eq!(
@@ -798,7 +846,7 @@ mod tests {
             (define alice "did:ma:target#alice")
             (set-prop! "name" "Kitchen")
             (set-label! bob "Bob")
-            (add-avatar-presence! bob)
+            (test-avatar-claim! bob "Bob")
                         (commit-avatar-entry! alice #f "Alice" #f)
             (define (ctx-term-value term key)
               (let loop ((pairs (car (cdr term))))
@@ -1077,6 +1125,55 @@ mod tests {
     }
 
     #[test]
+    fn room_thing_alias_change_broadcasts_room_ctx_to_avatars() {
+        let env = room_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#room".to_string());
+        crate::state::set_config(config);
+        eval_all(
+            r#"
+            (set-prop! "owner" "did:ma:owner")
+            (test-avatar-claim! "did:ma:runtime#avatar" "Avatar")
+            "#,
+            &env,
+        )
+        .unwrap();
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:owner",
+                "did:ma:runtime#room",
+                Value::symbol(":thing"),
+            )),
+        );
+
+        eval_all(
+            "((find-method :thing) (list \"Aladdins lampe\" \"did:ma:runtime#lamp\") msg)",
+            &env,
+        )
+        .unwrap();
+
+        assert_eq!(eval_str("(things-text)", &env), "Things: Aladdins lampe");
+        assert_eq!(
+            eval_str("(get-prop \"sent-target:1\")", &env),
+            "did:ma:runtime#avatar"
+        );
+        assert_eq!(
+            eval_str(
+                "(ctx-text (car (cdr (get-prop \"sent-term:1\"))) \"actor\")",
+                &env
+            ),
+            "did:ma:runtime#room"
+        );
+        assert_eq!(
+            eval_str("(ctx-text (car (map-ref (car (cdr (get-prop \"sent-term:1\"))) \"things\" '())) \"actor\")", &env),
+            "did:ma:runtime#lamp"
+        );
+    }
+
+    #[test]
     fn room_look_with_argument_does_not_dispatch_to_visible_target() {
         let env = room_env();
         install_send_reply_recorders(&env);
@@ -1266,7 +1363,7 @@ mod tests {
             (define owner-avatar (avatar-for-did owner-did))
             (set-avatar-did! owner-avatar owner-did)
             (set-label! owner-avatar "Pondus")
-            (add-avatar-presence! owner-avatar)
+            (test-avatar-claim! owner-avatar "Pondus")
             "#,
             &env,
         )
@@ -1301,7 +1398,7 @@ mod tests {
         eval_all(
             r#"
             (set-label! "did:ma:runtime#rms" "rms")
-            (add-occupant! "did:ma:runtime#rms")
+            (test-agent-claim! "did:ma:runtime#rms" "rms")
             (on-event :leave-occupant '() msg)
             "#,
             &env,
@@ -1323,7 +1420,7 @@ mod tests {
             (set-prop! "owner" "did:ma:owner")
             (define avatar "did:ma:runtime#avatar")
             (set-label! avatar "Alice")
-            (add-avatar-presence! avatar)
+            (test-avatar-claim! avatar "Alice")
             (presence-touch! avatar 1)
             "#,
             &env,
@@ -1347,7 +1444,7 @@ mod tests {
             "Alice"
         );
 
-        eval_all("(add-avatar-presence! avatar)", &env).unwrap();
+        eval_all("(test-avatar-claim! avatar \"Alice\")", &env).unwrap();
 
         assert_eq!(eval_str("(who-text)", &env), "Who: Alice");
     }
@@ -1370,8 +1467,8 @@ mod tests {
             (define donald-2 "did:ma:runtime#donald2")
             (set-label! donald-1 "Donald Duck")
             (set-label! donald-2 "Donald Duck")
-            (add-avatar-presence! donald-1)
-            (add-avatar-presence! donald-2)
+            (test-avatar-claim! donald-1 "Donald Duck")
+            (test-avatar-claim! donald-2 "Donald Duck")
             "#,
             &env,
         )
@@ -1427,7 +1524,7 @@ mod tests {
             (set-prop! "owner" "did:ma:owner")
             (define avatar "did:ma:runtime#avatar")
             (set-label! avatar "Alice")
-            (add-avatar-presence! avatar)
+            (test-avatar-claim! avatar "Alice")
             (set-thing! "lamp" "did:ma:runtime#lamp")
             "#,
             &env,
@@ -1469,13 +1566,13 @@ mod tests {
             (define donald-2 "did:ma:runtime#donald2")
             (set-label! donald-1 "Donald Duck")
             (set-label! donald-2 "Donald Duck")
-            (add-avatar-presence! donald-1)
-            (add-avatar-presence! donald-2)
+            (test-avatar-claim! donald-1 "Donald Duck")
+            (test-avatar-claim! donald-2 "Donald Duck")
             (set-thing! "lamp" "did:ma:runtime#lamp")
             (put-exit! "down" "did:ma:runtime#down-exit")
             (define cloud-avatar "did:ma:runtime#cloud-avatar")
             (set-label! cloud-avatar "cloud")
-            (add-avatar-presence! cloud-avatar)
+            (test-avatar-claim! cloud-avatar "cloud")
             (set-thing! "cloud" "did:ma:runtime#cloud-thing")
             (put-exit! "cloud" "did:ma:runtime#cloud-exit")
             "#,
@@ -1522,7 +1619,7 @@ mod tests {
             Value::list(vec![
                 Value::symbol(":ok"),
                 Value::str(
-                    "Ambiguous name: Donald Duck\noccupant Donald Duck = did:ma:runtime#donald2\noccupant Donald Duck = did:ma:runtime#donald1",
+                    "Ambiguous name: Donald Duck\noccupant Donald Duck = did:ma:runtime#donald1\noccupant Donald Duck = did:ma:runtime#donald2",
                 ),
             ])
         );
@@ -1571,10 +1668,10 @@ mod tests {
             (define (ma-entity-exists? actor) #t)
                         (define avatar "did:ma:runtime#avatar")
                         (set-label! avatar "Avatar")
-                        (add-avatar-presence! avatar)
+                        (test-avatar-claim! avatar "Avatar")
             (define duckie "did:ma:runtime#duckie")
             (set-label! duckie "Duckie")
-            (add-avatar-presence! duckie)
+            (test-avatar-claim! duckie "Duckie")
             "#,
             &env,
         )
@@ -1596,6 +1693,65 @@ mod tests {
             Value::list(vec![
                 Value::symbol(":ok"),
                 Value::str("Duckie = did:ma:runtime#duckie"),
+            ])
+        );
+    }
+
+    #[test]
+    fn room_broadcast_uses_avatar_presence_not_stale_occupants() {
+        let env = room_env();
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#room".to_string());
+        crate::state::set_config(config);
+        install_send_reply_recorders(&env);
+        eval_all(
+            r#"
+            (define stale "did:ma:runtime#stale-avatar")
+            (define present "did:ma:runtime#present-avatar")
+            (define (ma-entity-exists? actor) #t)
+            (set-label! stale "Gone")
+            (set-label! present "Here")
+            (set-prop! (presence-last-report-key stale) 1)
+            (set-claim! present
+                (map-set
+                    (map-set
+                        (map-set
+                            (map-set
+                                (map-set
+                                    (map-set
+                                        (map-set (make-map) "actor" present)
+                                        "kind" "avatar")
+                                    "protocol" "/ma/avatar/0.0.1")
+                                "parent" "did:ma:runtime#room")
+                            "name" "Here")
+                        "nick" "Here")
+                    "description" "An avatar."))
+            "#,
+            &env,
+        )
+        .unwrap();
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:runtime#duckie",
+                "did:ma:runtime#room",
+                Value::symbol(":say"),
+            )),
+        );
+
+        eval_all("((find-method :say) (list \"quack\") msg)", &env).unwrap();
+
+        assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 1);
+        assert_eq!(
+            eval_str("(get-prop \"sent-target:1\")", &env),
+            "did:ma:runtime#present-avatar"
+        );
+        assert_eq!(
+            eval_all("(get-prop \"sent-term:1\")", &env).unwrap(),
+            Value::list(vec![
+                Value::symbol(":print"),
+                Value::str("did:ma:runtime#duckie says: quack"),
             ])
         );
     }
@@ -1724,7 +1880,7 @@ mod tests {
               (set-prop! (string-append "sent-term:" (number->string (get-prop "sent-count"))) term))
             (define avatar "did:ma:runtime#avatar")
             (set-label! avatar "Avatar")
-            (add-avatar-presence! avatar)
+            (test-avatar-claim! avatar "Avatar")
             (set-thing! "Shrugger" "did:ma:runtime#0d2b5070fc6c3412")
             "#,
             &env,
@@ -1768,7 +1924,7 @@ mod tests {
             (define (ma-entity-exists? actor) #t)
             (define avatar "did:ma:runtime#avatar")
             (set-label! avatar "Alice")
-            (add-avatar-presence! avatar)
+            (test-avatar-claim! avatar "Alice")
             (presence-request! avatar 1 "n1")
             "#,
             &env,
@@ -1808,7 +1964,7 @@ mod tests {
             (define (ma-entity-exists? actor) #t)
             (define avatar "did:ma:runtime#avatar")
             (set-label! avatar "Alice")
-            (add-avatar-presence! avatar)
+            (test-avatar-claim! avatar "Alice")
             (set-prop! "presence:tick" 10)
             "#,
             &env,
@@ -1846,7 +2002,8 @@ mod tests {
               (set-prop! (string-append "sent-term:" (number->string (get-prop "sent-count"))) term))
             (define avatar "did:ma:runtime#avatar")
             (set-label! avatar "Alice")
-            (add-avatar-presence! avatar)
+            (test-avatar-claim! avatar "Alice")
+            (set-prop! "save-count" 0)
             "#,
             &env,
         )
@@ -2069,7 +2226,7 @@ mod tests {
                         (define avatar "did:ma:runtime#avatar")
                         (define (ma-entity-exists? actor) #t)
                         (set-label! avatar "Bar")
-                        (add-avatar-presence! avatar)
+                        (test-avatar-claim! avatar "Bar")
                         "#,
             &env,
         )
@@ -2429,16 +2586,7 @@ mod tests {
         eval_all(
             r#"
             (define rms "did:ma:runtime#rms")
-            (set-label! rms "rms")
-            (set-claim! rms
-              (map-set
-                (map-set
-                  (map-set
-                    (map-set (make-map) "kind" "agent")
-                    "name" "Richard Stallman")
-                  "nick" "rms")
-                "description" "A roaming free software sage."))
-            (add-occupant! rms)
+                        (test-agent-claim! rms "rms")
             (put-exit! "north" "did:ma:runtime#north-exit")
             (define (ma-entity-exists? actor) #t)
             ((find-method :move) '() msg)
@@ -3433,7 +3581,7 @@ mod tests {
     }
 
     #[test]
-    fn avatar_take_visible_actor_uses_room_ctx_without_room_take() {
+    fn avatar_take_visible_actor_resolves_whole_visible_words() {
         let env = avatar_env();
         let did = "did:ma:did";
         let mut config = std::collections::HashMap::new();
@@ -3509,6 +3657,129 @@ mod tests {
                 Value::str("did:ma:did"),
                 Value::str(eval_str(&format!(r#"(inventory-for-did "{did}")"#), &env)),
                 eval_all("(room-ctx-ref \"Aladdins lampe\")", &env).unwrap(),
+            ]),
+        );
+
+        env.define(
+            Rc::from("take_aladdins_msg"),
+            Value::Msg(sample_term_msg(
+                did,
+                "did:ma:runtime#avatar",
+                Value::list(vec![Value::symbol(":take"), Value::str("Aladdins")]),
+            )),
+        );
+        eval_all("(on-message take_aladdins_msg)", &env).unwrap();
+        assert_eq!(
+            eval_str("(get-prop \"sent-target:2\")", &env),
+            "did:ma:runtime#lamp"
+        );
+
+        env.define(
+            Rc::from("take_lampe_msg"),
+            Value::Msg(sample_term_msg(
+                did,
+                "did:ma:runtime#avatar",
+                Value::list(vec![Value::symbol(":take"), Value::str("lampe")]),
+            )),
+        );
+        eval_all("(on-message take_lampe_msg)", &env).unwrap();
+        assert_eq!(
+            eval_str("(get-prop \"sent-target:3\")", &env),
+            "did:ma:runtime#lamp"
+        );
+
+        env.define(
+            Rc::from("take_lamp_msg"),
+            Value::Msg(sample_term_msg(
+                did,
+                "did:ma:runtime#avatar",
+                Value::list(vec![Value::symbol(":take"), Value::str("lamp")]),
+            )),
+        );
+        eval_all("(on-message take_lamp_msg)", &env).unwrap();
+        assert_eq!(eval_str("(get-prop \"sent-target:4\")", &env), "did:ma:did");
+        assert_eq!(
+            eval_all("(get-prop \"sent-term:4\")", &env).unwrap(),
+            Value::list(vec![
+                Value::symbol(":print"),
+                Value::str("Unknown visible agent or thing: lamp"),
+            ]),
+        );
+    }
+
+    #[test]
+    fn avatar_take_visible_word_reports_ambiguous_matches() {
+        let env = avatar_env();
+        let did = "did:ma:did";
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        crate::state::set_config(config.clone());
+
+        let avatar_id = eval_str(&format!(r#"(avatar-fragment "{did}")"#), &env);
+        config.insert("self".to_string(), format!("did:ma:runtime#{avatar_id}"));
+        config.insert("id".to_string(), avatar_id);
+        crate::state::set_config(config);
+
+        eval_all(
+            r#"
+                        (set-prop! "did" "did:ma:did")
+                        (set-prop! "room" "did:ma:runtime#room")
+                        (define (visible-thing actor nick)
+                            (map-set
+                                (map-set
+                                    (map-set
+                                        (map-set
+                                            (map-set
+                                                (map-set (make-map)
+                                                    "actor" actor)
+                                                "kind" "thing")
+                                            "protocol" "/ma/thing/0.0.1")
+                                        "name" actor)
+                                    "nick" nick)
+                                "description" nick))
+                        (remember-room-ctx!
+                            (map-set
+                                (map-set
+                                    (map-set
+                                        (map-set
+                                            (map-set
+                                                (map-set
+                                                    (map-set
+                                                        (map-set
+                                                            (map-set (make-map)
+                                                                "protocol" "/ma/room/0.0.1")
+                                                            "kind" "room")
+                                                        "actor" "did:ma:runtime#room")
+                                                    "parent" "did:ma:runtime#root")
+                                                "rev" 1)
+                                            "name" "Kitchen")
+                                        "nick" "Kitchen")
+                                    "description" "A practical kitchen.")
+                                "things"
+                                    (list
+                                        (visible-thing "did:ma:runtime#red-lamp" "red lampe")
+                                        (visible-thing "did:ma:runtime#blue-lamp" "blue lampe"))))
+                        "#,
+            &env,
+        )
+        .unwrap();
+
+        env.define(
+            Rc::from("take_msg"),
+            Value::Msg(sample_term_msg(
+                did,
+                "did:ma:runtime#avatar",
+                Value::list(vec![Value::symbol(":take"), Value::str("lampe")]),
+            )),
+        );
+        eval_all("(on-message take_msg)", &env).unwrap();
+
+        assert_eq!(eval_str("(get-prop \"sent-target:1\")", &env), "did:ma:did");
+        assert_eq!(
+            eval_all("(get-prop \"sent-term:1\")", &env).unwrap(),
+            Value::list(vec![
+                Value::symbol(":print"),
+                Value::str("Ambiguous visible agent or thing: lampe"),
             ]),
         );
     }
@@ -6165,7 +6436,7 @@ mod tests {
             (set-prop! "owner" "did:ma:did")
             (define owner-avatar (avatar-for-did "did:ma:did"))
             (set-label! owner-avatar "me")
-            (add-avatar-presence! owner-avatar)
+            (test-avatar-claim! owner-avatar "me")
                         (define (ma-entity-exists? actor) (same-actor? actor owner-avatar))
             (define (ma-create-actor kind behaviour init fragment)
               (inc-prop! "created-count" 1)

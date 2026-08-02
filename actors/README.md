@@ -7,13 +7,15 @@ DID principal's avatar DID-URL from the bare DID via the runtime-scoped entity-f
 derivation, creates the avatar only if absent, and otherwise only returns the
 avatar DID-URL.
 
-Rooms keep a local `occupants` cache for broadcast and room-local presentation.
-That cache is derived state, not authority. `parent` alone is not room
-presence; a movable actor is present only after it sends the room `:enter`.
+Rooms store authoritative occupant ctx claims and derive room-local presentation
+lists from those claims when needed. There is no separate maintained occupants
+or avatar-presence list for broadcast, `who`, or `look`. `parent` alone is not
+room presence; a movable actor is present only after it sends the room `:enter`
+and the room stores the accepted ctx claim.
 
 Actors do not have to be root-tracked occupants to speak. Any actor that knows
 the room DID-URL can send `:say` or `:emote`; the room broadcasts the text to
-the current room-local occupants.
+the avatars derived from current room-local ctx claims.
 
 Only actors are nodes in the parent tree. A bare DID principal is a controller,
 owner, and authorisation subject, not an embodied world actor. User presence in
@@ -116,7 +118,7 @@ Canonical parent-change flow:
 4. New parent rejects, or returns/acknowledges accepted ctx.
 5. On acceptance, self commits `parent = new_parent`.
 6. Self sends departure or ctx cleanup to old parent.
-7. Old parent clears derived caches.
+7. Old parent removes or updates the ctx record it holds for self.
 
 A ctx announcement is self-authenticating when `msg.from` is the actor described
 by the ctx. Ctx forwarded by a different actor is input, not proof of self's

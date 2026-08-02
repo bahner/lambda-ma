@@ -395,9 +395,12 @@
       (if (take-has-source? args)
          (ma-send! (canonical-actor source) (list :take (did) token carrier))
          (let ((entry (room-ctx-ref token)))
-           (if entry
-               (ma-send! (canonical-actor (ctx-text entry "actor")) (list :take (did) carrier entry))
-               (send-did-text (string-append "Unknown visible agent or thing: " token))))))
+           (cond ((equal? entry :ambiguous)
+                  (send-did-text (string-append "Ambiguous visible agent or thing: " token)))
+                 (entry
+                  (ma-send! (canonical-actor (ctx-text entry "actor")) (list :take (did) carrier entry)))
+                 (else
+                  (send-did-text (string-append "Unknown visible agent or thing: " token)))))))
       (else
        (send-did-text "You are nowhere.")))))
 
@@ -504,20 +507,38 @@
 (define (room-ctx-entry-matches? token entry)
   (and (map? entry)
        (or (inventory-label-matches? token (ctx-text entry "actor"))
-           (inventory-label-matches? token (ctx-text entry "name"))
            (inventory-label-matches? token (ctx-text entry "nick"))
            (inventory-label-matches? token (ctx-text entry "direction")))))
 
+(define (room-ctx-same-entry? a b)
+  (and (map? a)
+       (map? b)
+       (same-actor? (ctx-text a "actor") (ctx-text b "actor"))))
+
+(define (room-ctx-merge-found current candidate)
+  (cond ((not candidate) current)
+        ((not current) candidate)
+        ((equal? current :ambiguous) :ambiguous)
+        ((room-ctx-same-entry? current candidate) current)
+        (else :ambiguous)))
+
 (define (room-ctx-find-entry-in token entries)
-  (cond ((null? entries) #f)
-        ((room-ctx-entry-matches? token (car entries)) (car entries))
-        (else (room-ctx-find-entry-in token (cdr entries)))))
+  (let loop ((rest entries)
+             (found #f))
+    (cond ((null? rest) found)
+          ((equal? found :ambiguous) :ambiguous)
+          ((room-ctx-entry-matches? token (car rest))
+           (loop (cdr rest) (room-ctx-merge-found found (car rest))))
+          (else (loop (cdr rest) found)))))
 
 (define (room-ctx-find-entry token ctx keys)
   (if (null? keys)
       #f
       (let ((found (room-ctx-find-entry-in token (map-ref ctx (car keys) '()))))
-        (if found found (room-ctx-find-entry token ctx (cdr keys))))))
+        (cond ((equal? found :ambiguous) :ambiguous)
+              (found
+               (room-ctx-merge-found found (room-ctx-find-entry token ctx (cdr keys))))
+              (else (room-ctx-find-entry token ctx (cdr keys)))))))
 
 (define (room-ctx-ref token)
   (let ((ctx (stored-room-ctx)))
@@ -584,9 +605,12 @@
             (cond (entry (look-carried-entry entry))
                   (token
                    (let ((visible (room-ctx-ref token)))
-                     (if visible
-                         (look-room-ctx-entry visible token)
-                         (send-did-text (string-append "You do not see " token " here.")))))
+                     (cond ((equal? visible :ambiguous)
+                        (send-did-text (string-append "Ambiguous visible agent or thing: " token)))
+                         (visible
+                        (look-room-ctx-entry visible token))
+                         (else
+                        (send-did-text (string-append "You do not see " token " here."))))))
                   (else (send-room :look args))))
           (reply-ok-silent msg)))))
 
@@ -620,7 +644,13 @@
 (define (inventory-label-matches? token label)
   (and (non-empty-string? token)
        (non-empty-string? label)
-       (equal? (string-downcase token) (string-downcase label))))
+       (or (equal? (string-downcase token) (string-downcase label))
+           (string-list-member? (string-downcase token) (string-split (string-downcase label) " ")))))
+
+(define (string-list-member? token xs)
+  (cond ((null? xs) #f)
+        ((equal? token (car xs)) #t)
+        (else (string-list-member? token (cdr xs)))))
 
 (define (inventory-entry-actor entry)
   (let* ((actor (canonical-actor (car entry)))
