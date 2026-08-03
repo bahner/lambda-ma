@@ -127,6 +127,11 @@
       (inc-prop! "ctx:rev" 1)
       (ma-save-state!)))
 
+  (define (node-confirmation-stale? ctx)
+    (let ((confirmed-rev (map-ref ctx "rev" #f)))
+      (and (number? confirmed-rev)
+           (< confirmed-rev (container-ctx-rev)))))
+
   (define (node-children-query-error msg)
     (if (locked?) (locked-message) #f))
 

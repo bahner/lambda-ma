@@ -79,6 +79,9 @@ When a concrete room target is available, enter is room-first.
 Compatibility path:
 
 - Root `:enter` still exists and may be used when only runtime target is known.
+   Direct avatar entry may include the full inventory DID-URL from the client's
+   last accepted avatar ctx so a remote claim/bootstrap entry preserves the
+   inventory baton.
 - For an existing avatar, root asks the avatar to send its current ctx to the
    DID principal. Root must not send messages to rooms.
 
@@ -339,6 +342,12 @@ old-parent cleanup when there was no parent change. A parent still answers every
 valid repeated `:parent <ctx>` with `:child <ctx>`, so a lost confirmation can be
 repaired while an exact response-to-response exchange terminates.
 
+For ctx kinds with a monotone revision, a confirmation below the actor's current
+authoritative revision is a stale acknowledgement. The actor returns `:ok`
+without rolling state back, incrementing the revision, or sending another
+`:parent`. Delayed confirmations therefore drain instead of starting a new
+response-to-response exchange.
+
 This is a consequence of the Hewitt actor delivery model used by lambda-ma.
 Actors cannot know whether a previous message or its reply was delivered. A
 sender may therefore repeat the same request indefinitely. Receivers MUST treat
@@ -515,7 +524,7 @@ Key verbs:
 
 | Verb | Args | Notes |
 | --- | --- | --- |
-| `:enter` | `[room? nick?]` | Compatibility path when no concrete room target is available. Creates caller avatar if absent, or asks an existing avatar to send its current ctx to the DID principal. Root does not message rooms. |
+| `:enter` | `[room? nick? inventory?]` | Compatibility path when no concrete room target is available. Creates caller avatar if absent, or asks an existing avatar to send its current ctx to the DID principal. A valid full inventory DID-URL is forwarded to the avatar before it publishes ctx. Root does not message rooms. |
 | `:avatar?` | none | Returns caller avatar, creating if needed in the configured start room. |
 
 ### 6.2 avatar actor

@@ -137,7 +137,10 @@ When documenting or changing behaviour, keep these contracts aligned:
   that differs from its current authoritative parent-facing ctx and sends the
   resulting ctx back with `:parent`. If the confirmation already exactly
   matches that ctx, the child treats it as successful and replies without
-  sending another `:parent`; this terminates the acknowledgement exchange.
+  sending another `:parent`; this terminates the acknowledgement exchange. If
+  the ctx kind has a monotone revision, a lower-revision confirmation is stale:
+  reply successfully without rolling state back, incrementing the revision, or
+  sending another `:parent`.
 - Hewitt actor delivery and retries: actors cannot infer whether an earlier
   message or reply was delivered. Lost messages and repeated requests are
   normal protocol conditions, not evidence of misuse. Valid ctx and

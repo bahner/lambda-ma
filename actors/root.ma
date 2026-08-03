@@ -38,6 +38,10 @@
         ((null? (cdr args)) #f)
         (else (car (cdr args)))))
 
+(define (requested-inventory args)
+  (let ((inventory (arg-at-or-false args (if (delegated-enter? args) 3 2))))
+    (if (valid-did-url? inventory) (canonical-actor inventory) #f)))
+
 (define (delegated-enter? args)
   (and (not (null? args)) (string-prefix? "did:ma:" (car args))))
 
@@ -46,25 +50,31 @@
 
 ; Avatar creation is asynchronous. The init code asks the room to admit the
 ; avatar; the room later sends committed ctx back to the avatar.
-(define (avatar-init did nick room)
+(define (avatar-init did nick room inventory)
   (let ((n (nick-or-default nick))
         (r (local-self))
         (avatar (avatar-for-did did))
-        (target-room (canonical-actor room)))
+        (target-room (canonical-actor room))
+        (inv (if (valid-did-url? inventory) (canonical-actor inventory) "")))
     (string-append
       "(set-prop! \"did\" \"" did "\")\n"
       "(set-prop! \"root\" \"" r "\")\n"
       "(set-prop! \"nick\" \"" n "\")\n"
+      (if (equal? inv "") "" (string-append "(set-prop! \"inventory\" \"" inv "\")\n"))
       "(ma-save-state!)\n"
-      "(ma-send! \"" target-room "\" (list :enter \"" avatar "\" #f \"" n "\"))\n")))
+      "(ma-send! \"" target-room "\" (list :enter \"" avatar "\" #f \"" n "\" \"" inv "\"))\n")))
 
-(define (ensure-avatar did nick room)
+(define (ensure-avatar did nick room inventory)
   (let ((avatar (avatar-for-did did)))
     (if (entity-live? avatar)
         (begin
-          (ma-send! (canonical-actor avatar) (list :enter-room (canonical-actor room) did (nick-or-default nick)))
+          (ma-send! (canonical-actor avatar)
+            (list :enter-room (canonical-actor room) did (nick-or-default nick) inventory))
           avatar)
-        (entity-url (ma-create-actor AVATAR_KIND #f (avatar-init did nick room) (avatar-fragment did))))))
+        (entity-url
+          (ma-create-actor AVATAR_KIND #f
+            (avatar-init did nick room inventory)
+            (avatar-fragment did))))))
 
 ; Public entry methods.
 (set-cmd-method! :enter
@@ -72,12 +82,13 @@
     (let* ((did (entry-did args msg))
            (room (entry-room (requested-room args)))
            (nick (nick-or-default (requested-nick args)))
-           (avatar (ensure-avatar did nick room)))
+          (inventory (requested-inventory args))
+          (avatar (ensure-avatar did nick room inventory)))
       (ma-reply! msg (list :ok avatar)))))
 
 (set-rpc-method! :avatar?
   (lambda (args msg)
     (let* ((did (msg-from msg))
            (room (ensure-start-room))
-           (avatar (ensure-avatar did #f room)))
+           (avatar (ensure-avatar did #f room #f)))
       (ma-reply! msg (list :ok avatar)))))

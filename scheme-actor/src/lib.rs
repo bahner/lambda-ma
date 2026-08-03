@@ -242,6 +242,29 @@ mod tests {
         env
     }
 
+    fn root_actor_env() -> Rc<Env> {
+        crate::state::load_from_cbor(&empty_state_cbor()).unwrap();
+        let env = new_root_env();
+        crate::state::install(&env);
+        crate::msg::install(&env);
+        eval_all(include_str!("../stdlib.ma"), &env).unwrap();
+        eval_all(include_str!("../actor.ma"), &env).unwrap();
+        eval_all(include_str!("../state.ma"), &env).unwrap();
+        eval_all(include_str!("../node.ma"), &env).unwrap();
+        eval_all(include_str!("../../actors/root.ma"), &env).unwrap();
+        eval_all(
+            r#"
+            (define (ma-send! target term)
+              (set-prop! "sent-target" target)
+              (set-prop! "sent-term" term))
+            (define (ma-save-state!) #f)
+            "#,
+            &env,
+        )
+        .unwrap();
+        env
+    }
+
     fn exit_env() -> Rc<Env> {
         crate::state::load_from_cbor(&empty_state_cbor()).unwrap();
         let env = new_root_env();
@@ -5678,6 +5701,51 @@ mod tests {
     }
 
     #[test]
+    fn container_stops_when_current_parent_confirms_stale_ctx() {
+        let env = container_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#inventory".to_string());
+        crate::state::set_config(config);
+
+        eval_all(
+            r#"
+            (set-prop! "parent" "did:ma:runtime#avatar")
+            (set-prop! "name" "Inventory")
+            (set-prop! "nick" "inventory")
+            (set-prop! "description" "A personal inventory container.")
+            (set-prop! "ctx:rev" 8)
+            "#,
+            &env,
+        )
+        .unwrap();
+        let stale_ctx = eval_all(
+            r#"(map-set (container-ctx-for-parent "did:ma:runtime#avatar") "rev" 7)"#,
+            &env,
+        )
+        .unwrap();
+        env.define(Rc::from("stale_ctx"), stale_ctx);
+        env.define(
+            Rc::from("parent_msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:runtime#avatar",
+                "did:ma:runtime#inventory",
+                Value::symbol(":child"),
+            )),
+        );
+
+        eval_all("((find-method :child) (list stale_ctx) parent_msg)", &env).unwrap();
+
+        assert!(eval_bool("(not (has-prop? \"sent-count\"))", &env));
+        assert_eq!(eval_int("(container-ctx-rev)", &env), 8);
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
+            Value::symbol(":ok")
+        );
+    }
+
+    #[test]
     fn thing_accepts_owner_avatar_drop_delegation() {
         let env = thing_env();
         install_send_reply_recorders(&env);
@@ -7713,6 +7781,74 @@ mod tests {
             expected_fragment
         );
         assert!(eval_bool("(not (has-prop? \"pending-take\"))", &env));
+    }
+
+    #[test]
+    fn avatar_start_preserves_supplied_cross_runtime_inventory() {
+        let env = avatar_env();
+        let inventory = "did:ma:source-runtime#inventory";
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:target-runtime".to_string());
+        config.insert(
+            "self".to_string(),
+            "did:ma:target-runtime#avatar".to_string(),
+        );
+        crate::state::set_config(config);
+
+        eval_all(
+            &format!(
+                r#"
+                (define (ma-create-actor kind behaviour init fragment)
+                  (set-prop! "created-fragment" fragment)
+                  fragment)
+                (set-prop! "inventory" "{inventory}")
+                (on-signal (list :start))
+                "#
+            ),
+            &env,
+        )
+        .unwrap();
+
+        assert_eq!(eval_str("(get-prop \"inventory\")", &env), inventory);
+        assert!(!eval_bool("(has-prop? \"created-fragment\")", &env));
+    }
+
+    #[test]
+    fn root_entry_forwards_supplied_cross_runtime_inventory() {
+        let env = root_actor_env();
+        let inventory = "did:ma:source-runtime#inventory";
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:target-runtime".to_string());
+        config.insert("self".to_string(), "did:ma:target-runtime#root".to_string());
+        crate::state::set_config(config);
+
+        assert_eq!(
+            eval_str(
+                &format!(r#"(requested-inventory (list "" "" "{inventory}"))"#),
+                &env,
+            ),
+            inventory
+        );
+
+        eval_all(
+            &format!(
+                r#"
+                (define (ma-entity-exists? actor) #t)
+                (ensure-avatar "did:ma:owner" "Owner" "did:ma:target-runtime#room" "{inventory}")
+                "#
+            ),
+            &env,
+        )
+        .unwrap();
+
+        assert_eq!(
+            eval_all(
+                "(car (cdr (cdr (cdr (cdr (get-prop \"sent-term\"))))))",
+                &env
+            )
+            .unwrap(),
+            Value::str(inventory)
+        );
     }
 
     #[test]
