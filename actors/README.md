@@ -93,9 +93,11 @@ to that bare DID in the init text. To create a thing the avatar is holding, set
 room DID-URL.
 
 For common cases, avatars also provide `conjure thing|container|agent named
-<name>`. This convenience form builds init text with `name`, `owner` (the
-controlling DID), and `parent` (the avatar inventory DID-URL), then saves
-state.
+<name> [in <parent>]`. This convenience form builds init text with `name`,
+`owner` (the controlling DID), and `parent`, then saves state. Parent defaults
+to the avatar inventory. The optional postfix accepts a carried or room-visible
+container resolved through the same lookup surface as `look`, or the current
+room DID-URL.
 
 `parent` is hierarchy, not intrinsically location. If a duck is inside a chest,
 the duck may store the chest as its parent, but a dog may likewise parent its

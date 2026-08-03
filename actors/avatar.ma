@@ -819,16 +819,41 @@
 (define (conjure-kind kind)
   (conjure-kind-from-map CONJURE_KIND_MAP kind))
 
-(define (conjure-init name)
+(define (conjure-in-split args)
+  (if (null? args)
+      #f
+      (let ((later (conjure-in-split (cdr args))))
+        (cond (later
+               (list (cons (car args) (car later)) (car (cdr later))))
+              ((and (equal? (car args) "in") (not (null? (cdr args))))
+               (list '() (cdr args)))
+              (else #f)))))
+
+(define (conjure-parent-ref token)
+  (let ((carried (inventory-ref token))
+        (visible (room-ctx-ref token))
+        (current-room (room)))
+    (cond ((and carried (equal? (ctx-text (cdr carried) "kind") "container"))
+           (inventory-entry-actor carried))
+          ((equal? visible :ambiguous) :ambiguous)
+          ((and (map? visible)
+                (equal? (ctx-text visible "kind") "container")
+                (valid-did-url? (ctx-text visible "actor")))
+           (canonical-actor (ctx-text visible "actor")))
+          ((and current-room (same-actor? token current-room))
+           (canonical-actor current-room))
+          (else #f))))
+
+(define (conjure-init name parent)
   (let ((creator (did))
-        (parent (qualified-actor (inventory-actor))))
+        (qualified-parent (qualified-actor parent)))
     (if (and (non-empty-string? creator)
-             (non-empty-string? parent)
+             (non-empty-string? qualified-parent)
              (non-empty-string? name))
         (string-append
           "(set-init-prop! \"name\" \"" name "\")\n"
           "(set-init-prop! \"owner\" \"" creator "\")\n"
-          "(set-init-prop! \"parent\" \"" parent "\")\n"
+          "(set-init-prop! \"parent\" \"" qualified-parent "\")\n"
           "(ma-save-state!)\n")
         #f)))
 
@@ -857,23 +882,37 @@
                  (null? (cdr args))
                  (null? (cdr (cdr args)))
                  (not (equal? (car (cdr args)) "named")))
-             (reply-error msg "Usage: conjure thing|container|agent named <name>"))
+               (reply-error msg "Usage: conjure thing|container|agent named <name> [in <parent>]"))
             (else
-             (let ((kind (conjure-kind (car args)))
-                   (name (join-words (cdr (cdr args)))))
+                  (let* ((kind (conjure-kind (car args)))
+                    (name-and-parent (conjure-in-split (cdr (cdr args))))
+                    (name-args (if name-and-parent
+                    (car name-and-parent)
+                    (cdr (cdr args))))
+                    (parent-args (if name-and-parent
+                      (car (cdr name-and-parent))
+                      '()))
+                    (name (join-words name-args))
+                    (parent-token (if (null? parent-args) #f (join-words parent-args))))
                (cond ((not kind)
                       (reply-error msg "conjure kind must be thing, container, or agent"))
                      ((not (non-empty-string? name))
                       (reply-error msg "conjure name must be non-empty"))
                      (else
-                      (let ((inventory (ensure-inventory!)))
-                        (if (not (valid-did-url? inventory))
-                            (reply-error msg "conjure requires a valid inventory parent")
-                            (let* ((init (conjure-init name))
+                 (let ((parent (if parent-token
+                         (conjure-parent-ref parent-token)
+                         (ensure-inventory!))))
+                   (cond ((equal? parent :ambiguous)
+                     (reply-error msg (string-append "Ambiguous visible parent: " parent-token)))
+                    ((not (valid-did-url? parent))
+                     (reply-error msg (string-append "Unknown visible container or room: "
+                                (if parent-token parent-token "inventory"))))
+                    (else
+                     (let* ((init (conjure-init name parent))
                                    (fragment (ma-create-actor kind #f init #f))
                                    (actor (entity-url fragment)))
-                              (send-did-text (string-append "Conjure requested: " actor "."))
-                              (reply-ok-with msg actor))))))))))))
+                       (send-did-text (string-append "Conjure requested: " actor "."))
+                       (reply-ok-with msg actor)))))))))))))
 
 (define (reply-ok-silent msg)
   (reply-ok msg))
@@ -893,7 +932,7 @@
     "  did? [kind] <name> show the DID for a visible occupant, thing, or exit\n"
     "  owner? <name>     show who owns a visible occupant, thing, or exit\n"
     "  make <kind> <init...> create an actor from init text\n"
-    "  conjure thing|container|agent named <name> create with standard init\n"
+    "  conjure thing|container|agent named <name> [in <parent>] create with standard init\n"
     "  inventory         show what you are carrying\n"
     "  i                 alias for inventory\n"
     "  take <thing> [from <parent>] pick something up\n"

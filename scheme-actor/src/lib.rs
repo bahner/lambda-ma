@@ -3412,7 +3412,9 @@ mod tests {
             eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
             Value::list(vec![
                 Value::symbol(":error"),
-                Value::str("Usage: conjure thing|container|agent named <name>"),
+                Value::str(
+                    "Usage: conjure thing|container|agent named <name> [in <parent>]",
+                ),
             ])
         );
     }
@@ -3462,6 +3464,164 @@ mod tests {
             "/ma/scheme/agent/0.0.1"
         );
     }
+
+        #[test]
+        fn avatar_conjure_resolves_visible_container_parent() {
+                let env = avatar_env();
+                let did = "did:ma:did";
+                let mut config = std::collections::HashMap::new();
+                config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+                crate::state::set_config(config.clone());
+
+                let avatar_id = eval_str(&format!(r#"(avatar-fragment "{did}")"#), &env);
+                config.insert("self".to_string(), format!("did:ma:runtime#{avatar_id}"));
+                config.insert("id".to_string(), avatar_id);
+                crate::state::set_config(config);
+
+                eval_all(
+                        r#"
+                        (set-prop! "did" "did:ma:did")
+                        (set-prop! "room" "did:ma:runtime#room")
+                        (set-prop! "inventory" "did:ma:runtime#inventory")
+                        (set-prop! "room-ctx"
+                            (map-set
+                                (map-set
+                                    (map-set
+                                        (map-set
+                                            (map-set (make-map) "protocol" "/ma/room/0.0.1")
+                                            "kind" "room")
+                                        "actor" "did:ma:runtime#room")
+                                    "rev" 1)
+                                "things"
+                                    (list
+                                        (map-set
+                                            (map-set
+                                                (map-set (make-map) "actor" "did:ma:runtime#chest")
+                                                "kind" "container")
+                                            "nick" "oak chest"))))
+                        (define (ma-create-actor kind behaviour init fragment)
+                            (set-prop! "create-init" init)
+                            "new-thing")
+                        "#,
+                        &env,
+                )
+                .unwrap();
+
+                env.define(
+                        Rc::from("msg"),
+                        Value::Msg(sample_term_msg(
+                                did,
+                                "did:ma:runtime#avatar",
+                                Value::list(vec![
+                                        Value::symbol(":conjure"),
+                                        Value::str("thing"),
+                                        Value::str("named"),
+                                        Value::str("Brass"),
+                                        Value::str("Lantern"),
+                                        Value::str("in"),
+                                        Value::str("oak"),
+                                        Value::str("chest"),
+                                ]),
+                        )),
+                );
+                eval_all("(on-message msg)", &env).unwrap();
+
+                assert_eq!(
+                        eval_str("(get-prop \"create-init\")", &env),
+                        "(set-init-prop! \"name\" \"Brass Lantern\")\n(set-init-prop! \"owner\" \"did:ma:did\")\n(set-init-prop! \"parent\" \"did:ma:runtime#chest\")\n(ma-save-state!)\n"
+                );
+        }
+
+        #[test]
+        fn avatar_conjure_accepts_current_room_and_rejects_visible_thing_parent() {
+                let env = avatar_env();
+                let did = "did:ma:did";
+                let mut config = std::collections::HashMap::new();
+                config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+                crate::state::set_config(config.clone());
+
+                let avatar_id = eval_str(&format!(r#"(avatar-fragment "{did}")"#), &env);
+                config.insert("self".to_string(), format!("did:ma:runtime#{avatar_id}"));
+                config.insert("id".to_string(), avatar_id);
+                crate::state::set_config(config);
+
+                eval_all(
+                        r#"
+                        (set-prop! "did" "did:ma:did")
+                        (set-prop! "room" "did:ma:runtime#room")
+                        (set-prop! "inventory" "did:ma:runtime#inventory")
+                        (set-prop! "room-ctx"
+                            (map-set
+                                (map-set
+                                    (map-set
+                                        (map-set
+                                            (map-set (make-map) "protocol" "/ma/room/0.0.1")
+                                            "kind" "room")
+                                        "actor" "did:ma:runtime#room")
+                                    "rev" 1)
+                                "things"
+                                    (list
+                                        (map-set
+                                            (map-set
+                                                (map-set (make-map) "actor" "did:ma:runtime#table")
+                                                "kind" "thing")
+                                            "nick" "table"))))
+                        (define (ma-create-actor kind behaviour init fragment)
+                            (inc-prop! "create-count" 1)
+                            (set-prop! "create-init" init)
+                            "new-thing")
+                        "#,
+                        &env,
+                )
+                .unwrap();
+
+                env.define(
+                        Rc::from("room-msg"),
+                        Value::Msg(sample_term_msg(
+                                did,
+                                "did:ma:runtime#avatar",
+                                Value::list(vec![
+                                        Value::symbol(":conjure"),
+                                        Value::str("thing"),
+                                        Value::str("named"),
+                                        Value::str("Chair"),
+                                        Value::str("in"),
+                                        Value::str("did:ma:runtime#room"),
+                                ]),
+                        )),
+                );
+                eval_all("(on-message room-msg)", &env).unwrap();
+                assert!(eval_bool(
+                    r#"(string-contains? "(set-init-prop! \"parent\" \"did:ma:runtime#room\")" (get-prop "create-init"))"#,
+                        &env
+                ));
+
+                env.define(
+                        Rc::from("thing-msg"),
+                        Value::Msg(sample_term_msg(
+                                did,
+                                "did:ma:runtime#avatar",
+                                Value::list(vec![
+                                        Value::symbol(":conjure"),
+                                        Value::str("thing"),
+                                        Value::str("named"),
+                                        Value::str("Cup"),
+                                        Value::str("in"),
+                                        Value::str("table"),
+                                ]),
+                        )),
+                );
+                eval_all("(on-message thing-msg)", &env).unwrap();
+
+                assert_eq!(eval_int("(get-prop \"create-count\")", &env), 1);
+                assert_eq!(
+                        eval_all("(get-prop \"reply-term:2\")", &env).unwrap(),
+                        Value::list(vec![
+                                Value::symbol(":error"),
+                                Value::str("Unknown visible container or room: table"),
+                        ])
+                );
+        }
 
     #[test]
     fn avatar_here_is_command_that_reports_current_room() {
