@@ -1040,7 +1040,7 @@
     "  owner? <name>     show who owns a visible occupant, thing, or exit\n"
     "  take <thing>      ask an agent or thing to bind to you\n"
     "  drop <thing>      ask an occupant to set this room as parent\n"
-    "  recycle <thing>   remove an owned agent, thing, or container from here\n"
+    "  recycle <thing> [in <container>] remove an owned agent, thing, or container\n"
     "  where? <thing>    ask where an occupant says it is\n"
     "  say <text>        speak here\n"
     "  emote <text>      act here\n"

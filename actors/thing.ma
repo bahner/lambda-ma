@@ -43,7 +43,7 @@
 ; Caller and reply helpers.
 (define (owner-caller? msg)
   (let ((o (owner)))
-    (and o (equal? (msg-from msg) o))))
+    (and o (msg-from-owner? o msg))))
 
 (define (node-protocol) THING_PROTOCOL)
 (define (node-kind) "thing")

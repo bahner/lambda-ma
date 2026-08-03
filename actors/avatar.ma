@@ -393,6 +393,91 @@
 (define (claim-target-ref token)
   (if token (claim-resolve-actor (claim-token-strip-colon token)) #f))
 
+; Targeted property commands accept visible and carried labels with spaces.
+; The longest resolvable prefix wins, leaving a key and value for :prop.
+(define (targeted-prop-request args)
+  (let loop ((prefix '())
+             (rest args)
+             (found #f))
+    (if (or (null? rest) (null? (cdr rest)) (null? (cdr (cdr rest))))
+        found
+        (let* ((next-prefix (list-append prefix (list (car rest))))
+               (next-rest (cdr rest))
+               (target (claim-resolve-actor (join-words next-prefix))))
+          (loop next-prefix
+                next-rest
+                (if target (cons target next-rest) found))))))
+
+(define (split-at-word args word)
+  (let loop ((before '())
+             (rest args))
+    (cond ((null? rest) #f)
+          ((equal? (car rest) word) (cons before (cdr rest)))
+          (else (loop (list-append before (list (car rest))) (cdr rest))))))
+
+(define (send-targeted-prop! target key values)
+  (ma-send! (canonical-actor target) (cons :prop (cons key values))))
+
+(define (send-targeted-prop-command! args msg)
+  (let ((request (targeted-prop-request args)))
+    (cond ((not request)
+           (reply-error msg "usage: prop <actor> <key> <value>"))
+          ((equal? (car request) :ambiguous)
+           (reply-error msg "Ambiguous visible or carried actor."))
+          (else
+           (begin
+             (send-targeted-prop! (car request) (car (cdr request)) (cdr (cdr request)))
+             (reply-ok-silent msg))))))
+
+(define (resolve-targeted-prop-actor args msg usage)
+  (if (null? args)
+      (begin
+        (reply-error msg usage)
+        #f)
+      (let ((target (claim-resolve-actor (join-words args))))
+        (cond ((equal? target :ambiguous)
+               (begin (reply-error msg "Ambiguous visible or carried actor.") #f))
+              ((not target)
+               (begin (reply-error msg "Unknown visible or carried actor.") #f))
+              (else target)))))
+
+(define (send-targeted-name-command! args msg)
+  (let ((as-parts (split-at-word args "as")))
+    (cond ((or (not as-parts) (null? (car as-parts)) (null? (cdr as-parts)))
+           (reply-error msg "usage: name <actor> as <name> [with nick <nick>]") )
+          (else
+           (let ((target (resolve-targeted-prop-actor
+                          (car as-parts) msg "usage: name <actor> as <name> [with nick <nick>]")))
+             (if (not target)
+                 #f
+                 (let ((name-parts (split-at-word (cdr as-parts) "with")))
+                   (cond ((not name-parts)
+                          (begin
+                            (send-targeted-prop! target "name" (cdr as-parts))
+                            (reply-ok-silent msg)))
+                         ((or (null? (car name-parts))
+                              (null? (cdr name-parts))
+                              (not (equal? (car (cdr name-parts)) "nick"))
+                              (null? (cdr (cdr name-parts))))
+                          (reply-error msg "usage: name <actor> as <name> [with nick <nick>]") )
+                         (else
+                          (begin
+                            (send-targeted-prop! target "name" (car name-parts))
+                            (send-targeted-prop! target "nick" (cdr (cdr name-parts)))
+                            (reply-ok-silent msg)))))))))))
+
+(define (send-targeted-describe-command! args msg)
+  (let ((as-parts (split-at-word args "as")))
+    (if (or (not as-parts) (null? (car as-parts)) (null? (cdr as-parts)))
+        (reply-error msg "usage: describe <actor> as <description>")
+        (let ((target (resolve-targeted-prop-actor
+                       (car as-parts) msg "usage: describe <actor> as <description>")))
+          (if target
+              (begin
+                (send-targeted-prop! target "description" (cdr as-parts))
+                (reply-ok-silent msg))
+              #f)))))
+
 (define (take-token args)
   (if (null? args) #f (car args)))
 
@@ -477,14 +562,37 @@
 
 (define (send-recycle args)
   (let* ((token (take-token args))
-         (entry (if token (inventory-ref token) #f))
-         (actor (if entry (canonical-actor (car entry)) #f)))
-    (cond (entry
-           (ma-send! (canonical-actor (inventory-parent)) (list :recycle-from (did) actor)))
-          ((room)
-           (send-room :recycle (list (did) token)))
-          (else
-           (send-did-text "You are nowhere.")))))
+    (has-source (and (not (null? (cdr args)))
+           (equal? (car (cdr args)) "in")))
+    (source-token (if has-source (car (cdr (cdr args))) #f))
+         (source-entry (if has-source
+                           (let ((inventory-entry (inventory-ref source-token)))
+                             (cond (inventory-entry inventory-entry)
+                                   ((valid-did-url? source-token)
+                                    (cons (canonical-actor source-token) (make-map)))
+                                   (else
+                                 (let ((room-entry (room-ctx-ref source-token)))
+                                   (cond ((and (map? room-entry)
+                                               (valid-did-url? (ctx-text room-entry "actor")))
+                                          (cons (canonical-actor (ctx-text room-entry "actor")) room-entry))
+                                         (else #f))))))
+                           #f))
+    (source (take-source-ref source-entry))
+    (child (if has-source (take-child-ref source-entry token) #f))
+    (entry (if token (inventory-ref token) #f))
+    (actor (if entry (canonical-actor (car entry)) #f)))
+    (cond ((and has-source source child)
+      (ma-send! source (list :recycle-from (did) (canonical-actor child))))
+     ((and has-source source)
+      (send-did-text (string-append "Unknown child in " source-token ": " token)))
+     (has-source
+      (send-did-text (string-append "Unknown carried or visible container: " source-token)))
+     (entry
+      (ma-send! (canonical-actor (inventory-parent)) (list :recycle-from (did) actor)))
+     ((room)
+      (send-room :recycle (list (did) token)))
+     (else
+      (send-did-text "You are nowhere.")))))
 
 (define (put-args-valid? args)
   (and (not (null? args))
@@ -1262,6 +1370,24 @@
         (send-room :prop args)
         (reply-ok-silent msg)))))
 
+(set-cmd-method! :prop
+  (lambda (args msg)
+    (require-did msg
+      (lambda ()
+        (send-targeted-prop-command! args msg)))))
+
+(set-cmd-method! :name
+  (lambda (args msg)
+    (require-did msg
+      (lambda ()
+        (send-targeted-name-command! args msg)))))
+
+(set-cmd-method! :describe
+  (lambda (args msg)
+    (require-did msg
+      (lambda ()
+        (send-targeted-describe-command! args msg)))))
+
 (set-cmd-method! :take
   (lambda (args msg)
     (require-did msg
@@ -1308,8 +1434,12 @@
   (lambda (args msg)
     (require-did msg
       (lambda ()
-        (if (or (null? args) (not (null? (cdr args))))
-            (send-did-text "Usage: recycle <agent-or-thing>")
+        (if (or (null? args)
+                (and (not (null? (cdr args)))
+                     (or (not (equal? (car (cdr args)) "in"))
+                         (null? (cdr (cdr args)))
+                         (not (null? (cdr (cdr (cdr args))))))))
+            (send-did-text "Usage: recycle <agent-or-thing> [in <container>]")
             (send-recycle args))
         (reply-ok-silent msg)))))
 

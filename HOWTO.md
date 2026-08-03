@@ -266,7 +266,11 @@ unlock north           unlock the north exit
 :prop name Name        set the focused room name
 :prop description ...  set the focused room description
 :prop description      reset the focused room description
-prop name Name         shorthand for setting the focused room name
+prop lamp name Lantern set a visible or carried actor property through your avatar
+name lamp as Lantern with nick lantern
+                       set a visible or carried actor name and optional nick
+describe lamp as A bright brass lantern.
+                       set a visible or carried actor description
 ```
 
 `make` is avatar-owned. Zion only expands the command text, and the current room
@@ -313,9 +317,11 @@ room; after `:pong`, it asks for ownership authorisation.
 
 The important rule is simple:
 
-- Commands without a leading colon, such as `look`, `go north`, `say hello`, and
-  `dig north`, are avatar-mediated avatar-mediated commands. `prop` is a room-metadata
-  shorthand and targets the focused room directly.
+- Commands without a leading colon, such as `look`, `go north`, `say hello`,
+  `dig north`, `prop lamp name Lantern`, `name lamp as Lantern`, and `describe
+  lamp as ...`, are avatar-mediated commands. The property commands resolve a
+  carried or visible actor and forward its ordinary `:prop` method; that actor
+  still enforces owner authority.
 - Commands with a leading colon, such as `:prop name ...` and `:help`, are sent
   directly to the focused room.
 

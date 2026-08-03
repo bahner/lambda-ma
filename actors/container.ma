@@ -148,7 +148,7 @@
 ; Caller and reply helpers.
 (define (owner-caller? msg)
   (let ((o (owner)))
-    (and o (equal? (msg-from msg) o))))
+    (and o (msg-from-owner? o msg))))
 
 (define (local-actor-caller? msg)
   (local-actor-ref? (msg-from msg)))
