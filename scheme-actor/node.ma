@@ -127,7 +127,9 @@
       (node-owner-avatar-delegation? did msg)))
 
 (define (node-recycle-caller-authorised? did msg)
-  (and (node-caller-is-parent? msg) (node-owner-did? did)))
+  (and (node-owner-did? did)
+       (or (node-caller-is-parent? msg)
+           (node-owner-avatar-delegation? did msg))))
 
 (define (node-parent-admissible? target-parent)
   (and (valid-did-url? target-parent)
@@ -163,6 +165,22 @@
 
 (define (child-ctx-self-authentic? ctx msg)
   (and (child-ctx-valid? ctx)
+       (ctx-sender-valid? ctx msg)))
+
+; A terminating child (e.g. recycle) has no real new parent to report, so its
+; announcement carries an explicitly empty "parent" rather than a DID-URL.
+; This is distinct from child-ctx-valid?, which requires a real target parent
+; and is used for admission/reparenting.
+(define (child-departure-ctx? ctx)
+  (and (map? ctx)
+       (valid-did-url? (ctx-text ctx "actor"))
+       (equal? (ctx-text ctx "parent") "")
+       (non-empty-string? (ctx-text ctx "name"))
+       (non-empty-string? (ctx-text ctx "nick"))
+       (non-empty-string? (ctx-text ctx "description"))))
+
+(define (child-ctx-self-authentic-departure? ctx msg)
+  (and (child-departure-ctx? ctx)
        (ctx-sender-valid? ctx msg)))
 
 (define (child-ctx-parent-is-self? ctx)
@@ -330,6 +348,16 @@
          (reply-ok-with msg (if (equal? (node-parent) "") "(none)" (node-parent))))
         ((not (null? (cdr args)))
          (reply-error msg "usage: :parent [ctx]"))
+        ((child-departure-ctx? (car args))
+         (if (not (child-ctx-self-authentic-departure? (car args) msg))
+             (reply-error msg "parent ctx actor must match sender")
+             (begin
+               (if (child-ctx (ctx-text (car args) "actor"))
+                   (node-child-departed! (car args))
+                   #f)
+               (forget-child! (ctx-text (car args) "actor"))
+               (node-children-changed!)
+               (reply-ok msg))))
         ((not (child-ctx-valid? (car args)))
          (reply-error msg "parent ctx must include actor, parent, kind, protocol, name, nick, description"))
         ((not (child-ctx-self-authentic? (car args) msg))

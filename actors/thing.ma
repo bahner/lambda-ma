@@ -68,7 +68,6 @@
       (if (non-empty-string? old-parent)
           (ma-send! (canonical-actor old-parent) (list :parent (node-ctx-for-parent "")))
           #f)
-      (reply-ok-with msg "recycled")
       (ma-end))))
 
 (define (editable-prop? key)
@@ -103,11 +102,12 @@
 
 (set-rpc-method! :look
   (lambda (args msg)
-    (let ((text (string-append (name) "\n" (description)))
-          (target (if (null? args) #f (presentation-avatar-target (car args) msg))))
-      (if target
+    (let ((text (string-append (name) "\n" (description))))
+      (if (and (not (null? args))
+               (non-empty-string? (car args))
+               (local-actor-ref? (msg-from msg)))
           (begin
-            (ma-send! target (list :print text))
+            (ma-send! (car args) (list :print text))
             (reply-ok msg))
           (reply-ok-with msg text)))))
 
@@ -148,17 +148,21 @@
 
 (set-cmd-method! :claim
   (lambda (args msg)
-    (if (null? args)
-        (reply-error msg "usage: :claim <secret>")
-        (let ((secret (car args))
-              (stored (recovery-secret))
-              (did (msg-from msg)))
-          (if (and stored (equal? secret stored))
-              (begin
-                (set-owner! did)
-                (set-recovery-secret! "")
-                (reply-ok-with msg "claimed"))
-              (reply-error msg "claim failed"))))))
+    (let ((stored (recovery-secret))
+          (did (msg-from msg)))
+      (cond ((and (not (owner)) (not stored) (null? args))
+             (begin
+               (set-owner! did)
+               (reply-ok-with msg "claimed")))
+            ((null? args)
+             (reply-error msg "usage: :claim <secret>"))
+            ((and stored (equal? (car args) stored))
+             (begin
+               (set-owner! did)
+               (set-recovery-secret! "")
+               (reply-ok-with msg "claimed")))
+            (else
+             (reply-error msg "claim failed"))))))
 
 ; Parent-mediated transfer. The parent room asks the thing to bind to a did
 ; or move to another parent; direct did calls are deliberately rejected.
@@ -227,7 +231,7 @@
             ((not (valid-did? did))
              (reply-error msg "recycle requires DID with did:ma: prefix"))
             ((not (node-recycle-caller-authorised? did msg))
-             (reply-error msg "only owner via current parent may recycle this thing"))
+             (reply-error msg "only owner may recycle this thing"))
             (else
              (recycle! msg))))))
 

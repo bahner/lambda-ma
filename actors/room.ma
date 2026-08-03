@@ -718,7 +718,8 @@
         (ctx-text ctx "room"))))
 
 (define (child-announcement-valid? ctx msg)
-  (and (actor-ctx? ctx msg)
+  (and (or (actor-ctx? ctx msg)
+           (and (child-departure-ctx? ctx) (ctx-sender-valid? ctx msg)))
        (or (same-actor? (child-parent-target ctx) (self))
            (not (same-actor? (child-parent-target ctx) (self))))))
 
@@ -1033,7 +1034,7 @@
     "  owner? <name>     show who owns a visible occupant, thing, or exit\n"
     "  take <thing>      ask an agent or thing to bind to you\n"
     "  drop <thing>      ask an occupant to set this room as parent\n"
-    "  recycle <thing>   remove an owned agent or thing from here\n"
+    "  recycle <thing>   remove an owned agent, thing, or container from here\n"
     "  where? <thing>    ask where an occupant says it is\n"
     "  say <text>        speak here\n"
     "  emote <text>      act here\n"
@@ -1154,6 +1155,23 @@
 
 (define (command-args args msg)
   (if (delegated-call? args msg) (cdr args) args))
+
+(define (recycle-caller-did args msg)
+  (let ((from (msg-from msg)))
+    (cond ((valid-did? from) from)
+          ((avatar-did from) (avatar-did from))
+          ((and (not (null? args))
+                (valid-did? (car args))
+                (did-avatar? (car args) from))
+           (car args))
+          (else #f))))
+
+(define (recycle-command-args args msg)
+  (if (and (not (null? args))
+           (valid-did? (car args))
+           (did-avatar? (car args) (msg-from msg)))
+      (cdr args)
+      args))
 
 (define (go-delegated-call? args msg)
   (delegated-call? args msg))
@@ -1650,18 +1668,21 @@
 
 (set-cmd-method! :recycle
   (lambda (args msg)
-    (let* ((did (caller-did args msg))
-           (recycle-args (command-args args msg))
+    (let* ((mediated (avatar-caller? msg))
+           (did (recycle-caller-did args msg))
+           (recycle-args (recycle-command-args args msg))
            (token (if (null? recycle-args) #f (car recycle-args)))
            (actor (if token (if (valid-did-url? token) token (movable-ref token)) #f)))
-      (cond ((not token)
-             (reply-to-sender msg "Usage: recycle <agent-or-thing>"))
+      (cond ((not did)
+             (reply-command-error msg mediated "Could not determine caller DID for recycle."))
+            ((not token)
+             (reply-command-error msg mediated "Usage: recycle <agent-or-thing-or-container>"))
             (actor
              (begin
                (ma-send! (canonical-actor actor) (list :recycle did))
-              (reply-ok msg)))
+               (reply-command-ok msg mediated (string-append "Recycle requested for " token "."))))
             (else
-             (reply-to-sender msg (string-append "Unknown agent or thing: " token)))))))
+             (reply-command-error msg mediated (string-append "Unknown agent, thing, or container: " token)))))))
 
 (set-cmd-method! :put
   (lambda (args msg)
@@ -1689,7 +1710,7 @@
             (else
              (begin
                (ma-send! (canonical-actor item-actor) (list :drop did (canonical-actor container-actor) item-ctx))
-               (reply-ok msg)))))))
+               (reply-to-sender msg (string-append "You try to put " item-token " in " container-token "."))))))))
 
 (set-cmd-method! :where?
   (lambda (args msg)

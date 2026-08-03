@@ -542,10 +542,11 @@ Key verbs:
 | `:help` | `[topic]` | DID principal only | `help here` asks room `:help`. |
 | `:nick` | `[nick]` | DID principal only | No args returns current nick; with args updates avatar nick, emits `:ctx` to the DID principal, and emits `:parent <ctx>` to the current room so the room can update presentation. |
 | `:make` | `<kind> <init...>` | DID principal only | Requests a new actor of `kind` using `ma-create-actor` with no behaviour override and all args after `kind` joined as the creation payload. The avatar does not inject owner, parent, or room props; the init text owns initial state. `thing` is accepted as shorthand for `/ma/thing/0.0.1`. Creation is queued; the returned DID-URL may not be live until the runtime loads the entity. |
+| `:conjure` | `thing\|container\|agent named <name>` | DID principal only | Convenience creator for common movable actors. Builds a standard init payload with `name = <name>`, `owner = <controlling did>`, `parent = <avatar inventory did-url>`, then calls `ma-create-actor`. |
 | `:owner?` | `[name]` | DID principal or current room | DID calls delegate room ownership inspection to the current room. A room may ask the avatar to present its controlling DID as actor ownership for a named occupant. Avatars do not expose `:owner`; plain `owner` uses default room forwarding. |
 | `:did?` / `:dids?` / `:prop` | varies | DID principal only | RPC proxy to the current room for direct metadata lookup or room prop mutation; these are not avatar commands. |
 | `:look`/`:l` `:here?` `:exits?` `:who?` `:say` `:emote` `:go` | varies | DID principal only | Avatar-mediated room commands. `here?` reports the avatar's current room DID-URL from its saved context. |
-| `:take` | `<thing> [from <parent>]` | DID principal only | Picks something up. If `from` is omitted, the avatar resolves `<thing>` from stored room ctx and asks the child actor directly to move to the inventory container. With explicit `from`, the avatar resolves both `<parent>` and `<thing>` from its cached inventory or visible container ctx before dispatch; a full child DID-URL remains accepted when no child label is cached. The parent-mediated transfer contains only canonical DID-URLs. The avatar must not call room `:take`. Inventory display waits for the child actor's `:child` ctx before showing a DID-URL by name. |
+| `:take` | `<thing> [from <parent>]` | DID principal only | Picks something up. If `from` is omitted, the avatar resolves `<thing>` from stored room ctx and asks the child actor directly to move to the inventory container. Explicit `from` may name any parent actor that implements the parent-mediated `:take` contract; carried parent names are resolved through inventory. The avatar must not call room `:take`. Inventory display waits for the child actor's `:child` ctx before showing a DID-URL by name. |
 | `:drop` | `<thing>` | DID principal only | Drops a carried actor by resolving `<thing>` from the avatar's inventory cache and starting that actor's existing `:drop` flow. The actor still performs the parent/child ctx handshake: request target parent with `:parent <ctx>`, accept committed `:child <ctx>`, then notify the old parent with `:parent <ctx>`. The avatar must not invent a new verb, call the current room, or use a room-mediated helper; the current room DID-URL is target-parent data only. |
 | `:recycle` | `<agent-or-thing>` | DID principal only | Requests permanent removal of an owned carried or visible actor. Carried actors are routed through the inventory container; visible actors are routed through the current room. The parent resolves the lookup term to a canonical actor DID-URL before asking the child to end itself. |
 | `:claim` `:dig` `:fill` | varies | DID principal only | Delegates to room without owner-authority arguments; rooms recognise the owner DID from the authoritative avatar child ctx or verify the deterministic owner avatar from `msg-from`. `:owner` is mediated by the avatar's default room forwarding; it is not an avatar method and does not mutate avatar ownership. |
@@ -675,7 +676,7 @@ Key helpers and verbs:
 | `:ctx` | `<map>` | Room-facing movement helper; validates the movement result against the current parent, performs ordinary room-visible `:leave-occupant`, then sends map-shaped agent `:enter` to the target room. With no args, returns current situation to authorised callers. |
 | `:enter-room` | `<target-room-did-url> <source-room-did-url>` | Root/room movement helper retained for direct room-driven entry flows. |
 | `:report-parent` | `<room> <tick> <nonce>` | Machine presence request; replies to the requesting room with `:parent-report <self> <parent> <tick> <nonce>`. |
-| `:claim` | `<secret>` | Recovery-path ownership claim. |
+| `:claim` | `[secret]` | Ownership claim. If owner is empty and no recovery secret is set, `:claim` with no args claims the thing directly. If a recovery secret exists, the caller must provide the matching secret. |
 | `:take` | `<did> <carrier-parent> [ctx]` | Pick-up request. Caller must be current parent; the agent still commits its own parent only after target admission. Owner may recover an empty-parent orphan. |
 | `:drop` | `<did> <target-parent> [ctx]` | Drop request. Caller must be current parent; the agent still commits its own parent only after target admission. Owner may recover an empty-parent orphan. |
 
@@ -736,8 +737,9 @@ listing, putting in, and taking out.
 | `:take-from` | `<child>` | Container-content extraction. Removes a child by DID-URL or label and returns the stored ctx when unlocked. Does not pick up or move the child actor itself. |
 | `:lock` | `[message]` | Owner or unowned caller. Sets `locked=true`; with text, also updates `locked-message`. |
 | `:unlock` | none | Owner or unowned caller. Sets `locked=false` and keeps `locked-message`. |
-| `:take` | `<did> <carrier-parent> [ctx]` | Pick-up request for the whole container. Caller must be current parent; the container still commits its own parent only after target admission. Owner may recover only an empty-parent orphan. If the first argument after `<did>` is a stored child’s full DID-URL, this is the inherited parent-cache transfer helper; an optional `:drop` hint dispatches `:drop` to that child instead of `:take`. |
+| `:take` | `<did> <carrier-parent> [ctx]` | Pick-up request for the whole container. Caller must be current parent; the container still commits its own parent only after target admission. Owner may recover only an empty-parent orphan. If the first argument after `<did>` resolves to a stored child, this is the inherited parent-cache transfer helper; an optional `:drop` hint dispatches `:drop` to that child instead of `:take`. |
 | `:drop` | `<did> <target-parent> [ctx]` | Drop request for the whole container. Caller must be current parent; the container still commits its own parent only after target admission. Owner may recover only an empty-parent orphan. |
+| `:claim` | `[secret]` | Ownership claim. If owner is empty and no recovery secret is set, `:claim` with no args claims the container directly. If a recovery secret exists, the caller must provide the matching secret. |
 | `:child` | `[ctx]` | Node ctx-parenting with container lock policy. No args presents the same `children` map as contents; with ctx, admits or confirms through the node handshake. |
 
 After any contents mutation, the container sends refreshed container ctx to its
@@ -749,6 +751,12 @@ a local last-known-good inventory cache.
 Carried drops rely on the normal parent/child ctx algorithm. The inventory
 container is updated from the carried actor's committed ctx notification; do not
 add a separate inventory drop verb.
+
+Claim routing note:
+
+- `claim` in avatar focus mode targets the current room.
+- To claim a non-room actor by DID-URL, send direct actor RPC such as `@runtime#thing:claim`.
+- Focus shorthand may target an actor explicitly with `claim did:ma:...#thing:`; any following argument is passed as the claim secret.
 
 ---
 

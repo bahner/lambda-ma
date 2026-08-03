@@ -213,6 +213,12 @@
 
 (define (start-room) (ma-get-config-key "start"))
 (define THING_KIND "/ma/thing/0.0.1")
+(define AGENT_KIND "/ma/scheme/agent/0.0.1")
+(define CONJURE_KIND_MAP
+  (list
+    (list "thing" THING_KIND)
+    (list "container" CONTAINER_KIND)
+    (list "agent" AGENT_KIND)))
 
 (define (send-ctx text)
   (begin
@@ -358,6 +364,34 @@
 
 (define (send-room-as-did verb args)
   (send-room verb (cons (did) args)))
+
+(define (claim-target-token args)
+  (if (null? args) #f (car args)))
+
+(define (claim-target-token? token)
+  (and (string? token)
+       (> (string-length token) 1)
+       (equal? (substring token (- (string-length token) 1) (string-length token)) ":")))
+
+(define (claim-token-strip-colon token)
+  (if (claim-target-token? token)
+      (substring token 0 (- (string-length token) 1))
+      token))
+
+; Resolve a claim target the same way take/drop resolve a token: a literal
+; DID-URL, an inventory item, or a visible room entry (agent, thing, exit).
+(define (claim-resolve-actor token)
+  (cond ((valid-did-url? token) (canonical-actor token))
+        ((inventory-ref token) (inventory-entry-actor (inventory-ref token)))
+        (else
+         (let ((room-entry (room-ctx-ref token)))
+           (cond ((equal? room-entry :ambiguous) :ambiguous)
+                 ((and (map? room-entry) (valid-did-url? (ctx-text room-entry "actor")))
+                  (canonical-actor (ctx-text room-entry "actor")))
+                 (else #f))))))
+
+(define (claim-target-ref token)
+  (if token (claim-resolve-actor (claim-token-strip-colon token)) #f))
 
 (define (take-token args)
   (if (null? args) #f (car args)))
@@ -774,6 +808,30 @@
   (and (non-empty-string? kind)
        (string-prefix? "/" kind)))
 
+(define (conjure-kind-from-map entries kind)
+  (cond ((null? entries) #f)
+        ((and (pair? (car entries))
+              (not (null? (cdr (car entries))))
+              (equal? (car (car entries)) kind))
+         (car (cdr (car entries))))
+        (else (conjure-kind-from-map (cdr entries) kind))))
+
+(define (conjure-kind kind)
+  (conjure-kind-from-map CONJURE_KIND_MAP kind))
+
+(define (conjure-init name)
+  (let ((creator (did))
+        (parent (qualified-actor (inventory-actor))))
+    (if (and (non-empty-string? creator)
+             (non-empty-string? parent)
+             (non-empty-string? name))
+        (string-append
+          "(set-init-prop! \"name\" \"" name "\")\n"
+          "(set-init-prop! \"owner\" \"" creator "\")\n"
+          "(set-init-prop! \"parent\" \"" parent "\")\n"
+          "(ma-save-state!)\n")
+        #f)))
+
 (define (avatar-make args msg)
   (require-did msg
     (lambda ()
@@ -791,6 +849,31 @@
                              (actor (entity-url fragment)))
                         (send-did-text (string-append "Create requested: " actor "."))
                         (reply-ok-with msg actor))))))))))
+
+(define (avatar-conjure args msg)
+  (require-did msg
+    (lambda ()
+      (cond ((or (null? args)
+                 (null? (cdr args))
+                 (null? (cdr (cdr args)))
+                 (not (equal? (car (cdr args)) "named")))
+             (reply-error msg "Usage: conjure thing|container|agent named <name>"))
+            (else
+             (let ((kind (conjure-kind (car args)))
+                   (name (join-words (cdr (cdr args)))))
+               (cond ((not kind)
+                      (reply-error msg "conjure kind must be thing, container, or agent"))
+                     ((not (non-empty-string? name))
+                      (reply-error msg "conjure name must be non-empty"))
+                     (else
+                      (let ((inventory (ensure-inventory!)))
+                        (if (not (valid-did-url? inventory))
+                            (reply-error msg "conjure requires a valid inventory parent")
+                            (let* ((init (conjure-init name))
+                                   (fragment (ma-create-actor kind #f init #f))
+                                   (actor (entity-url fragment)))
+                              (send-did-text (string-append "Conjure requested: " actor "."))
+                              (reply-ok-with msg actor))))))))))))
 
 (define (reply-ok-silent msg)
   (reply-ok msg))
@@ -810,6 +893,7 @@
     "  did? [kind] <name> show the DID for a visible occupant, thing, or exit\n"
     "  owner? <name>     show who owns a visible occupant, thing, or exit\n"
     "  make <kind> <init...> create an actor from init text\n"
+    "  conjure thing|container|agent named <name> create with standard init\n"
     "  inventory         show what you are carrying\n"
     "  i                 alias for inventory\n"
     "  take <thing> [from <parent>] pick something up\n"
@@ -821,6 +905,7 @@
     "  leave             stop being shown here until you return\n"
     "  go <direction>    move through an exit\n"
     "  claim             claim an unowned room\n"
+    "  claim <thing> [secret] claim an inventory item, visible actor, or DID-URL\n"
     "  owner [did]       show or transfer room ownership\n"
     "  dig <dir> [to name] [with code] create an exit\n"
     "  fill <dir>        remove an exit\n"
@@ -1036,8 +1121,21 @@
   (lambda (args msg)
     (require-did msg
       (lambda ()
-        (send-room :claim args)
-        (reply-ok-silent msg)))))
+        (let* ((token (claim-target-token args))
+               (target (if token (claim-target-ref token) #f))
+               (claim-args (if (and target (not (equal? target :ambiguous))) (cdr args) args)))
+          (cond ((equal? target :ambiguous)
+                 (reply-error msg (string-append "Ambiguous visible agent or thing: " token)))
+                ((and (claim-target-token? token) (not target))
+                 (reply-error msg "claim target must be a known actor, inventory item, or visible name"))
+                (target
+                 (begin
+                   (ma-send! target (cons :claim claim-args))
+                   (reply-ok-silent msg)))
+                (else
+                 (begin
+                   (send-room :claim claim-args)
+                   (reply-ok-silent msg)))))))))
 
 (set-cmd-method! :owner?
   (lambda (args msg)
@@ -1052,6 +1150,9 @@
 
 (set-cmd-method! :make
   avatar-make)
+
+(set-cmd-method! :conjure
+  avatar-conjure)
 
 (set-meta-method! :child
   handle-avatar-children)

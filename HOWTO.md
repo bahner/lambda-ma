@@ -276,6 +276,23 @@ avatar is holding the thing, or the room DID-URL when it should appear in the
 room immediately. A convenient flow is to edit the init text with
 `.my.things.lamp!edit`, then run `make thing <.my.things.lamp`.
 
+If a newly created actor ends up with no owner and is not visible in your current
+room, claim it directly by DID-URL:
+
+```text
+@runtime#thing:claim
+```
+
+In focus shorthand, the equivalent is:
+
+```text
+claim did:ma:...#thing:
+```
+
+The trailing `:` marks the actor target token; any following argument is passed
+as the claim secret. The room command `claim` (without a target token) still
+claims the current room only.
+
 Digging an existing direction replaces that exit. Filling a direction removes
 the exit from the current room and asks the exit actor to terminate itself; it
 does not delete the target room. Exits are inspectable objects: `look north`

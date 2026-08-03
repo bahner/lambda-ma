@@ -109,7 +109,6 @@
       (if (non-empty-string? old-parent)
           (ma-send! (canonical-actor old-parent) (list :parent (node-ctx-for-parent "")))
           #f)
-      (reply-ok-with msg "recycled")
       (ma-end))))
 
 ; Room context and movement helpers.
@@ -151,11 +150,12 @@
 
 (set-rpc-method! :look
   (lambda (args msg)
-    (let ((text (string-append (name) "\n" (description)))
-          (target (if (null? args) #f (presentation-avatar-target (car args) msg))))
-      (if target
+    (let ((text (string-append (name) "\n" (description))))
+      (if (and (not (null? args))
+               (non-empty-string? (car args))
+               (local-actor-ref? (msg-from msg)))
           (begin
-            (ma-send! target (list :print text))
+            (ma-send! (car args) (list :print text))
             (reply-ok msg))
           (reply-ok-with msg text)))))
 
@@ -333,7 +333,7 @@
             ((not (valid-did? did))
              (reply-error msg "recycle requires DID with did:ma: prefix"))
             ((not (node-recycle-caller-authorised? did msg))
-             (reply-error msg "only owner via current parent may recycle this agent"))
+             (reply-error msg "only owner may recycle this agent"))
             (else
              (recycle! msg))))))
 
