@@ -368,6 +368,31 @@ ordinary parent-change flow. Protocols MAY define stricter protected flows, but
 the base world model is: new parent controls admission, self controls commit,
 old parent receives cleanup.
 
+### 3.4.1 Orphan recovery
+
+Root provides a recovery path for movable `thing`, `agent`, and `container`
+actors. `room`, `avatar`, and `exit` are never orphanable. Every actor and
+parent reference in this flow is a canonical full DID-URL.
+
+- `child-runtime#root :orphan <actor> from <old-parent>` checks whether
+   `<actor>` is live in that runtime. For a live actor, root sends it an
+   internal request naming the original caller and old parent. The actor itself
+   verifies that caller against its persisted owner, then performs the ordinary
+   target-accepted parent change to its local root. Root's special authority is
+   limited to initiating this request; it never writes a live actor's parent.
+- If the actor is unavailable, the named old parent may request a root-signed
+   repair ctx. The repair ctx names that actor's own root as its new parent and
+   permits the old parent to remove only its matching movable child record.
+   This removal is idempotent. It MUST NOT create a root child record or claim
+   that the unavailable actor has persisted `parent = #root`.
+- An old parent also exposes `:orphan <actor>` for the offline case. Its own
+   owner (or deterministic owner avatar) may remove a matching movable child
+   record directly, without waiting for the child, its runtime, or its root.
+   Repeating an authorised request after removal returns `:ok`.
+- Root `:orphans?` returns only its live direct `thing`, `agent`, and
+   `container` child ctx records. It is a filtered view of `children`, not a
+   separate orphan registry.
+
 ### 3.5 Authoritative ctx and derived views
 
 Actor workflows are functional and stateless between messages. An actor handles
@@ -526,6 +551,8 @@ Key verbs:
 | --- | --- | --- |
 | `:enter` | `[room? nick? inventory?]` | Compatibility path when no concrete room target is available. Creates caller avatar if absent, or asks an existing avatar to send its current ctx to the DID principal. A valid full inventory DID-URL is forwarded to the avatar before it publishes ctx. Root does not message rooms. |
 | `:avatar?` | none | Returns caller avatar, creating if needed in the configured start room. |
+| `:orphan` | `<actor-did-url> from <old-parent-did-url>` | Recovery request for a local movable actor. A live actor owner-verifies and commits ordinary adoption by root. An unavailable actor can produce only a root-signed old-parent cleanup request; root never forges its persisted parent state. |
+| `:orphans?` | none | Returns live direct root child ctx records filtered to `thing`, `agent`, and `container`. |
 
 ### 6.2 avatar actor
 
@@ -590,6 +617,7 @@ Key verbs:
 | `:go` / `:move` | `<direction>` / none | `:go` sends avatar ctx through the named exit policy and then asks the selected target room to `:enter`. `:move` chooses one currently available room exit for the caller. |
 | `:thing` | `<name> [did-or-empty]` | Owner-gated child ctx lookup/update by presentation name; it does not maintain an alias map. |
 | `:recycle` / `:where?` | `[DID principal?] [token]` | Room-local movable actor utilities. `:recycle` is hard removal: the room resolves the visible token or DID-URL, asks the child actor as current parent, and the child calls `ma-end` only after validating the owner DID. Rooms do not expose `:take` or `:drop`; avatar pickup/drop uses room ctx for lookup and then talks to the child or inventory container directly. |
+| `:orphan` | `<actor-did-url>` | Owner-gated offline recovery. Idempotently removes only a matching `thing`, `agent`, or `container` child ctx when that child's runtime cannot participate. |
 | `:claim` / `:owner` / `:prop` | direct args | Room ownership controls write operations; owner authority is checked against `msg-from` or the deterministic owner avatar. |
 | `:dig` | direct args | Owner-gated exit creation/linking; newly-created rooms are assigned to the stored owner DID. |
 | `:fill` | direct args | Owner-gated exit removal. Removes the direction from the room and asks the exit actor to terminate itself; target rooms are not deleted. |
@@ -740,6 +768,7 @@ listing, putting in, and taking out.
 | `:take` | `<did> <carrier-parent> [ctx]` | Pick-up request for the whole container. Caller must be current parent; the container still commits its own parent only after target admission. Owner may recover only an empty-parent orphan. If the first argument after `<did>` resolves to a stored child, this is the inherited parent-cache transfer helper; an optional `:drop` hint dispatches `:drop` to that child instead of `:take`. |
 | `:drop` | `<did> <target-parent> [ctx]` | Drop request for the whole container. Caller must be current parent; the container still commits its own parent only after target admission. Owner may recover only an empty-parent orphan. |
 | `:claim` | `[secret]` | Ownership claim. If owner is empty and no recovery secret is set, `:claim` with no args claims the container directly. If a recovery secret exists, the caller must provide the matching secret. |
+| `:orphan` | `<actor-did-url>` | Owner-gated offline recovery. Idempotently removes a matching movable child and sends refreshed container ctx to this container's parent. |
 | `:child` | `[ctx]` | Node ctx-parenting with container lock policy. No args presents the same `children` map as contents; with ctx, admits or confirms through the node handshake. |
 
 After any contents mutation, the container sends refreshed container ctx to its

@@ -8864,6 +8864,290 @@ mod tests {
     }
 
     #[test]
+    fn root_orphan_for_live_actor_forwards_owner_and_old_parent() {
+        let env = root_actor_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#root".to_string());
+        config.insert("root".to_string(), "did:ma:runtime#root".to_string());
+        crate::state::set_config(config);
+        eval_all(
+            r#"
+            (define (ma-entity-exists? actor)
+              (equal? actor "did:ma:runtime#lamp"))
+            "#,
+            &env,
+        )
+        .unwrap();
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:owner",
+                "did:ma:runtime#root",
+                Value::list(vec![
+                    Value::symbol(":orphan"),
+                    Value::str("did:ma:runtime#lamp"),
+                    Value::str("from"),
+                    Value::str("did:ma:other#room"),
+                ]),
+            )),
+        );
+
+        eval_all("(on-message msg)", &env).unwrap();
+
+        assert_eq!(
+            eval_str("(get-prop \"sent-target:1\")", &env),
+            "did:ma:runtime#lamp"
+        );
+        assert_eq!(
+            eval_all("(get-prop \"sent-term:1\")", &env).unwrap(),
+            Value::list(vec![
+                Value::symbol(":orphan-root"),
+                Value::str("did:ma:owner"),
+                Value::str("did:ma:other#room"),
+            ]),
+        );
+    }
+
+    #[test]
+    fn root_orphan_for_unavailable_actor_sends_signed_repair_to_named_parent() {
+        let env = root_actor_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#root".to_string());
+        config.insert("root".to_string(), "did:ma:runtime#root".to_string());
+        crate::state::set_config(config);
+        eval_all("(define (ma-entity-exists? actor) #f)", &env).unwrap();
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:other#room",
+                "did:ma:runtime#root",
+                Value::list(vec![
+                    Value::symbol(":orphan"),
+                    Value::str("did:ma:runtime#lamp"),
+                    Value::str("from"),
+                    Value::str("did:ma:other#room"),
+                ]),
+            )),
+        );
+
+        eval_all("(on-message msg)", &env).unwrap();
+
+        assert_eq!(
+            eval_str("(get-prop \"sent-target:1\")", &env),
+            "did:ma:other#room"
+        );
+        assert_eq!(
+            eval_str("(ctx-text (car (cdr (get-prop \"sent-term:1\"))) \"kind\")", &env),
+            "orphan"
+        );
+        assert_eq!(
+            eval_str("(ctx-text (car (cdr (get-prop \"sent-term:1\"))) \"parent\")", &env),
+            "did:ma:runtime#root"
+        );
+    }
+
+    #[test]
+    fn room_owner_can_evict_unreachable_orphan_child_idempotently() {
+        let env = room_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#room".to_string());
+        config.insert("root".to_string(), "did:ma:runtime#root".to_string());
+        crate::state::set_config(config);
+        eval_all(
+            r#"
+            (set-prop! "owner" "did:ma:owner")
+            (test-agent-claim! "did:ma:other#orphan" "orphan")
+            "#,
+            &env,
+        )
+        .unwrap();
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:owner",
+                "did:ma:runtime#room",
+                Value::list(vec![
+                    Value::symbol(":orphan"),
+                    Value::str("did:ma:other#orphan"),
+                ]),
+            )),
+        );
+
+        eval_all("(on-message msg) (on-message msg)", &env).unwrap();
+
+        assert!(eval_bool(
+            "(not (child-ctx \"did:ma:other#orphan\"))",
+            &env
+        ));
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:2\")", &env).unwrap(),
+            Value::symbol(":ok")
+        );
+    }
+
+        #[test]
+        fn live_thing_accepts_root_orphan_adoption_only_for_its_owner() {
+                let env = thing_env();
+                install_send_reply_recorders(&env);
+                let mut config = std::collections::HashMap::new();
+                config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+                config.insert("self".to_string(), "did:ma:runtime#lamp".to_string());
+                config.insert("root".to_string(), "did:ma:runtime#root".to_string());
+                crate::state::set_config(config);
+                eval_all(
+                        r#"
+                        (set-prop! "owner" "did:ma:owner")
+                        (set-prop! "parent" "did:ma:other#room")
+                        "#,
+                        &env,
+                )
+                .unwrap();
+                env.define(
+                        Rc::from("owner_msg"),
+                        Value::Msg(sample_term_msg(
+                                "did:ma:runtime#root",
+                                "did:ma:runtime#lamp",
+                                Value::list(vec![
+                                        Value::symbol(":orphan-root"),
+                                        Value::str("did:ma:owner"),
+                                        Value::str("did:ma:other#room"),
+                                ]),
+                        )),
+                );
+                env.define(
+                        Rc::from("other_msg"),
+                        Value::Msg(sample_term_msg(
+                                "did:ma:runtime#root",
+                                "did:ma:runtime#lamp",
+                                Value::list(vec![
+                                        Value::symbol(":orphan-root"),
+                                        Value::str("did:ma:other"),
+                                        Value::str("did:ma:other#room"),
+                                ]),
+                        )),
+                );
+
+                eval_all("(on-message owner_msg)", &env).unwrap();
+                assert_eq!(
+                        eval_str("(get-prop \"sent-target:1\")", &env),
+                        "did:ma:runtime#root"
+                );
+                assert_eq!(
+                        eval_str("(ctx-text (car (cdr (get-prop \"sent-term:1\"))) \"parent\")", &env),
+                        "did:ma:runtime#root"
+                );
+
+                eval_all("(on-message other_msg)", &env).unwrap();
+                assert_eq!(
+                        eval_all("(get-prop \"reply-term:2\")", &env).unwrap(),
+                        Value::list(vec![Value::symbol(":error"), Value::str("only owner may orphan this actor")]),
+                );
+        }
+
+        #[test]
+        fn root_orphans_lists_only_live_movable_children() {
+                let env = root_actor_env();
+                install_send_reply_recorders(&env);
+                let mut config = std::collections::HashMap::new();
+                config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+                config.insert("self".to_string(), "did:ma:runtime#root".to_string());
+                config.insert("root".to_string(), "did:ma:runtime#root".to_string());
+                crate::state::set_config(config);
+                eval_all(
+                        r#"
+                        (define (ma-entity-exists? actor)
+                            (equal? actor "did:ma:runtime#lamp"))
+                        (define (root-child actor kind protocol)
+                            (map-set
+                                (map-set
+                                    (map-set
+                                        (map-set
+                                            (map-set
+                                                (map-set
+                                                    (map-set (make-map) "actor" actor)
+                                                    "kind" kind)
+                                                "protocol" protocol)
+                                            "parent" (local-self))
+                                        "name" actor)
+                                    "nick" actor)
+                                "description" actor))
+                        (remember-child! (root-child "did:ma:runtime#lamp" "thing" "/ma/thing/0.0.1"))
+                        (remember-child! (root-child "did:ma:runtime#room" "room" "/ma/room/0.0.1"))
+                        (remember-child! (root-child "did:ma:runtime#dead" "container" "/ma/container/0.0.1"))
+                        "#,
+                        &env,
+                )
+                .unwrap();
+                env.define(
+                        Rc::from("msg"),
+                        Value::Msg(sample_term_msg(
+                                "did:ma:anyone",
+                                "did:ma:runtime#root",
+                                Value::symbol(":orphans?"),
+                        )),
+                );
+
+                eval_all("(on-message msg)", &env).unwrap();
+
+                assert_eq!(
+                        eval_all("(car (cdr (get-prop \"reply-term:1\")))", &env).unwrap(),
+                        Value::list(vec![eval_all("(child-ctx \"did:ma:runtime#lamp\")", &env).unwrap()]),
+                );
+        }
+
+        #[test]
+        fn room_accepts_root_signed_repair_for_unavailable_movable_child() {
+                let env = room_env();
+                install_send_reply_recorders(&env);
+                let mut config = std::collections::HashMap::new();
+                config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+                config.insert("self".to_string(), "did:ma:runtime#room".to_string());
+                config.insert("root".to_string(), "did:ma:runtime#root".to_string());
+                crate::state::set_config(config);
+                eval_all("(test-agent-claim! \"did:ma:other#orphan\" \"orphan\")", &env).unwrap();
+                let repair = eval_all(
+                        r#"
+                        (map-set
+                            (map-set
+                                (map-set
+                                    (map-set
+                                        (map-set
+                                            (map-set
+                                                (map-set (make-map) "actor" "did:ma:other#orphan")
+                                                "kind" "orphan")
+                                            "protocol" "/ma/orphan/0.0.1")
+                                        "parent" "did:ma:other#root")
+                                    "name" "orphan")
+                                "nick" "orphan")
+                            "description" "An unavailable orphaned actor.")
+                        "#,
+                        &env,
+                )
+                .unwrap();
+                env.define(
+                        Rc::from("msg"),
+                        Value::Msg(sample_term_msg(
+                                "did:ma:other#root",
+                                "did:ma:runtime#room",
+                                Value::list(vec![Value::symbol(":parent"), repair]),
+                        )),
+                );
+
+                eval_all("(on-message msg)", &env).unwrap();
+
+                assert!(eval_bool(
+                        "(not (child-ctx \"did:ma:other#orphan\"))",
+                        &env
+                ));
+        }
+
+    #[test]
     fn random_builtin_returns_integer_in_range() {
         let env = new_root_env();
         let value = eval_int("(random 3)", &env);

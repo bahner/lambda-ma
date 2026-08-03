@@ -127,7 +127,7 @@
   (define (node-child-admission-error ctx msg)
     (if (locked?) (locked-message) #f))
 
-  (define (node-children-changed!) #f)
+  (define (node-children-changed!) (send-container-ctx!))
 
   (define (node-parent-committed!)
     (begin
@@ -311,6 +311,8 @@
                (reply-ok-with msg "claimed")))
             (else
              (reply-error msg "claim failed"))))))
+
+(set-cmd-method! :orphan handle-node-orphan!)
 
 (set-cmd-method! :put-in
   (lambda (args msg)

@@ -31,6 +31,12 @@
 (define (remove-claim! actor)
   (forget-child! actor))
 
+(define (node-child-orphaned! ctx)
+  (begin
+    (remove-claim! (ctx-text ctx "actor"))
+    (ma-save-state!)
+    (broadcast-room-ctx!)))
+
 (define (claim-actors-by-kind kind)
   (let loop ((ctxs (child-ctxs-by-kind kind)) (acc '()))
     (cond ((null? ctxs) (reverse acc))
@@ -2011,10 +2017,14 @@
           (reply-ok-with msg (room-ctx-parent)))
           ((not (null? (cdr args)))
            (reply-error msg "usage: :parent [ctx]"))
+          ((node-root-orphan-ctx? (car args) msg)
+           (handle-node-parent args msg))
           ((not (equal? (ctx-text (car args) "kind") "avatar"))
            (handle-child-announcement! msg (car args)))
           (else
            (handle-avatar-parent! msg (car args))))))
+
+(set-cmd-method! :orphan handle-node-orphan!)
 
 (set-cmd-method! :enter
   (lambda (args msg)
