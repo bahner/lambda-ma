@@ -150,9 +150,6 @@
   (let ((o (owner)))
     (and o (msg-from-owner? o msg))))
 
-(define (local-actor-caller? msg)
-  (local-actor-ref? (msg-from msg)))
-
 (define (recycle! msg)
   (let ((old-parent (node-parent)))
     (begin
@@ -215,7 +212,8 @@
 
 (set-rpc-method! :look
   (lambda (args msg)
-    (if (and (presentation-target-arg? args) (local-actor-caller? msg))
+    (if (and (presentation-target-arg? args)
+             (presentation-did-authorised? (car args) msg))
         (begin
           (present-to-did! (car args) (container-look-text))
           (reply-ok msg))

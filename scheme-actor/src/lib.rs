@@ -6932,13 +6932,17 @@ mod tests {
     }
 
     #[test]
-    fn container_look_can_present_contents_to_delegated_did() {
+    fn container_look_can_present_contents_to_cross_runtime_avatar_did() {
         let env = container_env();
         install_send_reply_recorders(&env);
         let mut config = std::collections::HashMap::new();
         config.insert("runtime".to_string(), "did:ma:runtime".to_string());
         config.insert("self".to_string(), "did:ma:runtime#bag".to_string());
         crate::state::set_config(config);
+        let remote_avatar = eval_str(
+            r#"(avatar-for-did-in-runtime "did:ma:remote" "did:ma:did")"#,
+            &env,
+        );
         let child_ctx = eval_all(
             r#"
                         (map-set
@@ -6965,7 +6969,7 @@ mod tests {
         );
         env.define(
             Rc::from("avatar_msg"),
-            Value::Msg(sample_msg("did:ma:runtime#avatar", "did:ma:runtime#bag")),
+            Value::Msg(sample_msg(&remote_avatar, "did:ma:runtime#bag")),
         );
 
         eval_all(

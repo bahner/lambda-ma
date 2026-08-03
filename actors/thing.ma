@@ -105,7 +105,7 @@
     (let ((text (string-append (name) "\n" (description))))
       (if (and (not (null? args))
                (non-empty-string? (car args))
-               (local-actor-ref? (msg-from msg)))
+               (presentation-did-authorised? (car args) msg))
           (begin
             (ma-send! (car args) (list :print text))
             (reply-ok msg))
