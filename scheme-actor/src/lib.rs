@@ -6052,12 +6052,10 @@ mod tests {
         #[test]
         fn avatar_recycle_routes_container_child_through_named_container() {
                 let env = avatar_env();
-                let did = "did:ma:owner";
                 let mut config = std::collections::HashMap::new();
                 config.insert("runtime".to_string(), "did:ma:runtime".to_string());
-                let avatar_id = eval_str(&format!(r#"(avatar-fragment "{did}")"#), &env);
-                config.insert("self".to_string(), format!("did:ma:runtime#{avatar_id}"));
-                config.insert("id".to_string(), avatar_id);
+                config.insert("self".to_string(), "did:ma:runtime#avatar".to_string());
+                config.insert("id".to_string(), "avatar".to_string());
                 crate::state::set_config(config);
                 install_send_reply_recorders(&env);
 
