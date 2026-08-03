@@ -127,7 +127,8 @@
   (define (node-child-admission-error ctx msg)
     (if (locked?) (locked-message) #f))
 
-  (define (node-children-changed!) #f)
+  (define (node-children-changed!)
+    (send-container-ctx!))
 
   (define (node-parent-committed!)
     (begin

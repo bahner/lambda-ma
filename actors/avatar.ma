@@ -433,7 +433,7 @@
 (define (put-carried! did item-actor container-actor item-ctx)
   (let ((inventory (inventory-parent)))
     (if inventory
-        (ma-send! (canonical-actor inventory) (list :take did (canonical-actor item-actor) (canonical-actor container-actor)))
+        (ma-send! (canonical-actor inventory) (list :take did (canonical-actor item-actor) (canonical-actor container-actor) :drop))
         (ma-send! (canonical-actor item-actor) (list :drop did (canonical-actor container-actor) item-ctx)))))
 
 (define (put-visible! did item-actor container-actor item-ctx)

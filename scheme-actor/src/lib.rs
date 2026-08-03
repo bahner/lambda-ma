@@ -4999,6 +4999,7 @@ mod tests {
                 Value::str("did:ma:did"),
                 Value::str("did:ma:runtime#lamp"),
                 Value::str("did:ma:runtime#bag"),
+                Value::symbol(":drop"),
             ])
         );
         assert_eq!(
@@ -5722,7 +5723,30 @@ mod tests {
         );
         assert_eq!(
             eval_all("(get-prop \"sent-term:1\")", &env).unwrap(),
-            Value::list(vec![Value::symbol(":child"), child_ctx])
+            Value::list(vec![Value::symbol(":child"), child_ctx.clone()])
+        );
+        assert_eq!(
+            eval_str("(get-prop \"sent-target:2\")", &env),
+            "did:ma:runtime#avatar"
+        );
+        assert_eq!(
+            eval_all("(car (get-prop \"sent-term:2\"))", &env).unwrap(),
+            Value::symbol(":parent")
+        );
+        assert_eq!(
+            eval_int(
+                "(map-ref (car (cdr (get-prop \"sent-term:2\"))) \"rev\" 0)",
+                &env
+            ),
+            1
+        );
+        assert_eq!(
+            eval_all(
+                "(map-ref (map-ref (car (cdr (get-prop \"sent-term:2\"))) \"contents\" (make-map)) \"did:ma:runtime#lamp\" #f)",
+                &env,
+            )
+            .unwrap(),
+            child_ctx
         );
     }
 
