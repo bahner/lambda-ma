@@ -5368,6 +5368,74 @@ mod tests {
     }
 
     #[test]
+    fn room_ctx_prop_updates_announce_updated_ctx_to_root() {
+        let env = room_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#room".to_string());
+        crate::state::set_config(config);
+
+        eval_all(
+            r#"
+            (set-init-prop! "parent" "did:ma:runtime#root")
+            (set-init-prop! "name" "Harbour")
+            (set-init-prop! "nick" "harbour")
+            (set-init-prop! "description" "A quiet harbour.")
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        eval_all("(flush-ctx-prop-changes!)", &env).unwrap();
+        assert!(eval_bool("(not (has-prop? \"sent-count\"))", &env));
+        eval_all("(set-room-prop! \"name\" \"Old Harbour\")", &env).unwrap();
+        eval_all("(flush-ctx-prop-changes!)", &env).unwrap();
+        assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 1);
+        eval_all("(set-room-prop! \"nick\" \"old harbour\")", &env).unwrap();
+        eval_all("(flush-ctx-prop-changes!)", &env).unwrap();
+        assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 2);
+        eval_all(
+            "(set-room-prop! \"description\" \"A weathered harbour.\")",
+            &env,
+        )
+        .unwrap();
+        eval_all("(flush-ctx-prop-changes!)", &env).unwrap();
+        assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 3);
+        for index in 1..=3 {
+            assert_eq!(
+                eval_str(&format!("(get-prop \"sent-target:{index}\")"), &env),
+                "did:ma:runtime#root"
+            );
+            assert_eq!(
+                eval_all(&format!("(car (get-prop \"sent-term:{index}\"))"), &env).unwrap(),
+                Value::symbol(":parent")
+            );
+        }
+        assert_eq!(
+            eval_str(
+                "(ctx-text (car (cdr (get-prop \"sent-term:1\"))) \"name\")",
+                &env
+            ),
+            "Old Harbour"
+        );
+        assert_eq!(
+            eval_str(
+                "(ctx-text (car (cdr (get-prop \"sent-term:2\"))) \"nick\")",
+                &env
+            ),
+            "old harbour"
+        );
+        assert_eq!(
+            eval_str(
+                "(ctx-text (car (cdr (get-prop \"sent-term:3\"))) \"description\")",
+                &env
+            ),
+            "A weathered harbour."
+        );
+    }
+
+    #[test]
     fn thing_recycle_requires_owner_via_parent_and_ends_entity() {
         let env = thing_env();
         install_send_reply_recorders(&env);
@@ -6416,17 +6484,17 @@ mod tests {
         .unwrap();
         let committed_ctx =
             eval_all(r#"(map-set bag_ctx "parent" "did:ma:runtime#room")"#, &env).unwrap();
-        env.define(Rc::from("committed_ctx"), committed_ctx);
+        env.define(Rc::from("committed_ctx"), committed_ctx.clone());
         env.define(
             Rc::from("bag_msg"),
             Value::Msg(sample_term_msg(
                 "did:ma:runtime#bag",
                 "did:ma:runtime#inventory",
-                Value::symbol(":parent"),
+                Value::list(vec![Value::symbol(":parent"), committed_ctx]),
             )),
         );
 
-        eval_all("((find-method :parent) (list committed_ctx) bag_msg)", &env).unwrap();
+        eval_all("(on-message bag_msg)", &env).unwrap();
 
         assert!(eval_bool("(not (child-ctx \"did:ma:runtime#bag\"))", &env));
         assert_eq!(eval_str("(contents-text)", &env), "Contents: none.");
@@ -7027,7 +7095,7 @@ mod tests {
 
         assert_eq!(
             eval_str("(exit-init \"dør\" \"did:ma:runtime#kitchen\")", &env),
-            "(set-prop! \"direction\" \"dør\")\n(set-prop! \"parent\" \"did:ma:runtime#source\")\n(set-prop! \"target-room\" \"did:ma:runtime#kitchen\")\n(ma-save-state!)\n"
+            "(set-init-prop! \"direction\" \"dør\")\n(set-init-prop! \"parent\" \"did:ma:runtime#source\")\n(set-init-prop! \"target-room\" \"did:ma:runtime#kitchen\")\n(ma-save-state!)\n"
         );
     }
 
@@ -7049,7 +7117,7 @@ mod tests {
 
         assert_eq!(
             eval_str("(exit-init \"north\" \"did:ma:runtime#kitchen\")", &env),
-            "(set-prop! \"direction\" \"north\")\n(set-prop! \"owner\" \"did:ma:owner\")\n(set-prop! \"parent\" \"did:ma:runtime#source\")\n(set-prop! \"target-room\" \"did:ma:runtime#kitchen\")\n(ma-save-state!)\n"
+            "(set-init-prop! \"direction\" \"north\")\n(set-init-prop! \"owner\" \"did:ma:owner\")\n(set-init-prop! \"parent\" \"did:ma:runtime#source\")\n(set-init-prop! \"target-room\" \"did:ma:runtime#kitchen\")\n(ma-save-state!)\n"
         );
     }
 

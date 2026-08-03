@@ -68,11 +68,11 @@
 ; Defaults fill in only missing inherited agent state.
 (define (rms-defaults!)
   (begin
-    (if (get-prop "name") #f (set-prop! "name" "Richard Stallman"))
-    (if (get-prop "nick") #f (set-prop! "nick" "rms"))
+    (if (get-prop "name") #f (set-init-prop! "name" "Richard Stallman"))
+    (if (get-prop "nick") #f (set-init-prop! "nick" "rms"))
     (if (get-prop "description")
         #f
-        (set-prop! "description" "A roaming free software sage dispensing random fortunes."))
+        (set-init-prop! "description" "A roaming free software sage dispensing random fortunes."))
     (ma-save-state!)))
 
 (define (rms-schedule-fortune!)

@@ -239,6 +239,10 @@
   (let ((name (get-prop "name")))
     (if name name "Construct")))
 
+(define (room-nick)
+  (let ((nick (get-prop "nick")))
+    (if nick nick (room-name))))
+
 (define (room-description)
   (let ((description (get-prop "description")))
     (if description description "“This is the Construct. It's our loading program. We can load anything... From clothing to equipment, weapons, training simulations; anything we need.”")))
@@ -259,6 +263,8 @@
 
 (define (room-ctx-parent)
   (canonical-actor (root)))
+
+(register-ctx-props! (list "ctx:rev" "children" "exits"))
 
 (define (presentation-entry kind protocol actor name nick description)
   (map-set
@@ -349,7 +355,7 @@
                     "parent" (room-ctx-parent))
                   "rev" (room-ctx-rev))
                 "name" (room-name))
-              "nick" (room-name))
+              "nick" (room-nick))
             "description" (room-description))
           "who" (avatar-entry-list (avatar-occupants)))
         "agents" (agent-entry-list (occupants)))
@@ -371,14 +377,14 @@
 
 (define (broadcast-room-ctx!)
   (begin
-    (inc-prop! "ctx:rev" 1)
+    (set-prop! "ctx:rev" (+ (room-ctx-rev) 1))
     (ma-save-state!)
     (send-room-ctx-list! (avatar-occupants) (room-ctx))))
 
 (define (send-fresh-room-ctx-to! avatar)
   (if (or (valid-did-url? avatar) (local-actor-ref? avatar))
       (begin
-        (inc-prop! "ctx:rev" 1)
+        (set-prop! "ctx:rev" (+ (room-ctx-rev) 1))
         (ma-save-state!)
         (send-room-ctx-to! avatar (room-ctx)))
       #f))
@@ -436,9 +442,9 @@
         (avatar (avatar-for-did did))
         (target-room (canonical-actor room)))
     (string-append
-      "(set-prop! \"did\" \"" did "\")\n"
-      "(set-prop! \"root\" \"" r "\")\n"
-      "(set-prop! \"nick\" \"" n "\")\n"
+      "(set-init-prop! \"did\" \"" did "\")\n"
+      "(set-init-prop! \"root\" \"" r "\")\n"
+      "(set-init-prop! \"nick\" \"" n "\")\n"
       "(ma-save-state!)\n"
       "(ma-send! \"" target-room "\" (list :enter \"" avatar "\" #f \"" n "\"))\n")))
 
@@ -449,10 +455,10 @@
         (target-room (canonical-actor room))
         (inv (if (valid-did-url? inventory) (canonical-actor inventory) "")))
     (string-append
-      "(set-prop! \"did\" \"" did "\")\n"
-      "(set-prop! \"root\" \"" r "\")\n"
-      "(set-prop! \"nick\" \"" n "\")\n"
-      "(set-prop! \"inventory\" \"" inv "\")\n"
+      "(set-init-prop! \"did\" \"" did "\")\n"
+      "(set-init-prop! \"root\" \"" r "\")\n"
+      "(set-init-prop! \"nick\" \"" n "\")\n"
+      "(set-init-prop! \"inventory\" \"" inv "\")\n"
       "(ma-save-state!)\n"
       "(ma-send! \"" target-room "\" (list :enter \"" avatar "\" #f \"" n "\" \"" inv "\"))\n")))
 
@@ -1077,8 +1083,7 @@
           (else #f))))
 
 (define (set-room-prop! key value)
-  (set-prop! key value)
-  (ma-save-state!))
+  (set-node-prop! key value))
 
 (define (reply-to-sender msg text)
   (ma-send! (canonical-actor (msg-from msg)) (list :print text)))
@@ -1107,8 +1112,7 @@
 (define (apply-room-prop! msg key value-args delegated)
   (if (null? value-args)
       (begin
-        (del-prop! key)
-        (ma-save-state!)
+        (set-room-prop! key "")
         (reply-room-prop-ok msg delegated (string-append "Reset prop " key ".")))
       (begin
         (set-room-prop! key (join-words value-args))
@@ -1378,17 +1382,17 @@
 
 (define (room-init name owner-did custom-init ready-init)
   (string-append
-    "(set-prop! \"root\" \"" (root) "\")\n"
-    (if name (string-append "(set-prop! \"name\" \"" name "\")\n") "")
-    "(set-prop! \"owner\" \"" owner-did "\")\n"
+    "(set-init-prop! \"root\" \"" (root) "\")\n"
+    (if name (string-append "(set-init-prop! \"name\" \"" name "\")\n") "")
+    "(set-init-prop! \"owner\" \"" owner-did "\")\n"
     "(ma-save-state!)\n"
     (if custom-init custom-init "")
     (if ready-init ready-init "")))
 
 (define (child-alive-init nonce direction)
   (string-append
-    "(set-prop! \"child-alive-nonce\" \"" nonce "\")\n"
-    "(set-prop! \"child-alive-direction\" \"" direction "\")\n"
+    "(set-init-prop! \"child-alive-nonce\" \"" nonce "\")\n"
+    "(set-init-prop! \"child-alive-direction\" \"" direction "\")\n"
     "(ma-save-state!)\n"
     "(notify-child-alive!)\n"))
 
@@ -1404,10 +1408,10 @@
 
 (define (exit-init direction target-room)
   (string-append
-    "(set-prop! \"direction\" \"" direction "\")\n"
-    (if (owner) (string-append "(set-prop! \"owner\" \"" (owner) "\")\n") "")
-    "(set-prop! \"parent\" \"" (canonical-actor (self)) "\")\n"
-    "(set-prop! \"target-room\" \"" (canonical-actor target-room) "\")\n"
+    "(set-init-prop! \"direction\" \"" direction "\")\n"
+    (if (owner) (string-append "(set-init-prop! \"owner\" \"" (owner) "\")\n") "")
+    "(set-init-prop! \"parent\" \"" (canonical-actor (self)) "\")\n"
+    "(set-init-prop! \"target-room\" \"" (canonical-actor target-room) "\")\n"
     "(ma-save-state!)\n"))
 
 (define (dig-target-args args)

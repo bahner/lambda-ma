@@ -313,14 +313,18 @@ Recommended pattern:
 
 ```scheme
 (begin
-  (set-prop! "name" "My Agent")
-  (set-prop! "nick" "myagent")
-  (set-prop! "description" "A custom movable agent.")
+  (set-init-prop! "name" "My Agent")
+  (set-init-prop! "nick" "myagent")
+  (set-init-prop! "description" "A custom movable agent.")
   (enter (string-append (ma-get-config-key "runtime") "#construct"))
   (ma-save-state!))
 ```
 
 Why this works well:
+
+- `set-init-prop!` explicitly seeds initial state without publishing an
+  intermediate parent-facing ctx. Use ordinary `set-prop!` after init so ctx
+  attributes propagate to the current parent by default.
 
 - `enter` records the target as pending, sends room `:enter`, and commits the
   new `parent` only after a valid room `:ctx` ack.

@@ -6,6 +6,8 @@
 (define (direction) (get-prop "direction"))
 (define (owner) (get-prop "owner"))
 
+(register-ctx-props! (list "direction"))
+
 (define (name)
   (let ((n (get-prop "name")))
     (if n n (string-append "exit " (direction)))))

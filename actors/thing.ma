@@ -77,11 +77,7 @@
       (equal? key "description")))
 
 (define (set-thing-prop! key value)
-  (if (equal? value "")
-      (del-prop! key)
-      (set-prop! key value))
-  (ma-save-state!)
-  (announce-node-parent!))
+  (set-node-prop! key value))
 
 (define (handle-thing-prop! msg args)
   (cond ((not (owner-caller? msg))

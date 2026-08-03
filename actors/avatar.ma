@@ -60,11 +60,11 @@
 
 (define (inventory-init owner-did avatar)
   (string-append
-    "(set-prop! \"owner\" \"" owner-did "\")\n"
-    "(set-prop! \"parent\" \"" (canonical-actor avatar) "\")\n"
-    "(set-prop! \"name\" \"" INVENTORY_LABEL "\")\n"
-    "(set-prop! \"nick\" \"inventory\")\n"
-    "(set-prop! \"description\" \"A personal inventory container.\")\n"
+    "(set-init-prop! \"owner\" \"" owner-did "\")\n"
+    "(set-init-prop! \"parent\" \"" (canonical-actor avatar) "\")\n"
+    "(set-init-prop! \"name\" \"" INVENTORY_LABEL "\")\n"
+    "(set-init-prop! \"nick\" \"inventory\")\n"
+    "(set-init-prop! \"description\" \"A personal inventory container.\")\n"
     "(ma-save-state!)\n"))
 
 (define (set-inventory-actor! actor)

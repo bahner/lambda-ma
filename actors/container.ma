@@ -95,6 +95,8 @@
     (map-set ctx "rev" (container-ctx-rev))
     "contents" (contents-map)))
 
+  (register-ctx-props! (list "ctx:rev" "children"))
+
 (define (node-protocol) CONTAINER_PROTOCOL)
 (define (node-kind) "container")
 (define (node-name) (name))
@@ -112,19 +114,24 @@
     (if (equal? p "")
         #f
         (begin
-          (inc-prop! "ctx:rev" 1)
+          (set-prop! "ctx:rev" (+ (container-ctx-rev) 1))
           (ma-save-state!)
           (announce-node-parent!)))))
+
+  (define (ctx-props-changed! keys)
+    (if (and (member-string? "ctx:rev" keys)
+             (null? (cdr keys)))
+        (announce-node-parent!)
+        (send-container-ctx!)))
 
   (define (node-child-admission-error ctx msg)
     (if (locked?) (locked-message) #f))
 
-  (define (node-children-changed!)
-    (send-container-ctx!))
+  (define (node-children-changed!) #f)
 
   (define (node-parent-committed!)
     (begin
-      (inc-prop! "ctx:rev" 1)
+      (set-prop! "ctx:rev" (+ (container-ctx-rev) 1))
       (ma-save-state!)))
 
   (define (node-confirmation-stale? ctx)
@@ -163,11 +170,7 @@
       (equal? key "locked-message")))
 
 (define (set-container-prop! key value)
-  (if (equal? value "")
-      (del-prop! key)
-      (set-prop! key value))
-  (ma-save-state!)
-  (send-container-ctx!))
+  (set-node-prop! key value))
 
 (define (handle-container-prop! msg args)
   (cond ((not (owner-caller? msg))

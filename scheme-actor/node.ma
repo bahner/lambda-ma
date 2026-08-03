@@ -9,9 +9,11 @@
 
 (define (set-node-parent! actor)
   (if (non-empty-string? actor)
-      (set-prop! "parent" (canonical-actor actor))
-      (del-prop! "parent"))
+  (set-init-prop! "parent" (canonical-actor actor))
+  (del-init-prop! "parent"))
   (ma-save-state!))
+
+(register-ctx-props! (list "parent" "name" "nick" "description"))
 
 (define (node-protocol)
   (let ((value (ma-get-config-key "kind")))
@@ -52,10 +54,19 @@
 (define (node-ctx)
   (node-ctx-for-parent (node-parent)))
 
+(define (ctx-props-changed! keys)
+  (announce-node-parent!))
+
+(define (set-node-prop! key value)
+  (if (equal? value "")
+      (del-prop! key)
+      (set-prop! key value))
+  (ma-save-state!))
+
 (define (set-node-prop-from-ctx! ctx key)
   (let ((value (ctx-text ctx key)))
     (if (non-empty-string? value)
-        (set-prop! key value)
+        (set-init-prop! key value)
         #f)))
 
 (define (apply-node-parent-ctx! ctx)

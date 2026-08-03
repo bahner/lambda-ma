@@ -4,11 +4,11 @@
 ; Defaults fill in only missing inherited agent state.
 (define (duck-defaults!)
   (begin
-    (if (get-prop "name") #f (set-prop! "name" "Rubber Duckie™"))
-    (if (get-prop "nick") #f (set-prop! "nick" "Duckie"))
+    (if (get-prop "name") #f (set-init-prop! "name" "Rubber Duckie™"))
+    (if (get-prop "nick") #f (set-init-prop! "nick" "Duckie"))
     (if (get-prop "description")
         #f
-        (set-prop! "description" "A curious rubber duck that waddles around and quacks because one is never alone with a rubber duck"))
+        (set-init-prop! "description" "A curious rubber duck that waddles around and quacks because one is never alone with a rubber duck"))
     (ma-save-state!)))
 
 (define (duck-schedule-quack!)

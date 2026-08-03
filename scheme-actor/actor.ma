@@ -329,16 +329,19 @@
           (else (loop (cdr table))))))
 
 (define (on-message msg)
+  (begin-ctx-prop-changes!)
   (let* ((term (msg-content msg))
-         (verb (verb-of term))
-         (args (args-of term))
-         (fn (find-method verb)))
+          (verb (verb-of term))
+          (args (args-of term))
+          (fn (find-method verb)))
     (if fn
         (begin
           (fn args msg)
+          (flush-ctx-prop-changes!)
           #f)
       (if *default-method*
         (begin
           (*default-method* verb args msg)
+          (flush-ctx-prop-changes!)
           #f)
         (ma-reply! msg (list :error "unknown verb"))))))

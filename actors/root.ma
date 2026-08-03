@@ -57,10 +57,10 @@
         (target-room (canonical-actor room))
         (inv (if (valid-did-url? inventory) (canonical-actor inventory) "")))
     (string-append
-      "(set-prop! \"did\" \"" did "\")\n"
-      "(set-prop! \"root\" \"" r "\")\n"
-      "(set-prop! \"nick\" \"" n "\")\n"
-      (if (equal? inv "") "" (string-append "(set-prop! \"inventory\" \"" inv "\")\n"))
+      "(set-init-prop! \"did\" \"" did "\")\n"
+      "(set-init-prop! \"root\" \"" r "\")\n"
+      "(set-init-prop! \"nick\" \"" n "\")\n"
+      (if (equal? inv "") "" (string-append "(set-init-prop! \"inventory\" \"" inv "\")\n"))
       "(ma-save-state!)\n"
       "(ma-send! \"" target-room "\" (list :enter \"" avatar "\" #f \"" n "\" \"" inv "\"))\n")))
 

@@ -31,7 +31,7 @@ runtime:
       kind: /ma/root/0.0.1
       acl: open
       init: |
-        (set-prop! "start" (string-append (ma-get-config-key "runtime") "#construct"))
+        (set-init-prop! "start" (string-append (ma-get-config-key "runtime") "#construct"))
         (ma-save-state!)
 
     construct:
