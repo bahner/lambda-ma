@@ -75,18 +75,20 @@
     (set-node-prop-from-ctx! ctx "nick")
     (set-node-prop-from-ctx! ctx "description")))
 
-(define (node-delegated-did-arg? args)
-  (and (not (null? args)) (valid-did? (car args))))
+(define (node-delegated-did-arg? args msg)
+  (and (not (null? args))
+       (valid-did? (car args))
+       (or (local-actor-ref? (msg-from msg))
+           (node-caller-is-parent? msg)
+           (node-owner-avatar-delegation? (car args) msg))))
 
 (define (node-effective-did args msg)
-  (if (and (node-delegated-did-arg? args)
-           (local-actor-ref? (msg-from msg)))
+  (if (node-delegated-did-arg? args msg)
       (car args)
       (msg-from msg)))
 
 (define (node-effective-args args msg)
-  (if (and (node-delegated-did-arg? args)
-           (local-actor-ref? (msg-from msg)))
+  (if (node-delegated-did-arg? args msg)
       (cdr args)
       args))
 
@@ -179,6 +181,7 @@
 
     (define (node-child-admission-error ctx msg) #f)
     (define (node-children-changed!) #f)
+    (define (node-child-departed! ctx) #f)
     (define (node-parent-committed!) #f)
     (define (node-confirmation-stale? ctx) #f)
     (define (node-children-query-error msg) #f)
@@ -274,34 +277,28 @@
         (canonical-actor candidate)
         (canonical-actor (msg-from msg)))))
 
-(define (take-feedback-verb rest)
+(define (take-transfer-verb rest)
   (let ((hint
           (if (or (null? rest)
                   (null? (cdr rest))
                   (null? (cdr (cdr rest))))
               #f
               (car (cdr (cdr rest))))))
-    (if (equal? hint :drop) "drop" "take")))
-
-(define (take-transfer-verb rest)
-  (if (equal? (take-feedback-verb rest) "drop") :drop :take))
+    (if (equal? hint :drop) :drop :take)))
 
 (define (handle-parent-take did rest msg)
   (if (null? rest)
       #f
-      (let* ((actor (child-ref (car rest)))
+      (let* ((actor (if (valid-did-url? (car rest))
+                        (child-ref (car rest))
+                        #f))
              (ctx (if actor (child-ctx actor) #f)))
         (if actor
             (let ((target-parent (take-target-parent rest msg))
-                  (feedback-verb (take-feedback-verb rest))
                   (transfer-verb (take-transfer-verb rest)))
               (begin
                 ; Keep the child until its committed ctx reports another parent.
                 (ma-send! actor (list transfer-verb did target-parent ctx))
-                (ma-send! (canonical-actor (msg-from msg))
-                          (list :print
-                                (string-append "You " feedback-verb " "
-                                               (child-label ctx) ".")))
                 (reply-ok msg)
                 #t))
             #f))))
@@ -343,6 +340,9 @@
          (reply-error msg "parent ctx is not admissible"))
         ((not (child-ctx-parent-is-self? (car args)))
          (begin
+           (if (child-ctx (ctx-text (car args) "actor"))
+               (node-child-departed! (car args))
+               #f)
            (forget-child! (ctx-text (car args) "actor"))
            (node-children-changed!)
            (reply-ok msg)))

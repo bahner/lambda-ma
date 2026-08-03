@@ -1659,7 +1659,7 @@
             (actor
              (begin
                (ma-send! (canonical-actor actor) (list :recycle did))
-               (reply-to-sender msg (string-append "You recycle " token "."))))
+              (reply-ok msg)))
             (else
              (reply-to-sender msg (string-append "Unknown agent or thing: " token)))))))
 
@@ -1689,7 +1689,7 @@
             (else
              (begin
                (ma-send! (canonical-actor item-actor) (list :drop did (canonical-actor container-actor) item-ctx))
-               (reply-to-sender msg (string-append "You try to put " item-token " in " container-token "."))))))))
+               (reply-ok msg)))))))
 
 (set-cmd-method! :where?
   (lambda (args msg)

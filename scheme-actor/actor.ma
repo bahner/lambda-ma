@@ -104,9 +104,19 @@
     (else #f))))
 
 (define (did-avatar? did actor)
+  (deterministic-avatar-for-did? did actor))
+
+(define (presentation-did-authorised? did msg)
   (and (valid-did? did)
-       (string? actor)
-       (equal? (canonical-actor actor) (avatar-for-did did))))
+       (or (local-actor-ref? (msg-from msg))
+           (did-avatar? did (msg-from msg)))))
+
+(define (presentation-avatar-target did msg)
+  (let ((target (canonical-actor (msg-from msg))))
+    (if (and (presentation-did-authorised? did msg)
+             (valid-did-url? target))
+        target
+        #f)))
 
 (define (msg-from-owner? owner msg)
   (let ((from (msg-from msg)))

@@ -130,6 +130,16 @@
   (define (node-children-changed!)
     (send-container-ctx!))
 
+  (define (node-child-departed! ctx)
+    (if (owner)
+        (ma-send! (canonical-actor (owner))
+                  (list :print
+                        (string-append (child-label ctx)
+                                       " is no longer in "
+                                       (name)
+                                       ".")))
+        #f))
+
   (define (node-parent-committed!)
     (begin
       (set-prop! "ctx:rev" (+ (container-ctx-rev) 1))
@@ -197,12 +207,11 @@
     (description) "\n"
     (if (locked?) (locked-message) (contents-text))))
 
-(define (present-to-did! target text)
+(define (present-to-avatar! target text)
   (ma-send! target (list :print text)))
 
-(define (presentation-target-arg? args)
-  (and (not (null? args))
-       (non-empty-string? (car args))))
+(define (presentation-target-avatar args msg)
+  (if (null? args) #f (presentation-avatar-target (car args) msg)))
 
 ; Public methods.
 (set-rpc-method! :about
@@ -217,11 +226,12 @@
 
 (set-rpc-method! :look
   (lambda (args msg)
-    (if (and (presentation-target-arg? args) (local-actor-caller? msg))
+    (let ((target (presentation-target-avatar args msg)))
+      (if target
         (begin
-          (present-to-did! (car args) (container-look-text))
+          (present-to-avatar! target (container-look-text))
           (reply-ok msg))
-        (reply-ok-with msg (container-look-text)))))
+        (reply-ok-with msg (container-look-text))))))
 
 (set-rpc-method! :where?
   (lambda (args msg)

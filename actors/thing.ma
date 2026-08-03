@@ -103,12 +103,11 @@
 
 (set-rpc-method! :look
   (lambda (args msg)
-    (let ((text (string-append (name) "\n" (description))))
-      (if (and (not (null? args))
-               (non-empty-string? (car args))
-               (local-actor-ref? (msg-from msg)))
+    (let ((text (string-append (name) "\n" (description)))
+          (target (if (null? args) #f (presentation-avatar-target (car args) msg))))
+      (if target
           (begin
-            (ma-send! (car args) (list :print text))
+            (ma-send! target (list :print text))
             (reply-ok msg))
           (reply-ok-with msg text)))))
 

@@ -100,12 +100,20 @@
             (ma-send! adopted (list :child (inventory-parent-ctx adopted)))))
       #f))
 
+(define (ensure-configured-inventory! owner-did actor)
+  (if (and actor
+           (same-actor? actor (inventory-for-did owner-did))
+           (dead-local-actor? actor))
+      (ma-create-actor CONTAINER_KIND #f (inventory-init owner-did (local-self)) (inventory-fragment owner-did))
+      #f)
+  actor)
+
 (define (ensure-inventory-ref!)
   (let ((owner-did (did)))
     (if (valid-did? owner-did)
         (let ((configured (inventory-actor)))
           (if configured
-              configured
+              (ensure-configured-inventory! owner-did configured)
               (let ((actor (inventory-for-did owner-did)))
                 (begin
                   (set-inventory-actor! actor)
@@ -120,7 +128,7 @@
     (if (valid-did? owner-did)
         (let ((configured (inventory-actor)))
           (if configured
-              configured
+              (ensure-configured-inventory! owner-did configured)
               (let ((actor (inventory-for-did owner-did)))
                 (begin
                   (set-inventory-actor! actor)
@@ -351,17 +359,6 @@
 (define (send-room-as-did verb args)
   (send-room verb (cons (did) args)))
 
-(define (take-source args)
-  (if (and (not (null? args))
-           (not (null? (cdr args)))
-           (equal? (car (cdr args)) "from")
-           (not (null? (cdr (cdr args))))
-           (null? (cdr (cdr (cdr args)))))
-   (let* ((token (car (cdr (cdr args))))
-       (entry (inventory-ref token)))
-     (if entry (inventory-entry-actor entry) token))
-      (room)))
-
 (define (take-token args)
   (if (null? args) #f (car args)))
 
@@ -380,15 +377,58 @@
            (not (null? (cdr (cdr args))))
            (null? (cdr (cdr (cdr args)))))))
 
+(define (take-source-entry args)
+  (if (take-has-source? args)
+      (let ((token (car (cdr (cdr args)))))
+        (cond ((inventory-ref token) (inventory-ref token))
+              (else
+               (let ((entry (room-ctx-ref token)))
+                 (cond ((and (map? entry)
+                             (valid-did-url? (ctx-text entry "actor")))
+                        (cons (canonical-actor (ctx-text entry "actor")) entry))
+                       ((valid-did-url? token)
+                        (cons (canonical-actor token) (make-map)))
+                       (else #f))))))
+      #f))
+
+(define (take-source-ref source-entry)
+  (if source-entry (inventory-entry-actor source-entry) #f))
+
+(define (container-content-ref contents token)
+  (let loop ((entries (map->alist contents)))
+    (cond ((null? entries) #f)
+          ((and (inventory-entry-actor (car entries))
+                (inventory-entry-matches? token (car entries)))
+           (car entries))
+          (else (loop (cdr entries))))))
+
+(define (take-child-ref source-entry token)
+  (cond ((valid-did-url? token) (canonical-actor token))
+        ((and source-entry
+              (map? (cdr source-entry))
+              (map? (map-ref (cdr source-entry) "contents" #f)))
+         (let ((entry (container-content-ref (map-ref (cdr source-entry) "contents") token)))
+           (if entry (inventory-entry-actor entry) #f)))
+        (else #f)))
+
 (define (send-take args)
-  (let ((source (take-source args))
-      (token (take-token args))
-      (carrier (inventory-parent)))
+  (let* ((token (take-token args))
+         (source-entry (take-source-entry args))
+      (source (if (take-has-source? args)
+        (take-source-ref source-entry)
+        (room)))
+         (child (take-child-ref source-entry token))
+         (carrier (inventory-parent)))
   (cond ((and (valid-did-url? token) (not (take-has-source? args)))
     (ma-send! (canonical-actor token) (list :take (did) carrier)))
+      ((and source child (take-has-source? args))
+       (ma-send! (canonical-actor source)
+                 (list :take (did) (canonical-actor child) carrier)))
+      ((and source (take-has-source? args))
+       (send-did-text (string-append "Unknown child in " (car (cdr (cdr args))) ": " token)))
       (source
       (if (take-has-source? args)
-         (ma-send! (canonical-actor source) (list :take (did) token carrier))
+        #f
          (let ((entry (room-ctx-ref token)))
            (cond ((equal? entry :ambiguous)
                   (send-did-text (string-append "Ambiguous visible agent or thing: " token)))
@@ -396,6 +436,8 @@
                   (ma-send! (canonical-actor (ctx-text entry "actor")) (list :take (did) carrier entry)))
                  (else
                   (send-did-text (string-append "Unknown visible agent or thing: " token)))))))
+                ((take-has-source? args)
+                 (send-did-text (string-append "Unknown carried or visible parent: " (car (cdr (cdr args))))))
       (else
        (send-did-text "You are nowhere.")))))
 
@@ -440,13 +482,25 @@
   (begin
     (ma-send! (canonical-actor item-actor) (list :drop did (canonical-actor container-actor) item-ctx))))
 
+(define (visible-container-ref token)
+  (let ((entry (room-ctx-ref token)))
+    (if (and (map? entry)
+             (valid-did-url? (ctx-text entry "actor")))
+        entry
+        #f)))
+
 (define (send-put args)
   (let* ((item-token (put-item-token args))
          (container-token (put-container-token args))
          (item-entry (inventory-ref item-token))
          (container-entry (inventory-ref container-token))
+         (visible-container (visible-container-ref container-token))
          (item-actor (if item-entry (inventory-entry-actor item-entry) #f))
-         (container-actor (if container-entry (inventory-entry-actor container-entry) #f))
+         (container-actor
+           (cond (container-entry (inventory-entry-actor container-entry))
+                 ((valid-did-url? container-token) (canonical-actor container-token))
+                 (visible-container (canonical-actor (ctx-text visible-container "actor")))
+                 (else #f)))
          (item-ctx (if item-entry (cdr item-entry) #f)))
     (cond ((and item-actor container-actor)
            (if (same-actor? item-actor container-actor)
@@ -584,11 +638,12 @@
   (string-append (nick) "\nAn avatar."))
 
 (define (present-avatar-look! target msg)
-  (if (and (non-empty-string? target) (local-actor-ref? (msg-from msg)))
+  (let ((recipient (presentation-avatar-target target msg)))
+    (if recipient
       (begin
-        (ma-send! target (list :print (avatar-look-text)))
+        (ma-send! recipient (list :print (avatar-look-text)))
         (reply-ok msg))
-      #f))
+      #f)))
 
 (define (avatar-look args msg)
   (if (and (not (null? args)) (present-avatar-look! (car args) msg))
@@ -858,6 +913,17 @@
   (lambda (args msg)
     (ma-send! (did) (list :print (join-words args)))))
 
+(set-internal-rpc-method! :delivery-failed
+  (lambda (args msg)
+    (if (or (null? args) (null? (cdr args)))
+        #f
+        (ma-send! (did)
+                  (list :print
+                        (string-append "Could not deliver to "
+                                       (car args)
+                                       ": "
+                                       (car (cdr args))))))))
+
 (set-internal-rpc-method! :report-parent
   (lambda (args msg)
     (let ((tick (if (or (null? args) (null? (cdr args))) "" (car (cdr args))))
@@ -1061,7 +1127,7 @@
     (require-did msg
       (lambda ()
         (if (not (take-args-valid? args))
-            (send-did-text "Usage: take <thing> [from <parent>]")
+          (send-did-text "Usage: take <thing> [from <parent>]")
           (send-take args))
         (reply-ok-silent msg)))))
 
