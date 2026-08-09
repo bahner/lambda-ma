@@ -1,0 +1,421 @@
+; Vocabulary, name/DID resolution, and presentation.
+; Routing (event-handlers, on-event) lives in events.zscheme, loaded after
+; this file. All commands below resolve names/nicks to DIDs or DID-URLs
+; before sending anything on the wire — never a bare name.
+
+; Best display label for any ctx-map: prefer what a human chose (nick), then
+; the actor's own name, then bare identifiers, in that order.
+(define (event-name ctx)
+  (map-ref ctx "nick"
+    (map-ref ctx "name"
+      (map-ref ctx "did"
+        (map-ref ctx "actor" "(unknown)")))))
+
+; `(apply s args)` on a string starting with "did:" sends `s` itself as the
+; RPC address, so gluing ":method" onto the actor DID-URL here is what turns
+; it into "did:...#thing:method" — the exact wire form `eval_actor_with_vals`
+; expects. No custom syntax is needed beyond `apply` + `string-append`.
+(define (actor-call actor method . args)
+  (apply (string-append actor ":" method) args))
+
+(define (room) (#.my.ctx.room))
+
+; R7RS `apply` spreads its trailing list argument, so this is exactly
+; `(actor-call (room) method arg1 arg2 …)` for any number of caller args.
+(define (room-call method . args)
+  (apply actor-call (room) method args))
+
+; Cache of the last `look` snapshot — the only source the resolver below
+; searches without an extra round-trip.
+(define last-room #f)
+
+(define (remember-room! snapshot)
+  (when (map? snapshot)
+    (set! last-room snapshot))
+  snapshot)
+
+; Ctx buckets (who/agents/things/exits) may arrive as a map or a list
+; depending on what the actor published; normalise to a plain list either way.
+(define (event-list-values values)
+  (cond ((map? values) (map-values values))
+        ((list? values) values)
+        (else ())))
+
+; ── Name/DID resolver ───────────────────────────────────────────────────────
+; All command verbs below resolve a typed word to a DID/DID-URL through this
+; resolver before addressing anything directly. A bare `did:` string always
+; passes through unresolved.
+
+; The actual wire address a matched ctx-entry resolves to.
+(define (entry-actor entry) (map-ref entry "actor" (map-ref entry "did" #f)))
+
+(define (describe-candidate entry)
+  (string-append (event-name entry) " (" (entry-actor entry) ")"))
+
+; Ambiguity is the user's problem to resolve, not ours to guess at: list every
+; candidate's DID so they can repeat the command unambiguously.
+(define (ambiguous-error word candidates)
+  (error
+    (fold (lambda (candidate text) (string-append text "\n  " (describe-candidate candidate)))
+          (string-append "\"" word "\" matches more than one — repeat the command with a DID instead:")
+          candidates)))
+
+(define (no-match-error word)
+  (error (string-append "no match for \"" word "\" here.")))
+
+; Anything already shaped like a DID is treated as pre-resolved and skips the
+; whole nick/name search below.
+(define (starts-with-did? word)
+  (and (string? word) (>= (string-length word) 4) (equal? (substring word 0 4) "did:")))
+
+(define (name-matches? word entry key)
+  (let ((value (map-ref entry key #f)))
+    (and (string? value) (equal? (string-downcase word) (string-downcase value)))))
+
+; Try each key in priority order (e.g. nick before name) and stop at the
+; first key that produces any hit at all — a name-only match is never mixed
+; in with nick matches.
+(define (candidates-by-keys word pool keys)
+  (if (null? keys)
+    ()
+    (let ((hits (filter (lambda (entry) (name-matches? word entry (car keys))) pool)))
+      (if (null? hits)
+        (candidates-by-keys word pool (cdr keys))
+        hits))))
+
+; #f means "not found here" (caller decides what to try next); a single hit
+; resolves silently; 2+ hits is always an error, never a silent first-pick.
+(define (resolve-in-pool word pool keys)
+  (let ((candidates (candidates-by-keys word pool keys)))
+    (cond ((null? candidates) #f)
+          ((null? (cdr candidates)) (entry-actor (car candidates)))
+          (else (ambiguous-error word candidates)))))
+
+; Every addressable thing in a room, regardless of which bucket it's filed
+; under — who (other avatars present), agents, and things are all fair game
+; for take/put/claim/owner/recycle.
+(define (occupant-pool room)
+  (append (event-list-values (map-ref room "who" ()))
+          (append (event-list-values (map-ref room "agents" ()))
+                  (event-list-values (map-ref room "things" ())))))
+
+(define (exit-pool room) (event-list-values (map-ref room "exits" ())))
+
+; Cheap first (search what we already have cached), fresh only if needed:
+; one `look` round-trip at most per resolve, never one per candidate.
+(define (resolve-against pool-getter word keys)
+  (if (starts-with-did? word)
+    word
+    (let* ((pool1 (if (map? last-room) (pool-getter last-room) ()))
+           (hit1 (resolve-in-pool word pool1 keys)))
+      (if hit1
+        hit1
+        (let* ((room2 (remember-room! (room-call "look")))
+               (pool2 (if (map? room2) (pool-getter room2) ())))
+          (or (resolve-in-pool word pool2 keys)
+              (no-match-error word)))))))
+
+(define (resolve-name word) (resolve-against occupant-pool word (list "nick" "name")))
+
+; Exits match on their direction word first ("north"), falling back to any
+; nick/name they might also carry.
+(define (resolve-exit word) (resolve-against exit-pool word (list "direction" "nick" "name")))
+
+; A container's own contents aren't in any room snapshot — the container has
+; to be asked directly, exactly like resolving anything else that isn't here.
+(define (container-contents container)
+  (let ((snapshot (actor-call container "look")))
+    (if (map? snapshot) (event-list-values (map-ref snapshot "things" ())) ())))
+
+(define (resolve-in-container word container)
+  (if (starts-with-did? word)
+    word
+    (let ((candidates (candidates-by-keys word (container-contents container) (list "nick" "name"))))
+      (cond ((null? candidates) (no-match-error word))
+            ((null? (cdr candidates)) (entry-actor (car candidates)))
+            (else (ambiguous-error word candidates))))))
+
+; ── Entry/traversal ctx bookkeeping ─────────────────────────────────────────
+; `:enter`/`:traverse` replies carry the new room ctx; nothing else updates
+; `.my.ctx.room`/`.my.ctx.nick` for a Scheme-driven enter, so we must.
+
+; `(#.my.path: value)` is the local config *setter* (trailing colon on the
+; path atom); `(#.my.path:)` with no value is the *delete* form — used below
+; to clear a stale nick when the new room ctx doesn't give us one.
+(define (apply-entry-ctx! ctx)
+  (when (map? ctx)
+    (let ((parent (map-ref ctx "parent" #f)))
+      (when parent (#.my.ctx.room: parent)))
+    (let ((nick (map-ref ctx "nick" #f)))
+      (if (and (string? nick) (not (equal? nick "")))
+        (#.my.ctx.nick: nick)
+        (#.my.ctx.nick:))))
+  ctx)
+
+; ── Command verbs ───────────────────────────────────────────────────────────
+
+; Movement is a two-hop relay (ma-spec sec 4), not one message: the exit
+; itself decides where "through" leads (and may refuse — a locked door just
+; echoes the *same* room back as `parent` along with blocking text), then a
+; *second*, separate `:enter` against the returned room is what actually
+; completes the move. There is no single "move me" verb anywhere in the spec.
+; The exit's `:traverse` takes a transient ctx map `{did, parent}` — the
+; traveller's own bare DID and its current room — never a bare DID string.
+(define (go direction)
+  (let* ((exit (resolve-exit direction))
+         (ctx (make-map "did" (#.my.identity.did) "parent" (room)))
+         (result (actor-call exit "traverse" ctx)))
+    (if (map? result)
+      (let ((parent (map-ref result "parent" #f)))
+        (if parent
+          (enter parent (#.my.ctx.nick))
+          (display (map-ref result "text" "You can't go that way."))))
+      (display result)))
+  nil)
+
+(define (dig direction)
+  (room-call "dig" direction))
+
+(define (fill direction)
+  (room-call "fill" direction))
+
+; Words up to (not including) the first occurrence of keyword.
+(define (words-before-keyword words keyword)
+  (cond ((null? words) ())
+        ((equal? (car words) keyword) ())
+        (else (cons (car words) (words-before-keyword (cdr words) keyword)))))
+
+; Words after the first occurrence of keyword, or #f if keyword never appears.
+(define (words-after-keyword words keyword)
+  (cond ((null? words) #f)
+        ((equal? (car words) keyword) (cdr words))
+        (else (words-after-keyword (cdr words) keyword))))
+
+; This evaluator (ma-zscheme, client-side) has no stdlib of its own — its
+; only list builtins are car/cdr/cons/append/reverse/length/list-ref/cadr/
+; caddr/cadddr, so a plain word-joiner has to be defined here rather than
+; assumed, unlike lambda-ma's separate WASM actor stdlib.ma.
+(define (join-words words)
+  (cond ((null? words) "")
+        ((null? (cdr words)) (car words))
+        (else (string-append (car words) " " (join-words (cdr words))))))
+
+(define (forge-usage-error)
+  (error "usage: forge <kind> named <name...> [in <target...>]"))
+
+; Direct child creation (ma-spec sec 7) — no avatar mediation on the runtime
+; side. The reply payload is either the new entity's DID-URL or a refusal
+; reason (e.g. an occupancy cap), so it's shown as-is, exactly like `owner`.
+; "named"/"in" are keywords, not data, so a multi-word name or target never
+; needs quoting: `forge lamp named Brass Lamp in Wardrobe`. Bare `forge kind
+; named name` defaults into your own inventory instead of a room/container.
+(define (forge kind . rest)
+  (if (or (null? rest) (not (equal? (car rest) "named")))
+      (forge-usage-error)
+      (let* ((after-named (cdr rest))
+             (name-words (words-before-keyword after-named "in"))
+             (target-words (words-after-keyword after-named "in")))
+        (if (or (null? name-words) (and target-words (null? target-words)))
+            (forge-usage-error)
+            (let ((name (join-words name-words))
+                  (target (if (pair? target-words) (join-words target-words) (#.my.ctx.inv))))
+              (display (actor-call (resolve-name target) "forge" (make-map "kind" kind "name" name)))
+              nil)))))
+
+(define (leave)
+  (room-call "leave"))
+
+(define (enter target nick)
+  (let ((result (apply-entry-ctx! (actor-call target "enter" nick))))
+    (if (map? result) (look) (display result)))
+  nil)
+
+; Takes/drops/put/take-from send directly to the resolved thing/agent and
+; return nothing useful themselves — the visible outcome (or a refusal such
+; as "nailed to the floor") arrives on the room's print/event channel, not
+; the RPC ack (ma-spec sec 8).
+
+(define (take name)
+  (actor-call (resolve-name name) "take")
+  nil)
+
+; What you're carrying isn't in the room snapshot, so "drop" resolves against
+; your own inventory container's contents instead of the room's occupants.
+(define (drop name)
+  (actor-call (resolve-in-container name (#.my.ctx.inv)) "drop" (room))
+  nil)
+
+(define (put name container)
+  (actor-call (resolve-name name) "put" (resolve-name container))
+  nil)
+
+(define (take-from container name)
+  (let ((container-did (resolve-name container)))
+    (actor-call (resolve-in-container name container-did) "take"))
+  nil)
+
+(define (say text)
+  (room-call "say" text)
+  nil)
+
+(define (emote text)
+  (room-call "emote" text)
+  nil)
+
+(define (claim name)
+  (actor-call (resolve-name name) "claim")
+  nil)
+
+(define (owner name)
+  (display (actor-call (resolve-name name) "owner?"))
+  nil)
+
+(define (recycle name)
+  (actor-call (resolve-name name) "recycle")
+  nil)
+
+(define (here?)
+  (display (room))
+  nil)
+
+(define (who?)
+  (event-who (room-call "who?"))
+  nil)
+
+(define (occupants?)
+  (event-occupants (room-call "occupants?"))
+  nil)
+
+(define (things?)
+  (event-things (room-call "things?"))
+  nil)
+
+(define (exits?)
+  (event-exits (room-call "exits?"))
+  nil)
+
+(define (inv)
+  (let ((snapshot (actor-call (#.my.ctx.inv) "look")))
+    (if (map? snapshot)
+      (event-things (map-ref snapshot "things" ()))
+      (display snapshot)))
+  nil)
+
+(define (help)
+  (display
+    (string-append
+      "go <direction>          move through a named exit\n"
+      "look                    show the current room\n"
+      "who?                    list who is here\n"
+      "occupants?              list occupants here\n"
+      "things?                 list things here\n"
+      "exits?                  list exits here\n"
+      "here?                   show the current room's address\n"
+      "take <name>             take something from the room\n"
+      "drop <name>             drop something from your inventory\n"
+      "put <name> <container>  put something into a container\n"
+      "take-from <container> <name>  take something out of a container\n"
+      "inv                     show your own inventory\n"
+      "say <text>              say something aloud\n"
+      "emote <text>            perform an emote\n"
+      "claim <name>            claim ownership of something\n"
+      "owner <name>            show who owns something\n"
+      "recycle <name>          destroy something you own\n"
+      "dig <direction>         create a new exit\n"
+      "fill <direction>        remove an exit\n"
+      "forge <kind> named <name...> [in <target...>]  create it (default: your inventory)\n"
+      "enter <target> <nick>   enter a room directly by address\n"
+      "leave                   leave the current room"))
+  nil)
+
+(define (event-print text)
+  (display text))
+
+(define (event-list-lines title values render)
+  (let ((entries (event-list-values values)))
+    (if (null? entries)
+      ""
+      (fold (lambda (value text)
+              (string-append text "\n" (render value)))
+            title
+            entries))))
+
+(define (event-exit-name exit)
+  (if (map? exit)
+    (map-ref exit "direction" (event-name exit))
+    exit))
+
+(define (event-who-name entry)
+  (if (pair? entry)
+    (event-name (cadr entry))
+    (event-name entry)))
+
+(define (event-exit-lines title exits)
+  (let ((entries (cond ((map? exits) (map-keys exits))
+                       ((list? exits) exits)
+                       (else ()))))
+    (if (null? entries)
+      ""
+      (fold (lambda (exit text)
+              (string-append text "\n" (event-exit-name exit)))
+            title
+            entries))))
+
+(define (event-look room)
+  (let ((name (map-ref room "name" (event-name room)))
+        (description (map-ref room "description" ""))
+        (who (map-ref room "who" ()))
+        (occupants (map-ref room "agents" ()))
+        (things (map-ref room "things" ()))
+        (exits (map-ref room "exits" ())))
+    (display
+      (string-append
+        name
+        (if (string? description) (string-append "\n" description) "")
+        (event-list-lines "\nHere:" who event-name)
+        (event-list-lines "\nOccupants:" occupants event-name)
+        (event-list-lines "\nThings:" things event-name)
+        (event-exit-lines "\nExits:" exits)))))
+
+(define (look)
+  (let ((snapshot (remember-room! (room-call "look"))))
+    (if (map? snapshot)
+      (event-look snapshot)
+      (display snapshot))
+    nil))
+
+(define (event-exits exits)
+  (display (string-append "Exits:" (event-exit-lines "" exits))))
+
+(define (event-who occupants)
+  (display (string-append "Here:" (event-list-lines "" occupants event-who-name))))
+
+(define (event-occupants occupants)
+  (display (string-append "Occupants:" (event-list-lines "" occupants event-name))))
+
+(define (event-things things)
+  (display (string-append "Things:" (event-list-lines "" things event-name))))
+
+(define (event-arrive ctx)
+  (display (string-append (event-name ctx) " arrives.")))
+
+(define (event-leave ctx)
+  (display (string-append (event-name ctx) " leaves.")))
+
+(define (event-say ctx text)
+  (display (string-append (event-name ctx) ": " text)))
+
+(define (event-emote ctx text)
+  (display (string-append (event-name ctx) " " text)))
+
+(define (event-take ctx)
+  (display (string-append (event-name ctx) " takes something.")))
+
+(define (event-drop ctx)
+  (display (string-append (event-name ctx) " drops something.")))
+
+(define (event-dig ctx direction)
+  (display (string-append (event-name ctx) " digs " direction ".")))
+
+(define (event-fill ctx direction)
+  (display (string-append (event-name ctx) " fills " direction ".")))

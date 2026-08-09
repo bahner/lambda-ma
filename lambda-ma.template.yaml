@@ -30,9 +30,10 @@ runtime:
     root:
       kind: /ma/root/0.0.1
       acl: open
-      init: |
-        (set-init-prop! "start" (string-append (ma-get-config-key "runtime") "#construct"))
-        (ma-save-state!)
+
+    house:
+      kind: /ma/house/0.0.1
+      acl: open
 
     construct:
       kind: /ma/room/0.0.1
@@ -49,4 +50,5 @@ runtime:
         (begin
           (duck-defaults!)
           (enter (string-append (ma-get-config-key "runtime") "#construct"))
-          (duck-schedule-quack!))
+          (duck-schedule-quack!)
+          (duck-schedule-duck!))

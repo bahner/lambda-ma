@@ -30,13 +30,9 @@
 (define (source-room-caller? msg)
   (same-actor? (msg-from msg) (node-parent)))
 
-(define (ctx-recipient ctx)
-  (let ((avatar (ctx-text ctx "avatar"))
-        (actor (ctx-text ctx "actor")))
-    (if (non-empty-string? avatar) avatar actor)))
-
 (define (traveller-caller? ctx msg)
-  (same-actor? (msg-from msg) (ctx-recipient ctx)))
+  (and (valid-did? (ctx-text ctx "did"))
+       (equal? (ctx-text ctx "did") (msg-from msg))))
 
 (define (set-locked! value)
   (set-prop! "locked" (if value "true" "false"))
@@ -47,27 +43,23 @@
     (set-prop! (string-append slot "-message") text)
     (ma-save-state!)))
 
-(define (valid-avatar-ctx? ctx)
+(define (valid-did-traversal-ctx? ctx)
   (and (map? ctx)
-  (equal? (ctx-text ctx "kind") "avatar")
-  (non-empty-string? (ctx-text ctx "did"))
-  (non-empty-string? (ctx-text ctx "avatar"))
-      (same-actor? (ctx-text ctx "room") (node-parent))))
+  (valid-did? (ctx-text ctx "did"))
+  (same-actor? (ctx-text ctx "parent") (node-parent))))
 
-(define (annotate-avatar-ctx ctx room text)
-  (map-set
-    (map-set
-      (map-set
-        (map-set ctx "room" (canonical-actor room))
-        "text" text)
-      "exit" (canonical-actor (self)))
-    "direction" (direction)))
+(define (traversal-reply ctx room text)
+  (make-map "did" (ctx-text ctx "did")
+            "parent" (canonical-actor room)
+            "text" text
+            "exit" (canonical-actor (self))
+            "direction" (direction)))
 
 (define (blocked-ctx ctx)
-  (annotate-avatar-ctx ctx (node-parent) (blocked-message)))
+  (traversal-reply ctx (node-parent) (blocked-message)))
 
 (define (target-ctx ctx)
-  (annotate-avatar-ctx ctx (target-room) (traveller-message)))
+  (traversal-reply ctx (target-room) (traveller-message)))
 
 (define (about-text)
   (string-append
@@ -80,13 +72,7 @@
     "locked: " (if (locked?) "true" "false")))
 
 (define (about-recipient ctx)
-  (let ((avatar (ctx-text ctx "avatar"))
-        (did (ctx-text ctx "did"))
-        (actor (ctx-text ctx "actor")))
-    (cond ((non-empty-string? avatar) avatar)
-          ((non-empty-string? did) did)
-          ((non-empty-string? actor) actor)
-          (else #f))))
+  (ctx-text ctx "did"))
 
 (define (send-about! ctx)
   (let ((recipient (about-recipient ctx)))
@@ -105,7 +91,7 @@
 
 (set-rpc-method! :look
   (lambda (args msg)
-    (let ((target (if (null? args) #f (presentation-avatar-target (car args) msg))))
+    (let ((target (if (null? args) #f (ctx-text (car args) "did"))))
       (if target
           (begin
             (ma-send! target (list :print (about-text)))
@@ -178,28 +164,21 @@
         (ma-end)
         #f)))
 
-; Exit policy transforms avatar ctx state and returns it to the moving avatar.
-; The avatar asks the target room to :enter, so target admission remains target-room authority.
-(set-internal-rpc-method! :ctx
+; Exit traversal returns the selected room to the direct DID. The DID then
+; asks that room to enter, preserving target-room admission authority.
+(set-rpc-method! :traverse
   (lambda (args msg)
     (let ((ctx (if (null? args) #f (car args))))
-      (cond ((not (valid-avatar-ctx? ctx))
-             (reply-error msg "exit ctx requires avatar ctx with did, avatar, kind, protocol, and current room"))
-            ((not (or (source-room-caller? msg) (traveller-caller? ctx msg)))
-             (reply-error msg "only source room or traveller may use this exit"))
-            ((locked?)
-             (begin
-               (ma-send! (canonical-actor (ctx-recipient ctx)) (list :ctx (blocked-ctx ctx)))
-               (reply-ok msg)))
-            ((target-room)
-             (begin
-               (ma-send! (canonical-actor (ctx-recipient ctx)) (list :ctx (target-ctx ctx)))
-               (reply-ok msg)))
-            (else
-             (begin
-               (ma-send! (canonical-actor (ctx-recipient ctx))
-                         (list :ctx (annotate-avatar-ctx ctx (node-parent) "This exit leads nowhere.")))
-               (reply-ok msg)))))))
+        (if (not (valid-did-traversal-ctx? ctx))
+          (reply-error msg "traverse requires DID ctx with did and current parent")
+          (if (not (or (source-room-caller? msg) (traveller-caller? ctx msg)))
+              (reply-error msg "only source room or traveller may use this exit")
+              (if (locked?)
+                  (reply-ok-with msg (blocked-ctx ctx))
+                  (if (target-room)
+                      (reply-ok-with msg (target-ctx ctx))
+                      (reply-ok-with msg
+                        (traversal-reply ctx (node-parent) "This exit leads nowhere.")))))))))
 
 (define (node-protocol) "/ma/exit/0.0.1")
 (define (node-kind) "actor")

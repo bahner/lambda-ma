@@ -75,6 +75,8 @@ fn load_config() {
         "started_at",
         "parent",
         "root",
+        "house",
+        "scheduler",
         "start",
         "i18n",
         "did_document_publishing_interval_secs",
@@ -345,31 +347,6 @@ fn actor_owner() -> Option<String> {
 
 fn msg_from_owner(owner: &str, msg: &MsgRecord) -> bool {
     msg.from == owner
-        || owner_avatar(owner).is_some_and(|avatar| canonical_actor(&msg.from) == avatar)
-}
-
-fn owner_avatar(owner: &str) -> Option<String> {
-    if !owner.starts_with("did:ma:") || owner.contains('#') {
-        return None;
-    }
-    let runtime = crate::state::config_value("runtime")?;
-    let seed = format!("lambda-ma avatar v1\n{runtime}\n{owner}");
-    let hash = blake3::hash(seed.as_bytes());
-    let mut fragment = String::with_capacity(16);
-    for byte in &hash.as_bytes()[..8] {
-        fragment.push(b"0123456789abcdef"[(byte >> 4) as usize] as char);
-        fragment.push(b"0123456789abcdef"[(byte & 0x0f) as usize] as char);
-    }
-    Some(format!("{runtime}#{fragment}"))
-}
-
-fn canonical_actor(actor: &str) -> String {
-    if let Some(fragment) = actor.strip_prefix('#') {
-        if let Some(runtime) = crate::state::config_value("runtime") {
-            return format!("{runtime}#{fragment}");
-        }
-    }
-    actor.to_string()
 }
 
 fn reply_ok(msg: &MsgRecord, text: &str) -> EvalResult<()> {

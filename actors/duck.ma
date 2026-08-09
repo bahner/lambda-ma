@@ -19,6 +19,14 @@
           (mark-scheduled! key)
           (ma-send! (entity-url "scheduler") (list "quack" :random 600 :quack))))))
 
+(define (duck-schedule-duck!)
+  (let ((key "schedule:duck:started-at"))
+    (if (scheduled-this-runtime? key)
+        #f
+        (begin
+          (mark-scheduled! key)
+          (ma-send! (entity-url "scheduler") (list "duck" :random 600 :duck))))))
+
 ; Duck-specific room speech and action.
 (define (duck-say msg text)
   (let ((p (node-parent)))

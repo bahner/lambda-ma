@@ -1,0 +1,21 @@
+; Routing layer only: maps incoming event verbs to the presentation handlers
+; defined in avatar.zscheme. Load avatar.zscheme first. Replies to
+; command-initiated RPCs (look, who?, exits?, …) are handled inline by each
+; verb procedure in avatar.zscheme, not through a dispatch table here — a
+; reply is the direct return value of the RPC call that requested it, so
+; there's nothing generic left to route.
+
+(define event-handlers
+  (make-map ":print" event-print
+            ":arrive" event-arrive
+            ":leave" event-leave
+            ":say" event-say
+            ":emote" event-emote
+            ":take" event-take
+            ":drop" event-drop
+            ":dig" event-dig
+            ":fill" event-fill))
+
+(define (on-event event args)
+  (let ((handler (map-ref event-handlers event #f)))
+    (if handler (apply handler args) ())))

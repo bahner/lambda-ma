@@ -1,5 +1,5 @@
-; Locked world root / avatar factory actor.
-; Root is a known factory only; avatars own ctx, nick, and room state.
+; Locked world root actor.
+; Root is the hardcoded local trust anchor and publishes dynamic world services.
 
 (define (local-self) (canonical-actor (self)))
 
@@ -35,95 +35,64 @@
            (loop (cdr ctxs) (cons (car ctxs) acc)))
           (else (loop (cdr ctxs) acc)))))
 
-; Entry target resolution. Root only chooses a configured start room; it does
-; not infer or create fallback rooms.
-(define (configured-start-room)
-  (let ((configured (ma-get-config-key "start")))
-    (if configured configured (get-prop "start"))))
+(define (root-service-ref key)
+  (let ((value (ma-get-config-key key)))
+    (if (valid-did-url? value) value #f)))
 
-(define (ensure-start-room)
-  (let ((start (configured-start-room)))
-    (if (entity-live? start)
-        (if (equal? (get-prop "start") start)
-            start
-            (begin
-              (set-prop! "start" start)
-              (ma-save-state!)
-              start))
-        (error "entry start room is not configured"))))
+(define ROOT_SUBSCRIBERS_KEY "subscribers")
 
-(define (requested-room args)
-  (cond ((null? args) #f)
-        ((delegated-enter? args)
-         (if (or (null? (cdr args)) (equal? (car (cdr args)) "")) #f (car (cdr args))))
-        ((equal? (car args) "") #f)
-        (else (car args))))
+(define (root-subscribers)
+  (let ((value (get-prop ROOT_SUBSCRIBERS_KEY)))
+    (if (map? value) value (make-map))))
 
-(define (entry-room requested)
-  (if (entity-live? requested) (canonical-actor requested) (ensure-start-room)))
+(define (remember-root-subscriber! actor)
+  (begin
+    (set-prop! ROOT_SUBSCRIBERS_KEY
+               (map-set (root-subscribers) (canonical-actor actor) #t))
+    (ma-save-state!)))
 
-(define (requested-nick args)
-  (cond ((null? args) #f)
-        ((delegated-enter? args)
-         (if (or (null? (cdr args)) (null? (cdr (cdr args)))) #f (car (cdr (cdr args)))))
-        ((equal? (car args) "") (if (null? (cdr args)) #f (car (cdr args))))
-        ((null? (cdr args)) #f)
-        (else (car (cdr args)))))
+(define (runtime-ctx)
+  (let ((root-url (local-self))
+        (house-url (root-service-ref "house"))
+        (scheduler-url (root-service-ref "scheduler")))
+    (if (and (valid-did-url? root-url)
+             (valid-did-url? house-url)
+             (valid-did-url? scheduler-url))
+        (map-set
+          (map-set
+            (map-set
+              (map-set
+                (map-set (make-map) "runtime" (runtime))
+                "root" root-url)
+              "house" house-url)
+            "scheduler" scheduler-url)
+          "rev" 1)
+        #f)))
 
-(define (requested-inventory args)
-  (let ((inventory (arg-at-or-false args (if (delegated-enter? args) 3 2))))
-    (if (valid-did-url? inventory) (canonical-actor inventory) #f)))
-
-(define (delegated-enter? args)
-  (and (not (null? args)) (string-prefix? "did:ma:" (car args))))
-
-(define (entry-did args msg)
-  (if (delegated-enter? args) (car args) (msg-from msg)))
-
-; Avatar creation is asynchronous. The init code asks the room to admit the
-; avatar; the room later sends committed ctx back to the avatar.
-(define (avatar-init did nick room inventory)
-  (let ((n (nick-or-default nick))
-        (r (local-self))
-        (avatar (avatar-for-did did))
-        (target-room (canonical-actor room))
-        (inv (if (valid-did-url? inventory) (canonical-actor inventory) "")))
-    (string-append
-      "(set-init-prop! \"did\" \"" did "\")\n"
-      "(set-init-prop! \"root\" \"" r "\")\n"
-      "(set-init-prop! \"nick\" \"" n "\")\n"
-      (if (equal? inv "") "" (string-append "(set-init-prop! \"inventory\" \"" inv "\")\n"))
-      "(ma-save-state!)\n"
-      "(ma-send! \"" target-room "\" (list :enter \"" avatar "\" #f \"" n "\" \"" inv "\"))\n")))
-
-(define (ensure-avatar did nick room inventory)
-  (let ((avatar (avatar-for-did did)))
-    (if (entity-live? avatar)
-        (begin
-          (ma-send! (canonical-actor avatar)
-            (list :enter-room (canonical-actor room) did (nick-or-default nick) inventory))
-          avatar)
-        (entity-url
-          (ma-create-actor AVATAR_KIND #f
-            (avatar-init did nick room inventory)
-            (avatar-fragment did))))))
-
-; Public entry methods.
-(set-cmd-method! :enter
+(set-rpc-method! :ctx?
   (lambda (args msg)
-    (let* ((did (entry-did args msg))
-           (room (entry-room (requested-room args)))
-           (nick (nick-or-default (requested-nick args)))
-          (inventory (requested-inventory args))
-          (avatar (ensure-avatar did nick room inventory)))
-      (ma-reply! msg (list :ok avatar)))))
+    (if (null? args)
+        (let ((ctx (runtime-ctx)))
+          (if ctx
+              (reply-ok-with msg ctx)
+              (reply-error msg "root service ctx is not configured with full DID-URLs")))
+        (reply-error msg "usage: :ctx?"))))
 
-(set-rpc-method! :avatar?
+(set-internal-rpc-method! :register
   (lambda (args msg)
-    (let* ((did (msg-from msg))
-           (room (ensure-start-room))
-           (avatar (ensure-avatar did #f room #f)))
-      (ma-reply! msg (list :ok avatar)))))
+    (let ((subscriber (msg-from msg))
+          (ctx (runtime-ctx)))
+      (cond ((not (null? args))
+             (reply-error msg "usage: :register"))
+            ((not (root-local-actor? subscriber))
+             (reply-error msg "root registration requires a local full actor DID-URL"))
+            ((not ctx)
+             (reply-error msg "root service ctx is not configured with full DID-URLs"))
+            (else
+             (begin
+               (remember-root-subscriber! subscriber)
+               (ma-send! (canonical-actor subscriber) (list :ctx ctx))
+               (reply-ok msg)))))))
 
 (set-cmd-method! :orphan
   (lambda (args msg)

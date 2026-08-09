@@ -1,0 +1,4 @@
+protocol: /ma/house/0.0.1
+extends: /ma/node/0.0.1
+behaviour:
+  "/": __HOUSE_BEHAVIOUR_CID__

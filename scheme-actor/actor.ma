@@ -7,9 +7,7 @@
 (define (verb-of term) (if (pair? term) (car term) term))
 (define (args-of term) (if (pair? term) (cdr term) '()))
 
-; Lambda-ma identity helpers. Room ownership is DID based; an avatar is
-; recognised by deterministic fragment derivation, not by a forwarded argument.
-(define AVATAR_KIND "/ma/avatar/0.0.1")
+; Lambda-ma identity helpers. Room ownership is directly DID based.
 
 (define (self) (ma-get-config-key "self"))
 (define (runtime) (ma-get-config-key "runtime"))
@@ -53,30 +51,49 @@
       (car (string-split actor "#"))
       #f))
 
+(define RUNTIME_CTX_KEY "ctx")
+
+(define (runtime-ctx-valid? ctx)
+  (if (map? ctx)
+      (let ((ctx-runtime (ctx-text ctx "runtime"))
+            (ctx-root (ctx-text ctx "root"))
+            (ctx-house (ctx-text ctx "house"))
+            (ctx-scheduler (ctx-text ctx "scheduler"))
+            (ctx-rev (map-ref ctx "rev" #f)))
+        (and (valid-did? ctx-runtime)
+             (valid-did-url? ctx-root)
+             (valid-did-url? ctx-house)
+             (valid-did-url? ctx-scheduler)
+             (equal? (actor-runtime ctx-root) ctx-runtime)
+             (number? ctx-rev)))
+      #f))
+
+(define (runtime-ctx-rev ctx)
+  (let ((value (if (map? ctx) (map-ref ctx "rev" #f) #f)))
+    (if (number? value) value -1)))
+
+(define (stored-runtime-ctx)
+  (let ((ctx (get-prop RUNTIME_CTX_KEY)))
+    (if (runtime-ctx-valid? ctx) ctx #f)))
+
+(define (runtime-ctx-sender-valid? ctx msg)
+  (let ((previous (stored-runtime-ctx)))
+    (and (runtime-ctx-valid? ctx)
+         (equal? (ctx-text ctx "runtime") (runtime))
+         (same-actor? (msg-from msg) (ctx-text ctx "root"))
+         (or (not previous)
+             (same-actor? (msg-from msg) (ctx-text previous "root"))))))
+
+(define (install-runtime-ctx! ctx)
+  (begin
+    (set-prop! RUNTIME_CTX_KEY ctx)
+    (ma-save-state!)))
+
 (define (entity-live? actor)
   (and actor (ma-entity-exists? (canonical-actor actor))))
 
 (define (dead-local-actor? actor)
   (and (local-actor-ref? actor) (not (entity-live? actor))))
-
-(define (avatar-fragment-for-runtime runtime did)
-  (blake3 (string-append "lambda-ma avatar v1\n" runtime "\n" did) 8))
-
-(define (avatar-fragment did)
-  (avatar-fragment-for-runtime (runtime) did))
-
-(define (avatar-for-did did)
-  (string-append (runtime) "#" (avatar-fragment did)))
-
-(define (avatar-for-did-in-runtime runtime did)
-  (string-append runtime "#" (avatar-fragment-for-runtime runtime did)))
-
-(define (deterministic-avatar-for-did? did actor)
-  (let* ((qualified (canonical-actor actor))
-         (actor-home (actor-runtime qualified)))
-    (and (valid-did? did)
-         actor-home
-         (equal? qualified (avatar-for-did-in-runtime actor-home did)))))
 
 (define (ctx-did ctx)
   (let ((did (ctx-text ctx "did"))
@@ -87,41 +104,20 @@
 
 (define (ctx-sender-valid? ctx msg)
   (let ((did (ctx-did ctx))
-     (avatar (ctx-text ctx "avatar"))
      (actor (ctx-text ctx "actor"))
      (from (msg-from msg)))
     (cond ((valid-did? did)
-     (cond ((valid-did-url? from)
-         (and (deterministic-avatar-for-did? did from)
-           (or (not (non-empty-string? avatar))
-            (same-actor? avatar from))))
-        ((valid-did? from)
-         (and (equal? from did)
-           (not (non-empty-string? avatar))))
-        (else #f)))
+     (equal? from did))
     ((non-empty-string? actor)
      (same-actor? actor from))
     (else #f))))
 
-(define (did-avatar? did actor)
-  (deterministic-avatar-for-did? did actor))
-
 (define (presentation-did-authorised? did msg)
   (and (valid-did? did)
-       (or (local-actor-ref? (msg-from msg))
-           (did-avatar? did (msg-from msg)))))
-
-(define (presentation-avatar-target did msg)
-  (let ((target (canonical-actor (msg-from msg))))
-    (if (and (presentation-did-authorised? did msg)
-             (valid-did-url? target))
-        target
-        #f)))
+       (equal? did (msg-from msg))))
 
 (define (msg-from-owner? owner msg)
-  (let ((from (msg-from msg)))
-    (or (equal? from owner)
-        (did-avatar? owner from))))
+  (equal? (msg-from msg) owner))
 
 (define (canonical-entry entry)
   (canonical-actor entry))
@@ -158,6 +154,25 @@
 
 (define (reply-error msg text)
   (ma-reply! msg (list :error text)))
+
+(define (reply-user-ok msg did text)
+  (reply-ok-with msg text))
+
+(define (reply-user-error msg did text)
+  (reply-error msg text))
+
+(define (claim-delegated-did-arg? args msg)
+  #f)
+
+(define (claim-caller-did args msg)
+  (if (claim-delegated-did-arg? args msg)
+      (car args)
+      (msg-from msg)))
+
+(define (claim-command-args args msg)
+  (if (claim-delegated-did-arg? args msg)
+      (cdr args)
+      args))
 
 (define (actor-prop-or-none key)
   (let ((value (get-prop key)))
@@ -322,7 +337,25 @@
 (set-rpc-method! :owner? handle-actor-owner?)
 (set-internal-rpc-method! :ctx
   (lambda (args msg)
-    (reply-ok msg)))
+    (if (or (null? args) (not (null? (cdr args))))
+        (reply-error msg "usage: :ctx <runtime-ctx>")
+        (let ((ctx (car args))
+              (previous (stored-runtime-ctx)))
+          (cond ((not (runtime-ctx-sender-valid? ctx msg))
+                 (reply-error msg "runtime ctx must come from its configured full root DID-URL"))
+                ((< (runtime-ctx-rev ctx) (runtime-ctx-rev previous))
+                 (reply-error msg "stale runtime ctx"))
+                ((and previous
+                      (= (runtime-ctx-rev ctx) (runtime-ctx-rev previous))
+                      (not (equal? ctx previous)))
+                 (reply-error msg "conflicting runtime ctx revision"))
+                (else
+                 (begin
+                   (if (or (not previous)
+                           (> (runtime-ctx-rev ctx) (runtime-ctx-rev previous)))
+                       (install-runtime-ctx! ctx)
+                       #f)
+                     (reply-ok msg))))))))
 (set-rpc-method! :behaviour handle-actor-behaviour!)
 (set-rpc-method! :rpcs? handle-actor-rpcs?)
 (set-rpc-method! :cmds? handle-actor-cmds?)

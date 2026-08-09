@@ -251,20 +251,23 @@
 (set-cmd-method! :claim
   (lambda (args msg)
     (let ((stored (recovery-secret))
-          (did (msg-from msg)))
-      (cond ((and (not (owner)) (not stored) (null? args))
+          (did (claim-caller-did args msg))
+          (claim-args (claim-command-args args msg)))
+      (cond ((and (not (owner)) (not stored) (null? claim-args))
              (begin
                (set-owner! did)
-               (reply-ok-with msg "claimed")))
-            ((null? args)
-             (reply-error msg "usage: :claim <secret>"))
-            ((and stored (equal? (car args) stored))
+          (reply-user-ok msg did "claimed")))
+        ((and (owner) (null? claim-args))
+         (reply-user-error msg did "already claimed. Reclaim with :claim <secret>"))
+        ((null? claim-args)
+         (reply-user-error msg did "usage: :claim <secret>"))
+        ((and stored (equal? (car claim-args) stored))
              (begin
                (set-owner! did)
                (set-recovery-secret! "")
-               (reply-ok-with msg "claimed")))
-            (else
-             (reply-error msg "claim failed"))))))
+          (reply-user-ok msg did "claimed")))
+        (else
+         (reply-user-error msg did "claim failed"))))))
 
 ; Parent-mediated transfer. The parent room asks the agent to bind to a did
 ; or re-enter another parent; direct did calls are deliberately rejected.

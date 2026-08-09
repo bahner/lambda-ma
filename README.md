@@ -1,208 +1,53 @@
-# λ-間
+# lambda-ma
 
-λ-間 is a small actor space for `ma-runtime` and zion. It is not runtime code; it is a flat set of actors and a generated bootstrap YAML for people who want to clone, fork, and reshape it.
+Lambda-ma is a small direct-DID actor world for `ma-runtime` and zion. It
+publishes Scheme actor behaviours and a bootstrap YAML that builders can fork,
+reshape, and extend.
 
-Think of it as our rough equivalent of `lambdamoo-core`: a basic functional
-set of world objects that gives a new runtime enough language to become a
-place. The point is not to preserve λ-間 exactly as shipped, but to give builders
-something useful to extend, replace, and mutate inside their own runtime.
+The world has no identity entity. A user acts as their authenticated bare
+`did:ma:` DID. Rooms hold DID-keyed presence, while agents, things,
+and containers remain ordinary actors with full DID-URLs.
 
-LambdaMOO grew out of the MUD tradition at Xerox PARC in the early 1990s. Its
-lasting idea was not just rooms and exits, but a programmable social world: the
-database, verbs, objects, and local customs could be changed by the people
-living in it. `lambdamoo-core` was the small seed database that made a fresh MOO
-bootable and habitable before its own culture took over. λ-間 aims for that same
-role in the `ma` stack: enough root, avatar, room, and exit behaviour to start
-creating, while staying small enough that a runtime can make it its own.
-
-## What is here
+## Contents
 
 ```text
-actors/root.ma          deterministic avatar factory
-actors/avatar.ma        avatar-mediated command endpoint
-actors/room.ma          room policy, occupants, claim/owner, dig/go, exit ownership
-actors/exit.ma          traversal between rooms
-kinds/                  kind definitions used by the generated bootstrap
-scheme-actor/           actor, state, and node Scheme layers plus the Wasm host
-Makefile                publishes actor sources and generates dist/lambda-ma.yaml
+actors/root.ma          local trust anchor and runtime service directory
+actors/house.ma         DID and actor ctx registry and transition coordinator
+actors/room.ma          room presence, exits, presentation, and room policy
+actors/exit.ma          direct DID traversal policy
+avatar.zscheme          local zion vocabulary and world event presentation
+events.zscheme          routing: dispatches incoming events/replies to avatar.zscheme handlers
+kinds/                  kinds used by the generated bootstrap
+scheme-actor/           Scheme layers and the Wasm actor host
+Makefile                publishes sources and generates dist/lambda-ma.yaml
 ```
 
-The generated bootstrap reads its kind registry from `kinds/*.yaml`, then fills in CIDs for the local ma-scheme actor and actor behaviour sources. It currently includes the generic ma-scheme actor kind built from `scheme-actor/`, the λ-間 actor kinds, the scheduler, `#root`, and the initial `#construct` room.
+Load `avatar.zscheme` then `events.zscheme` explicitly into zion's local
+session environment when using this world profile, in that order, since
+`events.zscheme` routes to handlers defined in `avatar.zscheme`. Lambda-ma
+owns its commands and presentation; zion does not bundle or load either file
+automatically.
 
-World actors opt into the persistent hierarchy through `/ma/node/0.0.1`, which
-extends the tree-neutral `/ma/scheme/state/0.0.1`. Parenting means actor
-subordination, not necessarily containment: rooms and containers may present
-children spatially, while another actor may use the same relationship for
-attachments, delegation, or composition.
+The bootstrap creates `#root`, `#house`, `#scheduler`, and `#construct`.
+`#root :ctx?` exposes the runtime service directory. A bare DID enters a room
+directly with `:enter`; the room replies with the committed DID ctx and
+publishes it to the full DID-URL in `ctx.house`. House keeps the latest ctx,
+including name, nick, description, and parent, indexed by bare DID.
 
-The bundled ma-scheme actor implements the core `random` builtin from
-`ma-scheme-v1`: `(random n)` returns a non-cryptographic integer in `[0,n)`.
-It is practical randomness for ordinary actor choices such as exits, fortunes,
-and dice rolls. It is not security randomness: do not use it for keys, nonces,
-capabilities, tokens, proofs, authentication challenges, or anything where
-prediction changes authority or privacy. The reference implementation uses a
-runtime/entity-seeded 64-bit PRNG.
-
-For a full first-run guide, including Kubo/IPFS setup, installing `ma`,
-generating `dist/lambda-ma.yaml`, bootstrapping a runtime, generating a reusable
-root CID, and changing your first rooms, see [HOWTO.md](HOWTO.md).
-
-For the normative interoperability contract, see the
-[lambda-ma world profile](https://github.com/bahner/ma-spec/blob/main/runtime/ma-lambda-ma-v1.md).
-For actor verbs, state keys, bootstrap details, and the concrete implementation,
-see [REFERENCE.md](REFERENCE.md).
-
-Lambda-ma actor workflows pass ctx functionally through messages. Actors persist
-committed authority facts, not pending commands or intermediate workflow state.
-Visible names and nicks are resolver inputs only; after resolution, messages and
-mutations use canonical full actor DID-URLs.
-
-Messages or replies may be lost, so valid retries are normal. Actors respond
-idempotently from current authoritative state, including when a request merely
-repeats an already-committed value; they do not keep delivery or deduplication
-state to decide whether to answer.
+The normative contract is
+[ma-lambda-ma-v1.md](../ma-spec/runtime/ma-lambda-ma-v1.md). Local actor APIs
+and bootstrap details are in [REFERENCE.md](REFERENCE.md); operational setup is
+in [HOWTO.md](HOWTO.md).
 
 ## Build
 
-Kubo/IPFS must be running locally.
-
-The Rust Wasm target must be installed because `make` builds the local scheme actor before publishing the bootstrap inputs:
+Kubo/IPFS and the Rust Wasm target are required:
 
 ```sh
 rustup target add wasm32-unknown-unknown
-```
-
-```sh
 make
-```
-
-This builds `scheme-actor/actor.wasm`, publishes it together with `scheme-actor/stdlib.ma` and `actors/*.ma` using `ipfs add`, and writes:
-
-```text
-dist/lambda-ma.yaml
-```
-
-To see the scheme actor, stdlib, and world behaviour CIDs:
-
-```sh
-make show-cids
-```
-
-To publish just the reusable kind/behaviour registry for applying to an
-existing runtime without replacing entity state:
-
-```sh
-make kinds-cid
-```
-
-To verify that the generated YAML has no unresolved placeholders:
-
-```sh
 make check
 ```
 
-## Bootstrap a runtime
-
-```sh
-make root-cid
-```
-
-The command prints a runtime root CID. Start `ma` with that CID or save it in the daemon config according to your usual runtime workflow.
-
-`make bootstrap` is kept as an alias for `make root-cid`.
-
-For an existing runtime, prefer the kinds-only upgrade path after changing
-`kinds/*.yaml`, `actors/*.ma`, or the scheme actor shared runtime. Apply the
-complete tree when adding a base kind and derived kinds together:
-
-```sh
-make kinds-cid
-```
-
-Then apply the printed CID live with CRUD:
-
-```text
-@runtime/kinds: <printed-kinds-cid>
-```
-
-or pass it at the next daemon start:
-
-```sh
-ma --kinds-cid <printed-kinds-cid>
-```
-
-## Wire zion to the world root
-
-`/config/root` is runtime manifest config, not part of this world bootstrap template. Set it once after the runtime is up and zion has discovered `@ma`:
-
-```text
-.ma!discover
-@ma/config/root: @ma#root
-.enter @ma
-```
-
-After that, zion routes focus shorthand through the avatar created by `#root`.
-
-## Building rooms
-
-Rooms are owned by bare DIDs, not avatars. An avatar is only the DID principal's current
-command costume. For normal focus commands the avatar acts as a delegate and
-forwards the DID principal's DID to the room; direct room RPCs still use the message
-`from` DID as the caller.
-
-```text
-help                   show avatar/avatar-mediated commands
-help here              ask the current room what is possible here
-here?                  show where you are
-claim                  claim an unowned room through your avatar
-owner                  show the current room owner through your avatar
-owner did:ma:<target>  transfer the room to another bare DID through your avatar
-look                   look around
-l                      alias for look
-say hello              speak here
-dig north to Garden    create an exit and a new room owned by you
-look north             inspect an exit as a first-class object
-lock north             lock an exit
-unlock north           unlock an exit
-```
-
-Colon-prefixed methods bypass the avatar and target the focused room directly:
-
-```text
-:help
-:prop name Biblioteket
-:prop description Et stille bibliotek.
-:prop description
-:exit north :lock
-:exit north :unlock
-:exit north :message blocked The gate is locked.
-@ma#construct!help
-@ma#construct!prop name Biblioteket
-@ma#construct!prop description Et stille bibliotek.
-@ma#construct!prop description
-```
-
-The last form resets `description` to the default.
-
-Only the current owner may create or remove exits from a room. Newly dug rooms
-are owned by the digger automatically, so a builder can give someone a room
-with `owner` and that DID can then build outward from there. Linking to an
-already-existing room is allowed when the target room confirms that the same
-DID principal owns it too. Exits are first-class inspectable objects owned by exit
-actors; rooms resolve directions and can forward direct `:exit <direction>
-<verb>` commands to the exit. Avatar-mediated `lock <direction>` and
-`unlock <direction>` are shorthand for that forwarding; traversal messages are
-configured directly with `:exit <direction> :message <slot> <text>`.
-`fill <direction>` removes the exit link and terminates the exit actor, but
-leaves the target room intact.
-
-## Develop
-
-Edit the `.ma` files or the local scheme actor crate, then run:
-
-```sh
-make clean
-make
-```
-
-Commit the source files and template, not `dist/`, `scheme-actor/target/`, or `scheme-actor/actor.wasm`.
+The build publishes the actor inputs with `ipfs add` and writes the generated
+bootstrap to `dist/lambda-ma.yaml`. Do not commit generated `dist/` content.

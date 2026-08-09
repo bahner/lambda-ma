@@ -64,7 +64,7 @@
 (define (empty-string->false value)
   (if (equal? value "") #f value))
 
-(define (default-nick) "avatar")
+(define (default-nick) "visitor")
 
 (define (nick-or-default nick)
   (if (non-empty-string? nick) nick (default-nick)))
@@ -78,8 +78,7 @@
     (or (not value) (string? value))))
 
 (define (ctx-kind-valid? kind)
-  (or (equal? kind "avatar")
-      (equal? kind "thing")
+  (or (equal? kind "thing")
       (equal? kind "agent")
       (equal? kind "room")
       (equal? kind "container")
@@ -90,8 +89,7 @@
        (ctx-kind-valid? (ctx-text ctx "kind"))
        (non-empty-string? (ctx-text ctx "parent"))
        (non-empty-string? (ctx-text ctx "protocol"))
-       (ctx-optional-text-valid? ctx "actor")
-       (ctx-optional-text-valid? ctx "avatar")
+      (ctx-optional-text-valid? ctx "actor")
        (ctx-optional-text-valid? ctx "did")
       (ctx-optional-text-valid? ctx "inv")
        (ctx-optional-text-valid? ctx "root")
@@ -122,10 +120,6 @@
 (define (actor-ctx? ctx msg)
   (and (actor-ctx-shape? ctx)
        (ctx-sender-valid? ctx msg)))
-
-(define (avatar-ctx? ctx msg)
-  (and (valid-ctx? ctx msg)
-       (equal? (ctx-text ctx "kind") "avatar")))
 
 (define (agent-ctx? ctx msg)
   (and (actor-ctx? ctx msg)

@@ -79,8 +79,7 @@
   (and (not (null? args))
        (valid-did? (car args))
        (or (local-actor-ref? (msg-from msg))
-           (node-caller-is-parent? msg)
-           (node-owner-avatar-delegation? (car args) msg))))
+           (node-caller-is-parent? msg))))
 
 (define (node-effective-did args msg)
   (if (node-delegated-did-arg? args msg)
@@ -118,23 +117,22 @@
 (define (node-orphan-owner-recovery? did)
   (and (equal? (node-parent) "") (node-owner-did? did)))
 
-(define (node-owner-avatar-delegation? did msg)
+(define (node-owner-delegation? did msg)
   (and (node-owner-did? did) (msg-from-owner? did msg)))
 
 (define (node-owner-ref-authorised? actor)
   (and (node-owner)
-       (or (equal? (node-owner) actor)
-           (did-avatar? (node-owner) actor))))
+  (equal? (node-owner) actor)))
 
 (define (node-transfer-caller-authorised? did msg)
   (or (node-caller-is-parent? msg)
       (node-orphan-owner-recovery? did)
-      (node-owner-avatar-delegation? did msg)))
+  (node-owner-delegation? did msg)))
 
 (define (node-recycle-caller-authorised? did msg)
   (and (node-owner-did? did)
        (or (node-caller-is-parent? msg)
-           (node-owner-avatar-delegation? did msg))))
+           (node-owner-delegation? did msg))))
 
 (define (node-parent-admissible? target-parent)
   (and (valid-did-url? target-parent)
@@ -165,7 +163,8 @@
 
 (define (child-ctx-valid? ctx)
   (and (actor-ctx-shape? ctx)
-       (valid-did-url? (ctx-text ctx "actor"))
+       (or (valid-did? (ctx-text ctx "actor"))
+           (valid-did-url? (ctx-text ctx "actor")))
        (valid-did-url? (ctx-text ctx "parent"))))
 
 (define (child-ctx-self-authentic? ctx msg)
@@ -230,6 +229,22 @@
     (define (node-children-query-error msg) #f)
     (define (node-children-query-authorised? msg) (owner-authorised? msg))
     (define (node-children-query-text) (children-text))
+
+; "max-children" is a plain prop, defaulting to 20 when unset or unparseable.
+(define (node-max-children)
+  (let* ((value (get-prop "max-children"))
+         (parsed (if (non-empty-string? value) (string->number value) #f)))
+    (if (number? parsed) parsed 20)))
+
+(define (node-children-count)
+  (list-length (child-ctxs)))
+
+; Overridable per kind (ma-lambda-ma-v1.md §7's "local policy reason", e.g. a
+; room enforcing an occupancy limit); default is the generic max-children cap.
+(define (node-forge-admission-error ctx msg)
+  (if (>= (node-children-count) (node-max-children))
+      "forge refused: max-children limit reached"
+      #f))
 
 (define (remember-child! ctx)
   (set-children-map!
@@ -520,3 +535,34 @@
 (set-rpc-method! :children? handle-node-children?)
 (set-meta-method! :child handle-node-child)
 (set-internal-rpc-method! :orphan-root handle-node-root-orphan!)
+
+; ma-lambda-ma-v1.md §7: forge ctx MUST have kind/name, MUST NOT carry an
+; owner or caller-supplied init — owner is always msg-from, parent is self.
+(define (forge-ctx-valid? ctx)
+  (and (map? ctx)
+       (non-empty-string? (ctx-text ctx "kind"))
+       (non-empty-string? (ctx-text ctx "name"))))
+
+(define (forge-init name owner-did)
+  (string-append
+    "(set-init-prop! \"name\" \"" name "\")\n"
+    "(set-init-prop! \"owner\" \"" owner-did "\")\n"
+    "(set-init-prop! \"parent\" \"" (canonical-actor (self)) "\")\n"
+    "(ma-save-state!)\n"))
+
+(define (handle-node-forge args msg)
+  (let ((ctx (if (pair? args) (car args) #f)))
+    (cond ((not (forge-ctx-valid? ctx))
+           (reply-error msg "usage: :forge <ctx with kind, name>"))
+          ((node-forge-admission-error ctx msg)
+           (reply-error msg (node-forge-admission-error ctx msg)))
+          (else
+           (let* ((owner (canonical-actor (msg-from msg)))
+                  (behaviour (ctx-text ctx "behaviour"))
+                  (fragment (ma-create-actor (ctx-text ctx "kind")
+                                              (if (non-empty-string? behaviour) behaviour #f)
+                                              (forge-init (ctx-text ctx "name") owner)
+                                              #f)))
+             (reply-ok-with msg (entity-url fragment)))))))
+
+(set-rpc-method! :forge handle-node-forge)
