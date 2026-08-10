@@ -4,9 +4,8 @@
 
 (define AGENT_PROTOCOL "/ma/scheme/agent/0.0.1")
 
-; Persistent state accessors.
-(define (owner) (get-prop "owner"))
-
+; Persistent state accessors. owner/set-owner!/claim-key/set-claim!/
+; recovery-secret/set-recovery-secret!/owner-caller? live in node.ma.
 (define (name)
   (let ((n (get-prop "name")))
     (if n n "agent")))
@@ -18,12 +17,6 @@
 (define (nick)
   (let ((n (get-prop "nick")))
     (if n n (name))))
-
-(define (recovery-secret) (get-prop "recovery-secret"))
-
-(define (set-owner! did)
-  (set-prop! "owner" did)
-  (ma-save-state!))
 
 (define (pending-room)
   (let ((p (get-prop "pending-room")))
@@ -50,27 +43,6 @@
     (if (equal? p "")
         #f
         (ma-send! (canonical-actor p) (list :leave-occupant)))))
-
-(define (claim-key actor)
-  (string-append "claim:" (canonical-actor actor)))
-
-(define (set-claim! actor ctx)
-  (if (map? ctx)
-      (begin
-        (set-prop! (claim-key actor) ctx)
-        (ma-save-state!))
-      #f))
-
-(define (set-recovery-secret! secret)
-  (if (or (not secret) (equal? secret ""))
-      (del-prop! "recovery-secret")
-      (set-prop! "recovery-secret" secret))
-  (ma-save-state!))
-
-; Caller and reply helpers.
-(define (owner-caller? msg)
-  (let ((o (owner)))
-    (and o (equal? (msg-from msg) o))))
 
 (define (movement-caller? msg)
   (or
@@ -170,17 +142,8 @@
       (ma-send! (canonical-actor (msg-from msg))
                 (list :parent-report (canonical-actor (self)) (node-parent) tick nonce)))))
 
-(set-rpc-method! :owner
-  (lambda (args msg)
-    (reply-ok-with msg (if (owner) (owner) "(none)"))))
-
-(set-rpc-method! :owner?
-  (lambda (args msg)
-    (if (null? args)
-        (reply-ok-with msg (string-append "Owner: " (if (owner) (owner) "(none)")))
-        (begin
-          (ma-send! (canonical-actor (car args)) (list :print (string-append "Owner: " (if (owner) (owner) "(none)"))))
-          (reply-ok msg)))))
+(set-rpc-method! :owner handle-node-owner)
+(set-rpc-method! :owner? handle-node-owner?)
 
 (set-internal-rpc-method! :print
   (lambda (args msg)
@@ -240,92 +203,15 @@
                  (move-to-room! (ctx-text ctx "room") (msg-from msg)))))
             (else #f))))))
 
-(set-rpc-method! :set-recovery-secret
-  (lambda (args msg)
-    (if (owner-caller? msg)
-        (begin
-          (set-recovery-secret! (if (null? args) "" (join-words args)))
-          (reply-ok-with msg "recovery secret updated"))
-        (reply-error msg "only owner may set recovery secret"))))
+(set-rpc-method! :set-recovery-secret handle-node-set-recovery-secret!)
 
-(set-cmd-method! :claim
-  (lambda (args msg)
-    (let ((stored (recovery-secret))
-          (did (claim-caller-did args msg))
-          (claim-args (claim-command-args args msg)))
-      (cond ((and (not (owner)) (not stored) (null? claim-args))
-             (begin
-               (set-owner! did)
-          (reply-user-ok msg did "claimed")))
-        ((and (owner) (null? claim-args))
-         (reply-user-error msg did "already claimed. Reclaim with :claim <secret>"))
-        ((null? claim-args)
-         (reply-user-error msg did "usage: :claim <secret>"))
-        ((and stored (equal? (car claim-args) stored))
-             (begin
-               (set-owner! did)
-               (set-recovery-secret! "")
-          (reply-user-ok msg did "claimed")))
-        (else
-         (reply-user-error msg did "claim failed"))))))
+(set-cmd-method! :claim handle-node-claim!)
 
-; Parent-mediated transfer. The parent room asks the agent to bind to a did
-; or re-enter another parent; direct did calls are deliberately rejected.
-(set-cmd-method! :take
-  (lambda (args msg)
-        (let ((did (node-effective-did args msg))
-          (rest (node-effective-args args msg)))
-  (cond ((handle-parent-take did rest msg) #t)
-        ((not (node-transfer-caller-authorised? did msg))
-             (reply-error msg "take must be requested by current parent"))
-            ((not (valid-did? did))
-             (reply-error msg "take requires DID with did:ma: prefix"))
-            ((not (node-owner-or-unowned? did))
-             (reply-error msg "only owner may take this agent"))
-            ((null? rest)
-             (reply-error msg "usage: :take <did> <carrier-parent-did-url> [ctx-map]"))
-            ((not (node-valid-parent-ref? (car rest)))
-             (reply-error msg "take requires carrier parent as DID-URL"))
-            ((and (not (null? (cdr rest))) (not (null? (cdr (cdr rest)))))
-             (reply-error msg "take accepts at most one optional ctx-map"))
-            ((and (not (null? (cdr rest))) (not (node-valid-transfer-ctx? (car (cdr rest)))))
-             (reply-error msg "ctx-map must include non-empty parent, kind, protocol, name, nick, description"))
-            (else
-             (let ((target-parent (car rest)))
-               (if (not (owner)) (set-owner! did) #f)
-               (if (and (not (null? (cdr rest))) (node-valid-transfer-ctx? (car (cdr rest))))
-                   (set-claim! did (car (cdr rest)))
-                   #f)
-               (propose-node-parent! target-parent)
-                 (reply-ok-with msg "take requested")))))))
-
-(set-cmd-method! :drop
-  (lambda (args msg)
-    (let ((did (node-effective-did args msg))
-        (rest (node-effective-args args msg)))
-      (cond ((handle-stale-parent-drop did rest msg) #t)
-            ((not (node-transfer-caller-authorised? did msg))
-             (reply-error msg "drop must be requested by current parent"))
-            ((not (valid-did? did))
-             (reply-error msg "drop requires DID with did:ma: prefix"))
-            ((not (node-owner-or-unowned? did))
-             (reply-error msg "only owner may drop this agent"))
-            ((null? rest)
-             (reply-error msg "usage: :drop <target-parent-did-url> [ctx-map]"))
-            ((not (node-valid-parent-ref? (car rest)))
-             (reply-error msg "drop requires target parent as DID-URL"))
-            ((and (not (null? (cdr rest))) (not (null? (cdr (cdr rest)))))
-             (reply-error msg "drop accepts at most one optional ctx-map"))
-            ((and (not (null? (cdr rest))) (not (node-valid-transfer-ctx? (car (cdr rest)))))
-             (reply-error msg "ctx-map must include non-empty parent, kind, protocol, name, nick, description"))
-            (else
-             (let ((target-parent (car rest)))
-               (if (not (owner)) (set-owner! did) #f)
-               (if (and (not (null? (cdr rest))) (node-valid-transfer-ctx? (car (cdr rest))))
-                   (set-claim! did (car (cdr rest)))
-                   #f)
-               (enter target-parent)
-                 (reply-ok-with msg "drop requested")))))))
+; Parent-mediated transfer: the agent proposes itself to a new (non-room)
+; parent, e.g. being picked up as an object. Shared body lives in node.ma as
+; handle-node-set-parent!. Room entry is a distinct protocol (:ctx/:enter,
+; below) with its own occupancy/exit checks and is NOT folded in here.
+(set-cmd-method! :set-parent handle-node-set-parent!)
 
 (set-cmd-method! :recycle
   (lambda (args msg)

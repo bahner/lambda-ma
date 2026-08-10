@@ -1047,8 +1047,7 @@ mod tests {
                 Value::list(vec![
                     Value::symbol(":move"),
                     Value::symbol(":claim"),
-                    Value::symbol(":take"),
-                    Value::symbol(":drop"),
+                    Value::symbol(":set-parent"),
                     Value::symbol(":recycle"),
                     Value::symbol(":duck"),
                     Value::symbol(":quack"),
@@ -1103,8 +1102,7 @@ mod tests {
                 Value::list(vec![
                     Value::symbol(":move"),
                     Value::symbol(":claim"),
-                    Value::symbol(":take"),
-                    Value::symbol(":drop"),
+                    Value::symbol(":set-parent"),
                     Value::symbol(":recycle"),
                     Value::symbol(":duck"),
                     Value::symbol(":quack"),
@@ -1126,8 +1124,7 @@ mod tests {
                 Value::list(vec![
                     Value::symbol(":move"),
                     Value::symbol(":claim"),
-                    Value::symbol(":take"),
-                    Value::symbol(":drop"),
+                    Value::symbol(":set-parent"),
                     Value::symbol(":recycle"),
                     Value::symbol(":fortune"),
                 ])
@@ -2217,8 +2214,7 @@ mod tests {
                 Value::symbol(":ok"),
                 Value::list(vec![
                     Value::symbol(":claim"),
-                    Value::symbol(":take"),
-                    Value::symbol(":drop"),
+                    Value::symbol(":set-parent"),
                     Value::symbol(":recycle"),
                 ])
             ])
@@ -2728,7 +2724,7 @@ mod tests {
             Value::Msg(sample_term_msg(
                 "did:ma:owner",
                 "did:ma:runtime#lamp",
-                Value::symbol(":drop"),
+                Value::symbol(":set-parent"),
             )),
         );
 
@@ -2738,7 +2734,7 @@ mod tests {
             (set-prop! "name" "lamp")
             (set-prop! "nick" "brass lamp")
             (set-prop! "description" "A warm brass lamp.")
-            ((find-method :drop) (list "did:ma:runtime#room") owner_msg)
+            ((find-method :set-parent) (list "did:ma:runtime#room") owner_msg)
             "#,
             &env,
         )
@@ -2758,7 +2754,43 @@ mod tests {
         );
         assert_eq!(
             eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
-            Value::list(vec![Value::symbol(":ok"), Value::str("drop requested")])
+            Value::list(vec![Value::symbol(":ok"), Value::str("set-parent requested")])
+        );
+    }
+
+    #[test]
+    fn thing_unowned_can_be_taken_directly_by_a_stranger() {
+        let env = thing_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#lamp".to_string());
+        crate::state::set_config(config);
+        env.define(
+            Rc::from("stranger_msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:stranger",
+                "did:ma:runtime#lamp",
+                Value::symbol(":set-parent"),
+            )),
+        );
+
+        eval_all(
+            r#"
+            (set-prop! "parent" "did:ma:runtime#room")
+            (set-prop! "name" "lamp")
+            (set-prop! "nick" "brass lamp")
+            (set-prop! "description" "A warm brass lamp.")
+            ((find-method :set-parent) (list "did:ma:runtime#inventory") stranger_msg)
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        assert_eq!(eval_str("(get-prop \"owner\")", &env), "did:ma:stranger");
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
+            Value::list(vec![Value::symbol(":ok"), Value::str("set-parent requested")])
         );
     }
 
@@ -2868,10 +2900,7 @@ mod tests {
         );
         assert_eq!(
             eval_all("(get-prop \"reply-term:2\")", &env).unwrap(),
-            Value::list(vec![
-                Value::symbol(":ok"),
-                Value::str("Contents:\nbrass lamp = did:ma:runtime#lamp")
-            ])
+            Value::list(vec![Value::symbol(":ok"), Value::list(vec![child_ctx.clone()])])
         );
         assert_eq!(
             eval_all("(get-prop \"reply-term:3\")", &env).unwrap(),
@@ -2879,7 +2908,7 @@ mod tests {
         );
         assert_eq!(
             eval_all("(get-prop \"reply-term:4\")", &env).unwrap(),
-            Value::list(vec![Value::symbol(":ok"), Value::str("Contents: none.")])
+            Value::list(vec![Value::symbol(":ok"), Value::list(vec![])])
         );
     }
 
@@ -2911,13 +2940,13 @@ mod tests {
             Value::Msg(sample_term_msg(
                 "did:ma:runtime#inventory",
                 "did:ma:runtime#lamp",
-                Value::symbol(":drop"),
+                Value::symbol(":set-parent"),
             )),
         );
 
         eval_all(
             r#"
-            ((find-method :drop)
+            ((find-method :set-parent)
              (list "did:ma:did" "did:ma:runtime#room" stale_ctx)
              inventory_msg)
             "#,

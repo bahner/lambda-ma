@@ -123,9 +123,9 @@
 
 ; A container's own contents aren't in any room snapshot — the container has
 ; to be asked directly, exactly like resolving anything else that isn't here.
+; ":contents?" replies with the raw list of content ctx's, not "look"'s text.
 (define (container-contents container)
-  (let ((snapshot (actor-call container "look")))
-    (if (map? snapshot) (event-list-values (map-ref snapshot "things" ())) ())))
+  (event-list-values (actor-call container "contents?")))
 
 (define (resolve-in-container word container)
   (if (starts-with-did? word)
@@ -151,6 +151,22 @@
         (#.my.ctx.nick: nick)
         (#.my.ctx.nick:))))
   ctx)
+
+; A bare DID has no actor of its own to hold carried things under, so it
+; needs one concrete container to serve as that home — forged once as an
+; orphan of this runtime's root (ma-spec sec 6) and remembered locally from
+; then on. `.my.ctx.inv` is per-runtime, exactly like `.my.ctx.root` itself.
+(define (create-my-inv!)
+  (let ((created (actor-call (#.my.ctx.root) "forge" (make-map "kind" "/ma/container/0.0.1" "name" "inventory"))))
+    (#.my.ctx.inv: created)
+    created))
+
+(define (my-inv)
+  (guard (e (#t (create-my-inv!)))
+    (let ((existing (#.my.ctx.inv)))
+      (if (and (string? existing) (not (equal? existing "")))
+        existing
+        (create-my-inv!)))))
 
 ; ── Command verbs ───────────────────────────────────────────────────────────
 
@@ -218,7 +234,7 @@
         (if (or (null? name-words) (and target-words (null? target-words)))
             (forge-usage-error)
             (let ((name (join-words name-words))
-                  (target (if (pair? target-words) (join-words target-words) (#.my.ctx.inv))))
+                  (target (if (pair? target-words) (join-words target-words) (my-inv))))
               (display (actor-call (resolve-name target) "forge" (make-map "kind" kind "name" name)))
               nil)))))
 
@@ -230,36 +246,79 @@
     (if (map? result) (look) (display result)))
   nil)
 
-; Takes/drops/put/take-from send directly to the resolved thing/agent and
-; return nothing useful themselves — the visible outcome (or a refusal such
-; as "nailed to the floor") arrives on the room's print/event channel, not
-; the RPC ack (ma-spec sec 8).
+; Zion's own single-slot analogue of ownership: holding something sets its
+; parent directly to your own DID (ma-spec sec 4/6 place no restriction on a
+; parent being a bare avatar). `hold`/`take`/`take-from` all start the same
+; two-hop handshake: ask the item to propose itself to you (:set-parent),
+; then wait for its own resulting `:parent` proposal to actually arrive
+; addressed to you. Confirming that proposal (replying `:child`) — and later
+; clearing the slot on the item's departure notice — is not something this
+; evaluator can do on its own: the proposal is a separate, later, unsolicited
+; message, not a return value of this call. That confirm/clear wiring lives
+; in ma-zion's inbox_poll.rs (handle_hold_parent_proposal). The visible
+; outcome (or a refusal such as "nailed to the floor") still arrives on the
+; room's print/event channel, not the RPC ack (ma-spec sec 8).
+(define (my-hold)
+  (guard (e (#t "")) (#.my.ctx.hold)))
 
+(define (my-hold-pending)
+  (guard (e (#t "")) (#.my.ctx.hold-pending)))
+
+(define (hold-target! target then)
+  (cond ((not (equal? (my-hold) ""))
+         (error (string-append "your hands are full — drop " (my-hold) " first.")))
+        ((not (equal? (my-hold-pending) ""))
+         (error (string-append "already reaching for " (my-hold-pending) ".")))
+        (else
+         (begin
+           (#.my.ctx.hold-pending: target)
+           (if then (#.my.ctx.hold-then: then) (#.my.ctx.hold-then:))
+           ; If the item refuses the :set-parent request outright (no
+           ; ownership/ctx authority), that refusal is this call's own RPC
+           ; reply, not a later message — clear the slot back out and
+           ; re-raise, or hold-pending would stay stuck forever.
+           (guard (e (#t (begin
+                           (#.my.ctx.hold-pending:)
+                           (#.my.ctx.hold-then:)
+                           (error e))))
+             (actor-call target "set-parent" (#.my.identity.did)))
+           nil))))
+
+(define (hold name)
+  (hold-target! (resolve-name name) #f))
+
+; take = hold, then relay straight into your own inventory once the hold is
+; actually confirmed (see the `hold-then` follow-up in inbox_poll.rs).
 (define (take name)
-  (actor-call (resolve-name name) "take")
-  nil)
-
-; What you're carrying isn't in the room snapshot, so "drop" resolves against
-; your own inventory container's contents instead of the room's occupants.
-(define (drop name)
-  (actor-call (resolve-in-container name (#.my.ctx.inv)) "drop" (room))
-  nil)
-
-(define (put name container)
-  (actor-call (resolve-name name) "put" (resolve-name container))
-  nil)
+  (hold-target! (resolve-name name) (my-inv)))
 
 (define (take-from container name)
-  (let ((container-did (resolve-name container)))
-    (actor-call (resolve-in-container name container-did) "take"))
+  (hold-target! (resolve-in-container name (resolve-name container)) (my-inv)))
+
+; drop/put act on whatever you're currently holding — there is no item name
+; to resolve, since only one thing can be held at a time.
+(define (drop)
+  (let ((held (my-hold)))
+    (if (equal? held "")
+      (error "you aren't holding anything.")
+      (begin (actor-call held "set-parent" (room)) nil))))
+
+(define (put container)
+  (let ((held (my-hold)))
+    (if (equal? held "")
+      (error "you aren't holding anything.")
+      (begin (actor-call held "set-parent" (resolve-name container)) nil))))
+
+(define (recycle-from container name)
+  (actor-call (resolve-in-container name (resolve-name container)) "recycle")
   nil)
 
-(define (say text)
-  (room-call "say" text)
+(define (say . words)
+  (room-call "say" (join-words words))
   nil)
 
-(define (emote text)
-  (room-call "emote" text)
+(define (emote . words)
+  (room-call "emote" (join-words words))
   nil)
 
 (define (claim name)
@@ -294,12 +353,27 @@
   (event-exits (room-call "exits?"))
   nil)
 
-(define (inv)
-  (let ((snapshot (actor-call (#.my.ctx.inv) "look")))
-    (if (map? snapshot)
-      (event-things (map-ref snapshot "things" ()))
-      (display snapshot)))
+; An inventory is nothing but an ordinary container you point yourself at —
+; any container works, not just an auto-forged one, so pointing elsewhere is
+; just a setter, not a special operation. `:kind?` guards against pointing it
+; at a room, thing, or agent by mistake.
+(define (set-my-inv! container)
+  (let ((kind (actor-call container "kind?")))
+    (if (equal? kind "/ma/container/0.0.1")
+      (begin
+        (#.my.ctx.inv: container)
+        (display (string-append "inventory set to " container)))
+      (error (string-append "invalid inventory kind: " kind))))
   nil)
+
+(define (inv . rest)
+  (if (pair? rest)
+    (set-my-inv! (car rest))
+    (let ((snapshot (actor-call (my-inv) "look")))
+      (if (map? snapshot)
+        (event-things (map-ref snapshot "things" ()))
+        (display snapshot))
+      nil)))
 
 (define (help)
   (display
@@ -311,11 +385,14 @@
       "things?                 list things here\n"
       "exits?                  list exits here\n"
       "here?                   show the current room's address\n"
-      "take <name>             take something from the room\n"
-      "drop <name>             drop something from your inventory\n"
-      "put <name> <container>  put something into a container\n"
-      "take-from <container> <name>  take something out of a container\n"
+      "hold <name>             hold something from the room, empty-handed\n"
+      "take <name>             hold something from the room into your inventory\n"
+      "take-from <container> <name>  hold something out of a container into your inventory\n"
+      "drop                    drop whatever you're holding into the room\n"
+      "put <container>         put whatever you're holding into a container\n"
+      "recycle-from <container> <name>  destroy something inside a container that you own\n"
       "inv                     show your own inventory\n"
+      "inv <container>         point your inventory at any container\n"
       "say <text>              say something aloud\n"
       "emote <text>            perform an emote\n"
       "claim <name>            claim ownership of something\n"

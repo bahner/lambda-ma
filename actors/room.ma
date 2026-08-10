@@ -1446,7 +1446,7 @@
              (reply-to-sender msg (string-append "Missing details for agent or thing: " item-token)))
             (else
              (begin
-               (ma-send! (canonical-actor item-actor) (list :drop did (canonical-actor container-actor) item-ctx))
+               (ma-send! (canonical-actor item-actor) (list :set-parent did (canonical-actor container-actor) item-ctx))
                (reply-to-sender msg (string-append "You try to put " item-token " in " container-token "."))))))))
 
 (set-cmd-method! :where?

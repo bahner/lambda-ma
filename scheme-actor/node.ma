@@ -124,10 +124,84 @@
   (and (node-owner)
   (equal? (node-owner) actor)))
 
+; Shared owner/claim/recovery-secret state, identical across thing/container/
+; agent — kept here once instead of duplicated per kind file.
+(define (owner) (node-owner))
+
+(define (set-owner! did)
+  (set-prop! "owner" did)
+  (ma-save-state!))
+
+(define (recovery-secret) (get-prop "recovery-secret"))
+
+(define (set-recovery-secret! secret)
+  (if (or (not secret) (equal? secret ""))
+      (del-prop! "recovery-secret")
+      (set-prop! "recovery-secret" secret))
+  (ma-save-state!))
+
+(define (claim-key actor)
+  (string-append "claim:" (canonical-actor actor)))
+
+(define (set-claim! actor ctx)
+  (if (map? ctx)
+      (begin
+        (set-prop! (claim-key actor) ctx)
+        (ma-save-state!))
+      #f))
+
+(define (owner-caller? msg)
+  (let ((o (owner)))
+    (and o (msg-from-owner? o msg))))
+
+; Shared :owner/:owner?/:set-recovery-secret/:claim bodies — identical across
+; thing/container/agent, kept here once instead of duplicated per kind file.
+(define (handle-node-owner args msg)
+  (reply-ok-with msg (if (owner) (owner) "(none)")))
+
+(define (handle-node-owner? args msg)
+  (if (null? args)
+      (reply-ok-with msg (string-append "Owner: " (if (owner) (owner) "(none)")))
+      (begin
+        (ma-send! (canonical-actor (car args)) (list :print (string-append "Owner: " (if (owner) (owner) "(none)"))))
+        (reply-ok msg))))
+
+(define (handle-node-set-recovery-secret! args msg)
+  (if (owner-caller? msg)
+      (begin
+        (set-recovery-secret! (if (null? args) "" (join-words args)))
+        (reply-ok-with msg "recovery secret updated"))
+      (reply-error msg "only owner may set recovery secret")))
+
+(define (handle-node-claim! args msg)
+  (let ((stored (recovery-secret))
+        (did (claim-caller-did args msg))
+        (claim-args (claim-command-args args msg)))
+    (cond ((and (not (owner)) (not stored) (null? claim-args))
+           (begin
+             (set-owner! did)
+             (reply-user-ok msg did "claimed")))
+          ((and (owner) (null? claim-args))
+           (reply-user-error msg did "already claimed. Reclaim with :claim <secret>"))
+          ((null? claim-args)
+           (reply-user-error msg did "usage: :claim <secret>"))
+          ((and stored (equal? (car claim-args) stored))
+           (begin
+             (set-owner! did)
+             (set-recovery-secret! "")
+             (reply-user-ok msg did "claimed")))
+          (else
+           (reply-user-error msg did "claim failed")))))
+
+; An unowned node has no owner to defend it, so anyone may propose a
+; transfer for it directly (they become owner in the same call, below) —
+; this is what actually lets "take <lying-around-thing>" work without first
+; requiring :claim or a parent proxy.
 (define (node-transfer-caller-authorised? did msg)
   (or (node-caller-is-parent? msg)
       (node-orphan-owner-recovery? did)
-  (node-owner-delegation? did msg)))
+      (node-owner-delegation? did msg)
+      (not (node-owner))))
 
 (define (node-recycle-caller-authorised? did msg)
   (and (node-owner-did? did)
@@ -327,40 +401,6 @@
                (canonical-actor (car (car entries))))
               (else (loop (cdr entries)))))))
 
-(define (take-target-parent rest msg)
-  (let ((candidate
-          (if (or (null? rest) (null? (cdr rest))) #f (car (cdr rest)))))
-    (if (and (non-empty-string? candidate)
-             (valid-did-url? candidate))
-        (canonical-actor candidate)
-        (canonical-actor (msg-from msg)))))
-
-(define (take-transfer-verb rest)
-  (let ((hint
-          (if (or (null? rest)
-                  (null? (cdr rest))
-                  (null? (cdr (cdr rest))))
-              #f
-              (car (cdr (cdr rest))))))
-    (if (equal? hint :drop) :drop :take)))
-
-(define (handle-parent-take did rest msg)
-  (if (null? rest)
-      #f
-      (let* ((actor (if (valid-did-url? (car rest))
-                        (child-ref (car rest))
-                        #f))
-             (ctx (if actor (child-ctx actor) #f)))
-        (if actor
-            (let ((target-parent (take-target-parent rest msg))
-                  (transfer-verb (take-transfer-verb rest)))
-              (begin
-                ; Keep the child until its committed ctx reports another parent.
-                (ma-send! actor (list transfer-verb did target-parent ctx))
-                (reply-ok msg)
-                #t))
-            #f))))
-
 (define (handle-stale-parent-drop did rest msg)
   (if (or (null? rest)
           (null? (cdr rest))
@@ -382,6 +422,36 @@
               (reply-ok-with msg "drop requested")
               #t)
             #f))))
+
+; Shared body for the single :set-parent trigger (thing/container/agent):
+; propose self to a new parent. Sent directly to the actor being relocated,
+; never relayed by a third party — the caller must already be authorised.
+(define (handle-node-set-parent! args msg)
+  (let ((did (node-effective-did args msg))
+        (rest (node-effective-args args msg)))
+    (cond ((handle-stale-parent-drop did rest msg) #t)
+          ((not (node-transfer-caller-authorised? did msg))
+           (reply-error msg "set-parent must be requested by current parent"))
+          ((not (valid-did? did))
+           (reply-error msg "set-parent requires DID with did:ma: prefix"))
+          ((not (node-owner-or-unowned? did))
+           (reply-error msg "only owner may set-parent this actor"))
+          ((null? rest)
+           (reply-error msg "usage: :set-parent <target-parent-did-url> [ctx-map]"))
+          ((not (node-valid-parent-ref? (car rest)))
+           (reply-error msg "set-parent requires target parent as DID-URL"))
+          ((and (not (null? (cdr rest))) (not (null? (cdr (cdr rest)))))
+           (reply-error msg "set-parent accepts at most one optional ctx-map"))
+          ((and (not (null? (cdr rest))) (not (node-valid-transfer-ctx? (car (cdr rest)))))
+           (reply-error msg "ctx-map must include non-empty parent, kind, protocol, name, nick, description"))
+          (else
+           (begin
+             (if (not (owner)) (set-owner! did) #f)
+             (if (and (not (null? (cdr rest))) (node-valid-transfer-ctx? (car (cdr rest))))
+                 (set-claim! did (car (cdr rest)))
+                 #f)
+             (propose-node-parent! (car rest))
+             (reply-ok-with msg "set-parent requested"))))))
 
 (define (handle-node-parent args msg)
   (cond ((null? args)

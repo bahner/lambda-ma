@@ -8,8 +8,8 @@ lambda-ma world profile. It is not runtime code.
 - Never modify files outside this workspace without explicit user approval.
 - Commit source and template files, never generated `dist/`,
   `scheme-actor/target/`, or `scheme-actor/actor.wasm`.
-- Use British English for project-owned names and prose.
-- Do not modify `rust-ma-runtime` for world-profile work.
+- Use British English for project-owned names and prose.- Write DRY, KISS code: avoid duplicated logic and prefer the simplest
+  implementation that meets the requirement.- Do not modify `rust-ma-runtime` for world-profile work.
 
 ## Direct-DID profile
 
@@ -35,6 +35,18 @@ validation, and errors. Use room broadcasts or `:print` only for in-world
 events such as arrival, departure, speech, emotes, movement, and transfer.
 An action may return a bare technical `:ok`, but its visible outcome belongs
 only on the `:print` event channel.
+
+## Data over presentation (descriptive, not normative)
+
+Actors do not print or format prose for query replies — that is a client's
+job (zion or otherwise). An actor's job is to hand back quality data: a plain
+ctx-map, built from the same simple DID/text/number attributes the spec
+already uses for ctx. A curious teenager should be able to look at any reply
+and understand its contents without decoding an ad hoc text format. Nothing
+here is a hard limit — but the working expectation is that a typical ctx is
+small, roughly on the order of ten keys, not a large or deeply nested
+structure. Prefer returning existing ctx shapes (e.g. lists of child ctx's)
+over inventing new bespoke reply shapes per verb.
 
 ## Documentation contract
 
