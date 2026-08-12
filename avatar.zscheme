@@ -68,9 +68,19 @@
 (define (starts-with-did? word)
   (and (string? word) (>= (string-length word) 4) (equal? (substring word 0 4) "did:")))
 
+; A resolve-ref lookup is the simplest searchable contract over a room's
+; present snapshots and the inventory's own contents: a lookup word is fed to
+; the nick/name fields of all live candidate ctx records, and only a unique DID
+; answer is accepted. If the same search term is a substring in more than one
+; record, the caller keeps the same `ambiguous-error` presentation the avatar
+; has already been using in the object-transfer help path.
 (define (name-matches? word entry key)
-  (let ((value (map-ref entry key #f)))
-    (and (string? value) (equal? (string-downcase word) (string-downcase value)))))
+  (let* ((value (map-ref entry key #f))
+         (needle (string-downcase word))
+         (haystack (if (string? value) (string-downcase value) "")))
+    (and (string? value)
+         (or (equal? needle haystack)
+             (string-contains haystack needle)))))
 
 ; Try each key in priority order (e.g. nick before name) and stop at the
 ; first key that produces any hit at all — a name-only match is never mixed
@@ -83,13 +93,16 @@
         (candidates-by-keys word pool (cdr keys))
         hits))))
 
-; #f means "not found here" (caller decides what to try next); a single hit
-; resolves silently; 2+ hits is always an error, never a silent first-pick.
+; A pool lookup is deliberately dumb and public: if it is asked to resolve a
+; word, it returns the list of actor DIDs that match the word across the given
+; pool and the selected name/nick keys. The API shape is deliberately always a
+; list — a single matching DID is still encoded as a one-element list, exactly
+; the shape the caller-requested contract described.
 (define (resolve-in-pool word pool keys)
   (let ((candidates (candidates-by-keys word pool keys)))
-    (cond ((null? candidates) #f)
-          ((null? (cdr candidates)) (entry-actor (car candidates)))
-          (else (ambiguous-error word candidates)))))
+    (if (null? candidates)
+      ()
+      (map entry-actor candidates))))
 
 ; Every addressable thing in a room, regardless of which bucket it's filed
 ; under — who (other avatars present), agents, and things are all fair game
@@ -103,7 +116,9 @@
 
 ; Cheap first (search what we already have cached), fresh only if needed:
 ; one `look` round-trip at most per resolve, never one per candidate.
-(define (resolve-against pool-getter word keys)
+; Returns #f rather than erroring when nothing matches here, so a caller can
+; chain another pool (see resolve-ref below) before finally giving up.
+(define (resolve-against-or-false pool-getter word keys)
   (if (starts-with-did? word)
     word
     (let* ((pool1 (if (map? last-room) (pool-getter last-room) ()))
@@ -112,10 +127,80 @@
         hit1
         (let* ((room2 (remember-room! (room-call "look")))
                (pool2 (if (map? room2) (pool-getter room2) ())))
-          (or (resolve-in-pool word pool2 keys)
-              (no-match-error word)))))))
+          (resolve-in-pool word pool2 keys))))))
 
-(define (resolve-name word) (resolve-against occupant-pool word (list "nick" "name")))
+(define (resolve-against pool-getter word keys)
+  (or (resolve-against-or-false pool-getter word keys)
+      (no-match-error word)))
+
+; `resolve-ref` is the public contract the user described at the display level:
+; a lookup word is searched against the room snapshot (`things?`/`occupants?`)
+; and then, only if your inventory already points at a live container, the same
+; name-or-nick token search is tried over the inventory contents. The result of
+; the resolver is intentionally a list of DID strings only — a one-element list
+; is a unique resolution, a multi-element list is the ambiguous case, and the
+; empty list means nothing in that lookup chain matched.
+(define (resolve-ref word)
+  (if (starts-with-did? word)
+    (list word)
+    (let* ((room1 (if (map? last-room) last-room (remember-room! (room-call "look"))))
+           (pool1 (if (map? room1) (occupant-pool room1) ()))
+           (hits1 (resolve-in-pool word pool1 (list "nick" "name")))
+           (inv (my-inv-if-any))
+           (hits2 (if inv (resolve-in-pool word (container-contents inv) (list "nick" "name")) ()))
+           (hits (append hits1 hits2)))
+      hits)))
+
+(define (resolve-one word)
+  (let ((hits (resolve-ref word)))
+    (cond ((null? hits) (no-match-error word))
+          ((null? (cdr hits)) (car hits))
+          (else (error (string-append "ambiguous object reference for \"" word "\" — repeat with a DID."))))))
+
+; `resolve-name` (and the sibling `resolve-nick` / `resolve-description`)
+; remains the direct attribute lookup API, but the avatar host is just the
+; resolver driver that asks the runtime-side search structure for a candidate
+; pool. The runtime contract itself is the public library form in
+; runtime.zscheme: `_ref` is the flatten-list combination of the individual
+; attribute search functions.
+(define (resolve-name word)
+  (if (starts-with-did? word)
+    (list word)
+    (let* ((room1 (if (map? last-room) last-room (remember-room! (room-call "look"))))
+           (pool1 (if (map? room1) (occupant-pool room1) ()))
+           (hits1 (resolve-in-pool word pool1 (list "name")))
+           (inv (my-inv-if-any))
+           (hits2 (if inv (resolve-in-pool word (container-contents inv) (list "name")) ()))
+           (hits (append hits1 hits2)))
+      hits)))
+
+(define (resolve-nick word)
+  (if (starts-with-did? word)
+    (list word)
+    (let* ((room1 (if (map? last-room) last-room (remember-room! (room-call "look"))))
+           (pool1 (if (map? room1) (occupant-pool room1) ()))
+           (hits1 (resolve-in-pool word pool1 (list "nick")))
+           (inv (my-inv-if-any))
+           (hits2 (if inv (resolve-in-pool word (container-contents inv) (list "nick")) ()))
+           (hits (append hits1 hits2)))
+      hits)))
+
+(define (resolve-description word)
+  (if (starts-with-did? word)
+    (list word)
+    (let* ((room1 (if (map? last-room) last-room (remember-room! (room-call "look"))))
+           (pool1 (if (map? room1) (occupant-pool room1) ()))
+           (hits1 (resolve-in-pool word pool1 (list "description")))
+           (inv (my-inv-if-any))
+           (hits2 (if inv (resolve-in-pool word (container-contents inv) (list "description")) ()))
+           (hits (append hits1 hits2)))
+      hits)))
+
+(define (resolve-ref word)
+  (unique-list
+    (flatten-list (list (resolve-name word)
+                        (resolve-nick word)
+                        (resolve-description word)))))
 
 ; Exits match on their direction word first ("north"), falling back to any
 ; nick/name they might also carry.
@@ -167,6 +252,16 @@
       (if (and (string? existing) (not (equal? existing "")))
         existing
         (create-my-inv!)))))
+
+; Read-only counterpart of `my-inv` — never forges — so a mere name lookup
+; (e.g. resolve-name's inventory fallback) can't have the side effect of
+; creating a fresh personal inventory just because nothing matched yet.
+(define (my-inv-if-any)
+  (guard (e (#t #f))
+    (let ((existing (#.my.ctx.inv)))
+      (if (and (string? existing) (not (equal? existing "")))
+        existing
+        #f))))
 
 ; ── Command verbs ───────────────────────────────────────────────────────────
 
@@ -235,7 +330,7 @@
             (forge-usage-error)
             (let ((name (join-words name-words))
                   (target (if (pair? target-words) (join-words target-words) (my-inv))))
-              (display (actor-call (resolve-name target) "forge" (make-map "kind" kind "name" name)))
+              (display (actor-call (resolve-one target) "forge" (make-map "kind" kind "name" name)))
               nil)))))
 
 (define (leave)
@@ -285,15 +380,15 @@
            nil))))
 
 (define (hold name)
-  (hold-target! (resolve-name name) #f))
+  (hold-target! (resolve-one name) #f))
 
 ; take = hold, then relay straight into your own inventory once the hold is
 ; actually confirmed (see the `hold-then` follow-up in inbox_poll.rs).
 (define (take name)
-  (hold-target! (resolve-name name) (my-inv)))
+  (hold-target! (resolve-one name) (my-inv)))
 
 (define (take-from container name)
-  (hold-target! (resolve-in-container name (resolve-name container)) (my-inv)))
+  (hold-target! (resolve-in-container name (resolve-one container)) (my-inv)))
 
 ; drop/put act on whatever you're currently holding — there is no item name
 ; to resolve, since only one thing can be held at a time.
@@ -307,10 +402,13 @@
   (let ((held (my-hold)))
     (if (equal? held "")
       (error "you aren't holding anything.")
-      (begin (actor-call held "set-parent" (resolve-name container)) nil))))
+      (begin (actor-call held "set-parent" (resolve-one container)) nil))))
+
+(define (put-in container)
+  (put container))
 
 (define (recycle-from container name)
-  (actor-call (resolve-in-container name (resolve-name container)) "recycle")
+  (actor-call (resolve-in-container name (resolve-one container)) "recycle")
   nil)
 
 (define (say . words)
@@ -322,15 +420,15 @@
   nil)
 
 (define (claim name)
-  (actor-call (resolve-name name) "claim")
+  (actor-call (resolve-one name) "claim")
   nil)
 
 (define (owner name)
-  (display (actor-call (resolve-name name) "owner?"))
+  (display (actor-call (resolve-one name) "owner?"))
   nil)
 
 (define (recycle name)
-  (actor-call (resolve-name name) "recycle")
+  (actor-call (resolve-one name) "recycle")
   nil)
 
 (define (here?)
@@ -385,8 +483,8 @@
       "things?                 list things here\n"
       "exits?                  list exits here\n"
       "here?                   show the current room's address\n"
-      "hold <name>             hold something from the room, empty-handed\n"
-      "take <name>             hold something from the room into your inventory\n"
+      "hold <name>             hold something (room or your own inventory), empty-handed\n"
+      "take <name>             hold something (room or your own inventory) into your inventory\n"
       "take-from <container> <name>  hold something out of a container into your inventory\n"
       "drop                    drop whatever you're holding into the room\n"
       "put <container>         put whatever you're holding into a container\n"

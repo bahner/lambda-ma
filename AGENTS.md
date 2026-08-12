@@ -31,10 +31,25 @@ exists.
 ## RPC and events
 
 Use `ma-reply!` for getters, setters, configuration, introspection, metadata,
-validation, and errors. Use room broadcasts or `:print` only for in-world
-events such as arrival, departure, speech, emotes, movement, and transfer.
-An action may return a bare technical `:ok`, but its visible outcome belongs
-only on the `:print` event channel.
+validation, and errors. The runtime is an authoritative actor/data layer; it
+never promises a client-side presentation surface. `:print` and other eventy
+traffic are a Zion/visualisation concern: they are the client-side stream that a
+human workstation consumes to show an in-world event such as arrival,
+departure, speech, emotes, movement, and transfer. A runtime actor may answer a
+technical RPC with `:ok`, but the user-visible event shape is not part of the
+authoritative wire contract owned by the actor library.
+
+The resolver contract in this profile is deliberately layered. The generic
+stdlib lives at the evaluator/compiler level and provides reusable helpers such
+as list folding, string checks, and `unique-list`. The lambda-ma runtime domain
+lives higher up in the runtime library surface (`runtime.zscheme`): it provides
+object-reference helpers such as `resolve-ref`, which flatten attribute-specific
+scans like `resolve-name`/`resolve-nick`/`resolve-description` down to a list of
+DIDs (deduped by `unique-list`). The avatar layer (`avatar.zscheme`) sits above
+that and translates a human word into a single resolution or a caller-visible
+ambiguity at the command boundary. It does not invent a new wire protocol; it
+uses the runtime's object-reference result shape and forwards object movement
+verbs to the runtime actor as ordinary RPC or `:set-parent` traffic.
 
 ## Data over presentation (descriptive, not normative)
 
@@ -53,6 +68,37 @@ over inventing new bespoke reply shapes per verb.
 The normative profile is `ma-spec/runtime/ma-lambda-ma-v1.md`. Keep it aligned
 with this repository's `REFERENCE.md`, `README.md`, `HOWTO.md`, and actor
 sources when changing interoperable behaviour.
+
+## Object transfer and ownership
+
+Object relocation is one wire verb, `:set-parent <target-parent-did-url>
+[ctx]`, sent directly to the object being moved (thing/container/agent alike
+— agents are ordinary `/ma/node/0.0.1` nodes for this purpose). It triggers
+the same `:parent`/`:child` handshake every actor already has (ma-spec §6);
+there is no separate `:take`/`:drop`/`:put-in`/`:take-from`/`:recycle-from`
+wire vocabulary. `handle-node-set-parent!` (`scheme-actor/node.ma`) is the one
+shared implementation; per-kind files only register it
+(`(set-cmd-method! :set-parent handle-node-set-parent!)`).
+
+Ownership/claim state (`owner`, `set-owner!`, `recovery-secret`,
+`set-recovery-secret!`, `claim-key`, `set-claim!`, `owner-caller?`) and the
+`:owner`/`:owner?`/`:set-recovery-secret`/`:claim` handler bodies
+(`handle-node-owner`, `handle-node-owner?`, `handle-node-set-recovery-secret!`,
+`handle-node-claim!`) live once in `node.ma` too — thing.ma/container.ma/
+agent.ma only register them. `room.ma`'s own `:owner`/`:owner?`/`:claim` are
+deliberately separate (no recovery-secret, simple first-claim/transfer) and
+are not shared with node.ma. Before duplicating any cond-based handler body
+across kind files, check whether it belongs in `node.ma` instead — that
+duplication is exactly the kind of thing the DRY rule above exists to catch.
+
+`hold` — the client-side confirm/clear half of `:set-parent` (a single-slot
+"what am I currently the parent of" pointer, `.my.ctx.hold`/
+`.my.ctx.hold-pending`/`.my.ctx.hold-then`) is not part of this repository. It
+is implemented in `ma-zion`'s `src/inbox_poll.rs`
+(`handle_hold_parent_proposal`) and documented in that repository's AGENTS.md
+under "Hold — client-side object-transfer state". `avatar.zscheme`'s
+`hold`/`take`/`drop`/`put`/`take-from`/`recycle-from` only send `:set-parent`
+and set the pending pointer; they never confirm on their own.
 
 ## Scheme actor
 

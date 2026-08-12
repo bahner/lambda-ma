@@ -2754,7 +2754,10 @@ mod tests {
         );
         assert_eq!(
             eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
-            Value::list(vec![Value::symbol(":ok"), Value::str("set-parent requested")])
+            Value::list(vec![
+                Value::symbol(":ok"),
+                Value::str("set-parent requested")
+            ])
         );
     }
 
@@ -2790,7 +2793,10 @@ mod tests {
         assert_eq!(eval_str("(get-prop \"owner\")", &env), "did:ma:stranger");
         assert_eq!(
             eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
-            Value::list(vec![Value::symbol(":ok"), Value::str("set-parent requested")])
+            Value::list(vec![
+                Value::symbol(":ok"),
+                Value::str("set-parent requested")
+            ])
         );
     }
 
@@ -2850,7 +2856,13 @@ mod tests {
     }
 
     #[test]
-    fn container_put_in_stores_ctx_and_take_from_returns_ctx() {
+    fn container_contents_reflect_admitted_and_departed_children() {
+        // :put-in/:take-from no longer exist — items admit themselves into a
+        // container via the generic :parent/:child handshake (:set-parent on
+        // the item side), and :contents? is just container.ma's contents-map
+        // alias for node.ma's shared children-map. This exercises that wiring
+        // directly, without re-testing the handshake itself (already covered
+        // by the node_* admission/departure tests).
         let env = container_env();
         install_send_reply_recorders(&env);
         let mut config = std::collections::HashMap::new();
@@ -2879,32 +2891,49 @@ mod tests {
         env.define(Rc::from("child_ctx"), child_ctx.clone());
         env.define(
             Rc::from("parent_msg"),
-            Value::Msg(sample_msg("did:ma:runtime#lamp", "did:ma:runtime#bag")),
+            Value::Msg(sample_term_msg(
+                "did:ma:runtime#lamp",
+                "did:ma:runtime#bag",
+                Value::list(vec![Value::symbol(":parent"), child_ctx.clone()]),
+            )),
         );
 
-        eval_all(
+        eval_all("(on-message parent_msg)", &env).unwrap();
+        eval_all("((find-method :contents?) '() parent_msg)", &env).unwrap();
+
+        let departure_ctx = eval_all(
             r#"
-            ((find-method :put-in) (list child_ctx) parent_msg)
-            ((find-method :contents?) '() parent_msg)
-            ((find-method :take-from) (list "brass lamp") parent_msg)
-            ((find-method :contents?) '() parent_msg)
+            (map-set
+              (map-set
+                (map-set
+                  (map-set
+                    (map-set
+                                            (map-set
+                                                (map-set (make-map) "actor" "did:ma:runtime#lamp")
+                                                "kind" "thing")
+                                            "protocol" "/ma/thing/0.0.1")
+                                        "parent" "")
+                  "name" "lamp")
+                "nick" "brass lamp")
+              "description" "A warm brass lamp.")
             "#,
             &env,
         )
         .unwrap();
-
-        assert_eq!(eval_int("(get-prop \"reply-count\")", &env), 4);
-        assert_eq!(
-            eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
-            Value::list(vec![Value::symbol(":ok"), Value::str("put in")])
+        env.define(
+            Rc::from("departure_msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:runtime#lamp",
+                "did:ma:runtime#bag",
+                Value::list(vec![Value::symbol(":parent"), departure_ctx]),
+            )),
         );
+        eval_all("(on-message departure_msg)", &env).unwrap();
+        eval_all("((find-method :contents?) '() parent_msg)", &env).unwrap();
+
         assert_eq!(
             eval_all("(get-prop \"reply-term:2\")", &env).unwrap(),
-            Value::list(vec![Value::symbol(":ok"), Value::list(vec![child_ctx.clone()])])
-        );
-        assert_eq!(
-            eval_all("(get-prop \"reply-term:3\")", &env).unwrap(),
-            Value::list(vec![Value::symbol(":ok"), child_ctx])
+            Value::list(vec![Value::symbol(":ok"), Value::list(vec![child_ctx])])
         );
         assert_eq!(
             eval_all("(get-prop \"reply-term:4\")", &env).unwrap(),
@@ -3038,7 +3067,7 @@ mod tests {
             Value::Msg(sample_term_msg(
                 "did:ma:owner",
                 "did:ma:runtime#bag",
-                Value::symbol(":drop"),
+                Value::symbol(":set-parent"),
             )),
         );
 
@@ -3048,7 +3077,7 @@ mod tests {
             (set-prop! "name" "bag")
             (set-prop! "nick" "canvas bag")
             (set-prop! "description" "A sturdy canvas bag.")
-            ((find-method :drop) (list "did:ma:runtime#room") owner_msg)
+            ((find-method :set-parent) (list "did:ma:runtime#room") owner_msg)
             "#,
             &env,
         )
@@ -3068,7 +3097,10 @@ mod tests {
         );
         assert_eq!(
             eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
-            Value::list(vec![Value::symbol(":ok"), Value::str("drop requested")])
+            Value::list(vec![
+                Value::symbol(":ok"),
+                Value::str("set-parent requested")
+            ])
         );
     }
 
@@ -3099,13 +3131,13 @@ mod tests {
             Value::Msg(sample_term_msg(
                 "did:ma:runtime#inventory",
                 "did:ma:runtime#bag",
-                Value::symbol(":drop"),
+                Value::symbol(":set-parent"),
             )),
         );
 
         eval_all(
             r#"
-            ((find-method :drop)
+            ((find-method :set-parent)
                 (list "did:ma:did" "did:ma:runtime#room" carried_ctx)
                 inventory_msg)
             "#,
@@ -3124,7 +3156,10 @@ mod tests {
         ));
         assert_eq!(
             eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
-            Value::list(vec![Value::symbol(":ok"), Value::str("drop requested")])
+            Value::list(vec![
+                Value::symbol(":ok"),
+                Value::str("set-parent requested")
+            ])
         );
     }
 
@@ -3241,13 +3276,13 @@ mod tests {
             Value::Msg(sample_term_msg(
                 "did:ma:runtime#inventory",
                 "did:ma:runtime#bag",
-                Value::symbol(":drop"),
+                Value::symbol(":set-parent"),
             )),
         );
 
         eval_all(
             r#"
-            ((find-method :drop)
+            ((find-method :set-parent)
              (list "did:ma:did" "did:ma:runtime#room" stale_ctx)
              inventory_msg)
             "#,
