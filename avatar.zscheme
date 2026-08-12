@@ -431,6 +431,25 @@
   (actor-call (resolve-one name) "recycle")
   nil)
 
+(define (tell-usage-error)
+  (error "usage: tell <target...> to <verb> [args...]"))
+
+; Generic in-world request forwarding: "to" is a hard separator, not just
+; style, so a multi-word target description can precede it (e.g. "tell golden
+; duckie with peacock feathers to quack"). The resolved target's own
+; set-cmd-method!/reply-error decides whether to comply or refuse — tell only
+; resolves and relays, exactly like owner/claim do for their one dedicated verb.
+(define (tell . words)
+  (let ((target-words (words-before-keyword words "to"))
+        (after-to (words-after-keyword words "to")))
+    (if (or (null? target-words) (not after-to) (null? after-to))
+      (tell-usage-error)
+      (let ((target (resolve-one (join-words target-words)))
+            (verb (car after-to))
+            (args (cdr after-to)))
+        (display (apply actor-call target verb args))
+        nil))))
+
 (define (here?)
   (display (room))
   nil)

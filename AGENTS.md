@@ -39,6 +39,19 @@ departure, speech, emotes, movement, and transfer. A runtime actor may answer a
 technical RPC with `:ok`, but the user-visible event shape is not part of the
 authoritative wire contract owned by the actor library.
 
+## `tell` — generic avatar verb forwarding
+
+`avatar.zscheme`'s `tell <target...> to <verb> [args...]` is a client-side
+convenience command, not a new wire verb: it resolves `target` (via the same
+`resolve-one` substring matching used by `put`/`claim`/`owner`, so a multi-word
+description works, e.g. `tell golden duckie with peacock feathers to quack`)
+and forwards `verb`/`args` as an ordinary RPC call via `actor-call`. `to` is a
+hard separator, not optional — it is what lets the target description span
+multiple words before the verb, exactly like `forge`'s `named`/`in` split.
+There is no dedicated ACL capability or handshake for `tell`; the receiving
+actor's own `set-cmd-method!`/`reply-error` decides whether to comply or
+refuse, same as every other verb.
+
 The resolver contract in this profile is deliberately layered. The generic
 stdlib lives at the evaluator/compiler level and provides reusable helpers such
 as list folding, string checks, and `unique-list`. The lambda-ma runtime domain
