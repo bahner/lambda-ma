@@ -64,14 +64,7 @@
 
 (set-rpc-method! :look
   (lambda (args msg)
-    (let ((text (string-append (name) "\n" (description))))
-      (if (and (not (null? args))
-               (non-empty-string? (car args))
-               (presentation-did-authorised? (car args) msg))
-          (begin
-            (ma-send! (car args) (list :print text))
-            (reply-ok msg))
-          (reply-ok-with msg text)))))
+    (reply-ok-with msg (string-append (name) "\n" (description)))))
 
 (set-rpc-method! :where?
   (lambda (args msg)
@@ -99,6 +92,10 @@
 ; (ma-spec sec 6); direct did calls are deliberately rejected. Shared body
 ; lives in node.ma as handle-node-set-parent!.
 (set-cmd-method! :set-parent handle-node-set-parent!)
+
+; :hold implicitly targets the caller (msg-from) as new parent - no argument.
+; Shared body lives in node.ma as handle-node-hold!.
+(set-cmd-method! :hold handle-node-hold!)
 
 (set-cmd-method! :recycle
   (lambda (args msg)

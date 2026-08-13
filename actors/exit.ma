@@ -91,12 +91,7 @@
 
 (set-rpc-method! :look
   (lambda (args msg)
-    (let ((target (if (null? args) #f (ctx-text (car args) "did"))))
-      (if target
-          (begin
-            (ma-send! target (list :print (about-text)))
-            (reply-ok msg))
-          (reply-ok-with msg (about-text))))))
+    (reply-ok-with msg (about-text))))
 
 (set-rpc-method! :where?
   (lambda (args msg)

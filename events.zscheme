@@ -16,6 +16,19 @@
             ":dig" event-dig
             ":fill" event-fill))
 
+; Any broadcast that can change who/what is present or reachable in this
+; room — someone else arriving/leaving/taking/dropping/digging/filling —
+; makes the cached `last-room` snapshot (avatar.zscheme) stale. Without this,
+; resolve-room-pool keeps serving the old who/things/exits list forever (it
+; only ever refreshes on a cache miss or an explicit `look`), so hold/take/
+; drop/put/claim/owner/recycle can match a ghost that has since left, or miss
+; someone who just arrived — the intermittent "sometimes 2 duckies, sometimes
+; none" symptom.
+(define room-invalidating-events
+  (list ":arrive" ":leave" ":take" ":drop" ":dig" ":fill"))
+
 (define (on-event event args)
+  (when (contains? room-invalidating-events event)
+    (set! last-room #f))
   (let ((handler (map-ref event-handlers event #f)))
     (if handler (apply handler args) ())))

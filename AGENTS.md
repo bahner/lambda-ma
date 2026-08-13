@@ -89,14 +89,88 @@ sources when changing interoperable behaviour.
 
 ## Object transfer and ownership
 
-Object relocation is one wire verb, `:set-parent <target-parent-did-url>
-[ctx]`, sent directly to the object being moved (thing/container/agent alike
-— agents are ordinary `/ma/node/0.0.1` nodes for this purpose). It triggers
-the same `:parent`/`:child` handshake every actor already has (ma-spec §6);
-there is no separate `:take`/`:drop`/`:put-in`/`:take-from`/`:recycle-from`
-wire vocabulary. `handle-node-set-parent!` (`scheme-actor/node.ma`) is the one
-shared implementation; per-kind files only register it
-(`(set-cmd-method! :set-parent handle-node-set-parent!)`).
+Object relocation is two wire verbs, both driving the same `:parent`/`:child`
+handshake every actor already has (ma-spec §6), sent directly to the object
+being moved (thing/container/agent alike — agents are ordinary
+`/ma/node/0.0.1` nodes for this purpose):
+
+- `:set-parent <target-parent-did-url> [ctx]` — the target is always a
+  DID-URL (a room, a container, or another actor's own address). Shared
+  implementation: `handle-node-set-parent!` (`scheme-actor/node.ma`);
+  per-kind files only register it
+  (`(set-cmd-method! :set-parent handle-node-set-parent!)`).
+- `:hold` — the target parent is implicit (`msg.from`, a bare avatar DID,
+  never a DID-URL) and takes no argument at all; this is the verb `hold`/
+  `take`/`take-from` in `avatar.zscheme` actually send. Shared
+  implementation: `handle-node-hold!` (`scheme-actor/node.ma`); registered
+  on thing/container/agent only, never `room.ma` (rooms are not holdable).
+
+`:hold` is deliberately ownership-blind: anyone (or anything) present in the
+same room may hold any item regardless of who owns it, and holding never
+assigns or changes ownership as a side effect — only the explicit `:claim`
+verb does that. Its sole gate is a same-room check (`node-same-room-as-
+parent?`) when the object's cached parent is a room: it looks up the caller
+in that room's cached occupant list (`parent-ctx`'s `"who"` map) and, on a
+mismatch, re-announces to the current parent to refresh the cache and
+refuses so the caller can simply retry. That cache is not cryptographically
+authoritative — `parent-ctx` is unauthenticated data the parent chose to
+hand over (see "Parent-ctx caching" below) — but it is the whole requirement
+for `:hold`, unlike `:set-parent`, which gates on
+`node-transfer-caller-authorised?` alone.
+
+**Parenting is not ownership.** `handle-node-set-parent!`'s only authority
+check is `node-transfer-caller-authorised?` (current parent, orphan-owner
+recovery, owner delegation, or unowned) — it deliberately does **not** also
+require `node-owner-or-unowned?`/current-owner-hood. Whoever currently
+holds/carries a thing (i.e. is its parent) may relocate it further —
+`drop`/`put` — regardless of who `node-owner` says owns it. You can be
+carrying someone else's (or nobody's) property and still put it down or hand
+it off; only `:claim`/`:lock`/`:owner`/`:set-recovery-secret` are genuinely
+ownership-gated. A prior revision of `handle-node-set-parent!` *did* also
+require ownership there ("only owner may set-parent this actor"), which was
+a bug: it made `:hold`'s deliberate ownership-blindness pointless, since a
+non-owner could pick an owned item up but then could never legally put it
+back down. Removed 2026-08-13 — do not re-add an ownership check to
+`:set-parent`.
+
+`:drop` is a distinct, room-only capacity pre-check (`handle-room-drop!` in
+`actors/room.ma`), sent by the avatar to the room *before* the held item's
+own unchanged `:set-parent <room>` call — it never itself relocates
+anything. `avatar.zscheme`'s `drop` calls it first and lets a refusal raise
+before `:set-parent` is ever sent. `drop` takes an *optional* name, resolved
+against both the hand (whatever `.my.ctx.hold` currently holds, using the
+ctx cached client-side at `hold`/`take` time) and your own inventory
+contents — `resolve-in-given-pool` over `drop-pool`, not the fixed room+
+inventory pools `resolve-ref` always searches. With no name it acts on
+whatever is in hand, same as before. `put`/`put-in` (arbitrary container
+targets) are unaffected and still act on whatever is in hand only; containers
+have no equivalent capacity gate yet.
+
+### Parent-ctx caching
+
+Every `:child <ctx>` message embeds the sender's own self-description as a
+nested `"parent-ctx"` field (`child-ack-ctx` in `node.ma`) alongside the
+ordinary child-naming fields the handshake already requires — the nested
+field is the only place a richer parent ctx (e.g. a room's `who`/`agents`/
+`things`) can travel, since the outer ctx's `actor`/`parent` fields must
+always name the child and the ctx-issuing parent, never the parent's own
+kind/contents. The receiving child caches only the nested map (`parent-ctx`,
+`set-parent-ctx!`, `parent-kind` in `node.ma`), cleared (not left stale)
+whenever a new parent's ack carries none (e.g. a bare avatar holder). A
+parent whose own ctx changes pushes a fresh `:child` to every current child
+(`broadcast-ctx-to-children!`, wired into the generic `ctx-props-changed!`
+hook), so this cache does not go stale on its own; `room.ma`'s
+`broadcast-room-ctx!` reuses it rather than duplicating the loop.
+
+A ctx is heavy enough that every admission path sends exactly one `:child`,
+never two: `room.ma`'s `handle-agent-enter!`/`handle-thing-enter!` never
+craft their own ack — an unchanged re-entry acks once directly via
+`send-fresh-child-ctx!`, and a changed one lets `broadcast-room-ctx!`'s sweep
+(which by then already includes the newly claimed child) supply that same
+ack as part of notifying every other current child. Never add a second,
+hand-rolled `(list :child ctx)` send alongside a `broadcast-room-ctx!`/
+`broadcast-ctx-to-children!` call — that duplication is exactly the kind of
+thing the DRY rule above exists to catch.
 
 Ownership/claim state (`owner`, `set-owner!`, `recovery-secret`,
 `set-recovery-secret!`, `claim-key`, `set-claim!`, `owner-caller?`) and the
@@ -109,14 +183,15 @@ are not shared with node.ma. Before duplicating any cond-based handler body
 across kind files, check whether it belongs in `node.ma` instead — that
 duplication is exactly the kind of thing the DRY rule above exists to catch.
 
-`hold` — the client-side confirm/clear half of `:set-parent` (a single-slot
-"what am I currently the parent of" pointer, `.my.ctx.hold`/
-`.my.ctx.hold-pending`/`.my.ctx.hold-then`) is not part of this repository. It
-is implemented in `ma-zion`'s `src/inbox_poll.rs`
+`hold` — the client-side confirm/clear half of the resulting `:parent`
+proposal (a single-slot "what am I currently the parent of" pointer,
+`.my.ctx.hold`/`.my.ctx.hold-pending`/`.my.ctx.hold-then`) is not part of this
+repository. It is implemented in `ma-zion`'s `src/inbox_poll.rs`
 (`handle_hold_parent_proposal`) and documented in that repository's AGENTS.md
 under "Hold — client-side object-transfer state". `avatar.zscheme`'s
-`hold`/`take`/`drop`/`put`/`take-from`/`recycle-from` only send `:set-parent`
-and set the pending pointer; they never confirm on their own.
+`hold`/`take`/`take-from` send `:hold` (implicit target); `drop`/`put` send
+`:set-parent`; `recycle-from` sends `:recycle`. None of them confirm the
+resulting `:parent` proposal on their own — that is `inbox_poll.rs`'s job.
 
 ## Scheme actor
 

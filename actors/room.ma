@@ -378,12 +378,13 @@
 (define (node-ctx-for-parent target-parent)
   (map-set (room-ctx) "parent" (canonical-actor target-parent)))
 
+; Every current child (thing/container/agent, not just did-presence occupants)
+; gets a fresh :child so its cached parent-ctx never goes stale.
 (define (broadcast-room-ctx!)
   (begin
     (set-prop! "ctx:rev" (+ (room-ctx-rev) 1))
-    (ma-save-state!)))
-
-(define (send-fresh-room-ctx-to! actor) #f)
+    (ma-save-state!)
+    (broadcast-ctx-to-children!)))
 
 (define (names-of actors)
   (cond ((null? actors) "")
@@ -479,6 +480,9 @@
            (handle-thing-enter! msg did ctx name))
           (else (reply-error msg "enter ctx requires an agent or thing ctx")))))
 
+; Both branches ack with exactly one :child, via the shared send-fresh-child-ctx!
+; (node.ma) so every ack carries the same wrapped parent-ctx, whether it's a
+; plain re-confirmation or reached as part of broadcast-room-ctx!'s sweep below.
 (define (handle-agent-enter! msg did ctx)
   (let* ((actor (canonical-actor did))
          (nick (ctx-text ctx "nick"))
@@ -487,7 +491,7 @@
          (same-label (equal? (speaker-name actor) nick)))
     (if (and was-known same-claim same-label)
         (begin
-          (ma-send! (canonical-actor actor) (list :child ctx))
+          (send-fresh-child-ctx! actor)
           (reply-ok msg))
         (begin
           (set-claim! actor ctx)
@@ -498,7 +502,6 @@
                 (presence-touch! actor (presence-tick))
                 (broadcast-term-except actor (list :arrive ctx))))
           (ma-save-state!)
-          (ma-send! (canonical-actor actor) (list :child ctx))
           (ma-send! (canonical-actor actor) (direct-room-ctx "agent" nick (arrival-text)))
           (broadcast-room-ctx!)
           (ma-reply! msg (list :ok "entered"))))))
@@ -519,13 +522,12 @@
            (reply-error msg "nick token is already bound to another actor"))
           ((and (same-actor? bound actor) same-claim same-label)
            (begin
-             (ma-send! (canonical-actor actor) (list :child ctx))
+             (send-fresh-child-ctx! actor)
              (reply-ok msg)))
           (else
            (set-claim! actor ctx)
            (set-label! actor label)
            (set-thing! token actor)
-           (ma-send! (canonical-actor actor) (list :child ctx))
            (if was-known #f (broadcast-term (list :arrive ctx)))
            (broadcast-room-ctx!)
            (ma-reply! msg (list :ok "entered"))))))
@@ -1448,6 +1450,18 @@
              (begin
                (ma-send! (canonical-actor item-actor) (list :set-parent did (canonical-actor container-actor) item-ctx))
                (reply-to-sender msg (string-append "You try to put " item-token " in " container-token "."))))))))
+
+; :drop is a capacity pre-check only, sent by the avatar to the room before
+; the held item's own (unchanged) :set-parent - it never itself relocates
+; anything or changes room state.
+(set-rpc-method! :drop
+  (lambda (args msg)
+    (cond ((not (null? args))
+           (reply-error msg "usage: :drop"))
+          ((>= (node-children-count) (node-max-children))
+           (reply-error msg "drop refused: room is full"))
+          (else
+           (reply-ok msg)))))
 
 (set-cmd-method! :where?
   (lambda (args msg)

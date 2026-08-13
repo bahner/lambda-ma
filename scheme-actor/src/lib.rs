@@ -493,7 +493,7 @@ mod tests {
         );
         assert_eq!(
             eval_all("(get-prop \"sent-term:1\")", &env).unwrap(),
-            Value::list(vec![Value::symbol(":child"), collar_ctx])
+            eval_all("(list :child (child-ack-ctx collar_ctx))", &env).unwrap()
         );
     }
 
@@ -1048,6 +1048,7 @@ mod tests {
                     Value::symbol(":move"),
                     Value::symbol(":claim"),
                     Value::symbol(":set-parent"),
+                    Value::symbol(":hold"),
                     Value::symbol(":recycle"),
                     Value::symbol(":duck"),
                     Value::symbol(":quack"),
@@ -1103,6 +1104,7 @@ mod tests {
                     Value::symbol(":move"),
                     Value::symbol(":claim"),
                     Value::symbol(":set-parent"),
+                    Value::symbol(":hold"),
                     Value::symbol(":recycle"),
                     Value::symbol(":duck"),
                     Value::symbol(":quack"),
@@ -1125,6 +1127,7 @@ mod tests {
                     Value::symbol(":move"),
                     Value::symbol(":claim"),
                     Value::symbol(":set-parent"),
+                    Value::symbol(":hold"),
                     Value::symbol(":recycle"),
                     Value::symbol(":fortune"),
                 ])
@@ -1627,23 +1630,28 @@ mod tests {
         )
         .unwrap();
 
+        // 2 sends: (1) the :arrive broadcast to other did-occupants (Alice),
+        // (2) the single :child ack from broadcast-room-ctx!'s
+        // broadcast-ctx-to-children!, reaching duckie since set-claim! already
+        // remembered it as a child by this point.
         assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 2);
         assert!(eval_bool(
-            "(equal? (car (get-prop \"sent-term:1\")) :child)",
-            &env
-        ));
-        assert!(eval_bool(
-            "(equal? (car (get-prop \"sent-term:2\")) :arrive)",
+            "(equal? (car (get-prop \"sent-term:1\")) :arrive)",
             &env
         ));
         assert_eq!(
             eval_str(
-                "(ctx-text (car (cdr (get-prop \"sent-term:2\"))) \"actor\")",
+                "(ctx-text (car (cdr (get-prop \"sent-term:1\"))) \"actor\")",
                 &env
             ),
             "did:ma:runtime#duckie"
         );
+        assert!(eval_bool(
+            "(equal? (car (get-prop \"sent-term:2\")) :child)",
+            &env
+        ));
     }
+
 
     #[test]
     fn room_ctx_contains_protocol_rev_root_parent_and_visible_entries() {
@@ -2215,6 +2223,7 @@ mod tests {
                 Value::list(vec![
                     Value::symbol(":claim"),
                     Value::symbol(":set-parent"),
+                    Value::symbol(":hold"),
                     Value::symbol(":recycle"),
                 ])
             ])
@@ -2797,6 +2806,261 @@ mod tests {
                 Value::symbol(":ok"),
                 Value::str("set-parent requested")
             ])
+        );
+    }
+
+    #[test]
+    fn thing_unowned_can_be_held_directly_by_a_stranger() {
+        let env = thing_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#lamp".to_string());
+        crate::state::set_config(config);
+        env.define(
+            Rc::from("stranger_msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:stranger",
+                "did:ma:runtime#lamp",
+                Value::symbol(":hold"),
+            )),
+        );
+
+        eval_all(
+            r#"
+            (set-prop! "parent" "did:ma:runtime#room")
+            (set-prop! "name" "lamp")
+            (set-prop! "nick" "brass lamp")
+            (set-prop! "description" "A warm brass lamp.")
+            ((find-method :hold) '() stranger_msg)
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        assert!(eval_bool("(not (get-prop \"owner\"))", &env));
+        assert_eq!(
+            eval_str("(get-prop \"sent-target:1\")", &env),
+            "did:ma:stranger"
+        );
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
+            Value::list(vec![Value::symbol(":ok"), Value::str("hold requested")])
+        );
+    }
+
+    #[test]
+    fn thing_owned_by_another_can_still_be_held_by_anyone_in_room() {
+        let env = thing_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#lamp".to_string());
+        crate::state::set_config(config);
+        env.define(
+            Rc::from("stranger_msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:stranger",
+                "did:ma:runtime#lamp",
+                Value::symbol(":hold"),
+            )),
+        );
+
+        eval_all(
+            r#"
+            (set-prop! "owner" "did:ma:owner")
+            (set-prop! "name" "lamp")
+            (set-prop! "nick" "brass lamp")
+            (set-prop! "description" "A warm brass lamp.")
+            ((find-method :hold) '() stranger_msg)
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        assert_eq!(eval_str("(get-prop \"owner\")", &env), "did:ma:owner");
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
+            Value::list(vec![Value::symbol(":ok"), Value::str("hold requested")])
+        );
+    }
+
+    #[test]
+    fn thing_owned_by_another_can_still_be_dropped_by_its_current_holder() {
+        // Parenting != ownership: whoever currently holds/carries a thing
+        // (its parent) may relocate it further, even if someone else owns
+        // it — regression test for the removed "only owner may set-parent
+        // this actor" gate that used to block exactly this.
+        let env = thing_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#lamp".to_string());
+        crate::state::set_config(config);
+        env.define(
+            Rc::from("holder_msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:holder",
+                "did:ma:runtime#lamp",
+                Value::symbol(":set-parent"),
+            )),
+        );
+
+        eval_all(
+            r#"
+            (set-prop! "owner" "did:ma:owner")
+            (set-prop! "parent" "did:ma:holder")
+            (set-prop! "name" "lamp")
+            (set-prop! "nick" "brass lamp")
+            (set-prop! "description" "A warm brass lamp.")
+            ((find-method :set-parent) (list "did:ma:runtime#room") holder_msg)
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        assert_eq!(eval_str("(get-prop \"owner\")", &env), "did:ma:owner");
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
+            Value::list(vec![
+                Value::symbol(":ok"),
+                Value::str("set-parent requested")
+            ])
+        );
+    }
+
+    #[test]
+    fn thing_hold_refuses_and_resyncs_when_caller_not_in_cached_room() {
+        let env = thing_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#lamp".to_string());
+        crate::state::set_config(config);
+        env.define(
+            Rc::from("stranger_msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:stranger",
+                "did:ma:runtime#lamp",
+                Value::symbol(":hold"),
+            )),
+        );
+
+        eval_all(
+            r#"
+            (set-prop! "parent" "did:ma:runtime#room")
+            (set-prop! "name" "lamp")
+            (set-prop! "nick" "brass lamp")
+            (set-prop! "description" "A warm brass lamp.")
+            (set-parent-ctx!
+              (make-map "actor" "did:ma:runtime#lamp"
+                        "parent" "did:ma:runtime#room"
+                        "parent-ctx" (make-map "kind" "room"
+                                               "who" (make-map "did:ma:other" #t))))
+            ((find-method :hold) '() stranger_msg)
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
+            Value::list(vec![
+                Value::symbol(":error"),
+                Value::str("hold refused: not in the same room, try again")
+            ])
+        );
+        assert_eq!(
+            eval_str("(get-prop \"sent-target:1\")", &env),
+            "did:ma:runtime#room"
+        );
+        assert!(eval_bool(
+            "(equal? (car (get-prop \"sent-term:1\")) :parent)",
+            &env
+        ));
+    }
+
+    #[test]
+    fn thing_hold_succeeds_when_caller_is_in_cached_room() {
+        let env = thing_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#lamp".to_string());
+        crate::state::set_config(config);
+        env.define(
+            Rc::from("stranger_msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:stranger",
+                "did:ma:runtime#lamp",
+                Value::symbol(":hold"),
+            )),
+        );
+
+        eval_all(
+            r#"
+            (set-prop! "parent" "did:ma:runtime#room")
+            (set-prop! "name" "lamp")
+            (set-prop! "nick" "brass lamp")
+            (set-prop! "description" "A warm brass lamp.")
+            (set-parent-ctx!
+              (make-map "actor" "did:ma:runtime#lamp"
+                        "parent" "did:ma:runtime#room"
+                        "parent-ctx" (make-map "kind" "room"
+                                               "who" (make-map "did:ma:stranger" #t))))
+            ((find-method :hold) '() stranger_msg)
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        assert!(eval_bool("(not (get-prop \"owner\"))", &env));
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
+            Value::list(vec![Value::symbol(":ok"), Value::str("hold requested")])
+        );
+    }
+
+    #[test]
+    fn room_drop_is_a_capacity_precheck_only() {
+        let env = room_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#room".to_string());
+        crate::state::set_config(config);
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_msg("did:ma:avatar", "did:ma:runtime#room")),
+        );
+
+        eval_all("((find-method :drop) '() msg)", &env).unwrap();
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
+            Value::symbol(":ok")
+        );
+        assert!(eval_bool("(not (get-prop \"sent-count\"))", &env));
+
+        eval_all(
+            r#"
+            (set-prop! "max-children" "0")
+            ((find-method :drop) '() msg)
+            "#,
+            &env,
+        )
+        .unwrap();
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:2\")", &env).unwrap(),
+            Value::list(vec![
+                Value::symbol(":error"),
+                Value::str("drop refused: room is full")
+            ])
+        );
+
+        eval_all("((find-method :drop) (list \"extra\") msg)", &env).unwrap();
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:3\")", &env).unwrap(),
+            Value::list(vec![Value::symbol(":error"), Value::str("usage: :drop")])
         );
     }
 

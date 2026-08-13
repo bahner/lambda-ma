@@ -111,10 +111,6 @@
   (define (node-children-query-text) (contents-text))
 
 ; Caller and reply helpers.
-(define (owner-caller? msg)
-  (let ((o (owner)))
-    (and o (msg-from-owner? o msg))))
-
 (define (recycle! msg)
   (let ((old-parent (node-parent)))
     (begin
@@ -157,13 +153,6 @@
     (description) "\n"
     (if (locked?) (locked-message) (contents-text))))
 
-(define (present-to-did! target text)
-  (ma-send! target (list :print text)))
-
-(define (presentation-target-arg? args)
-  (and (not (null? args))
-       (non-empty-string? (car args))))
-
 ; Public methods.
 (set-rpc-method! :about
   (lambda (args msg)
@@ -177,12 +166,7 @@
 
 (set-rpc-method! :look
   (lambda (args msg)
-    (if (and (presentation-target-arg? args)
-             (presentation-did-authorised? (car args) msg))
-        (begin
-          (present-to-did! (car args) (container-look-text))
-          (reply-ok msg))
-        (reply-ok-with msg (container-look-text)))))
+    (reply-ok-with msg (container-look-text))))
 
 (set-rpc-method! :where?
   (lambda (args msg)
@@ -252,6 +236,10 @@
 ; things out of this container is done by addressing the content actor
 ; itself with :set-parent, discovered beforehand via :contents?.
 (set-cmd-method! :set-parent handle-node-set-parent!)
+
+; :hold implicitly targets the caller (msg-from) as new parent - no argument.
+; Shared body lives in node.ma as handle-node-hold!.
+(set-cmd-method! :hold handle-node-hold!)
 
 (set-cmd-method! :recycle
   (lambda (args msg)

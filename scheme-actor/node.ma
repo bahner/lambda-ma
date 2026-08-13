@@ -54,8 +54,33 @@
 (define (node-ctx)
   (node-ctx-for-parent (node-parent)))
 
+; A :child ack's own actor/parent fields must always name the child and us
+; (ma-lambda-ma-v1.md sec 6), so our own richer self-description can only
+; travel as a nested extra field, never by replacing those top-level ones.
+(define (child-ack-ctx child-side-ctx)
+  (map-set child-side-ctx "parent-ctx" (node-ctx)))
+
+(define (send-fresh-child-ctx! actor)
+  (let ((stored (child-ctx actor)))
+    (if (map? stored)
+        (ma-send! (canonical-actor actor) (list :child (child-ack-ctx stored)))
+        #f)))
+
+; Any parent whose own presentation changes pushes a fresh :child to every
+; current child - e.g. a held lamp learns its holder's new nick, not just a
+; room's occupants. Callable by any kind, not only room.ma.
+(define (broadcast-ctx-to-children!)
+  (let loop ((ctxs (child-ctxs)))
+    (if (null? ctxs)
+        #f
+        (begin
+          (send-fresh-child-ctx! (ctx-text (car ctxs) "actor"))
+          (loop (cdr ctxs))))))
+
 (define (ctx-props-changed! keys)
-  (announce-node-parent!))
+  (begin
+    (announce-node-parent!)
+    (broadcast-ctx-to-children!)))
 
 (define (set-node-prop! key value)
   (if (equal? value "")
@@ -69,8 +94,41 @@
         (set-init-prop! key value)
         #f)))
 
+; Cached beside the derived name/nick/description fields so a composed actor
+; can introspect its parent's own kind/occupants/etc. later (e.g. a room's
+; full ctx), not just the trimmed fields node.ma mirrors. Extracted from the
+; nested "parent-ctx" field child-ack-ctx embeds in every :child message;
+; cleared (not left stale) when a new parent's ack carries none, e.g. a bare
+; avatar holder.
+(define (parent-ctx) (get-prop "parent-ctx"))
+
+(define (set-parent-ctx! ctx)
+  (let ((nested (map-ref ctx "parent-ctx" #f)))
+    (if (map? nested)
+        (set-prop! "parent-ctx" nested)
+        (del-prop! "parent-ctx"))
+    (ma-save-state!)))
+
+(define (parent-kind)
+  (if (map? (parent-ctx)) (ctx-text (parent-ctx) "kind") ""))
+
+(define (parent-who-map)
+  (let ((value (if (map? (parent-ctx)) (map-ref (parent-ctx) "who" #f) #f)))
+    (if (map? value) value (make-map))))
+
+; :hold's sole gate: presence in the room, per the cached occupant list -
+; not cryptographically authoritative (parent-ctx is unauthenticated data
+; the parent chose to hand over), but it is the whole requirement, since
+; :hold is deliberately ownership-blind (see handle-node-hold! below). #t
+; whenever the parent isn't (cached as) a room, so it never blocks non-room
+; holders.
+(define (node-same-room-as-parent? did)
+  (or (not (equal? (parent-kind) "room"))
+      (map-ref (parent-who-map) did #f)))
+
 (define (apply-node-parent-ctx! ctx)
   (begin
+    (set-parent-ctx! ctx)
     (set-node-prop-from-ctx! ctx "name")
     (set-node-prop-from-ctx! ctx "nick")
     (set-node-prop-from-ctx! ctx "description")))
@@ -194,9 +252,10 @@
            (reply-user-error msg did "claim failed")))))
 
 ; An unowned node has no owner to defend it, so anyone may propose a
-; transfer for it directly (they become owner in the same call, below) —
-; this is what actually lets "take <lying-around-thing>" work without first
-; requiring :claim or a parent proxy.
+; transfer for it directly — this is what lets a bare `hold` pick up a
+; lying-around thing without first requiring :claim or a parent proxy.
+; Claiming ownership on a real "take" is avatar.zscheme's job (it calls
+; :claim before proposing itself as parent), not a side effect of this gate.
 (define (node-transfer-caller-authorised? did msg)
   (or (node-caller-is-parent? msg)
       (node-orphan-owner-recovery? did)
@@ -222,6 +281,20 @@
           (ma-send! target (list :parent (node-ctx-for-parent target)))
           #t)
         #f)))
+
+; :hold's target parent is always a bare avatar DID, never a DID-URL - a
+; deliberately separate admissibility gate from :set-parent's, which keeps
+; requiring a DID-URL (ma-lambda-ma-v1.md sec 6).
+(define (node-hold-admissible? target)
+  (and (valid-did? target)
+       (not (same-actor? target (self)))))
+
+(define (propose-node-hold! did)
+  (if (node-hold-admissible? did)
+      (begin
+        (ma-send! did (list :parent (node-ctx-for-parent did)))
+        #t)
+      #f))
 
 (define (announce-node-parent!)
   (let ((current (node-parent)))
@@ -426,6 +499,11 @@
 ; Shared body for the single :set-parent trigger (thing/container/agent):
 ; propose self to a new parent. Sent directly to the actor being relocated,
 ; never relayed by a third party — the caller must already be authorised.
+; Parenting is not ownership: node-transfer-caller-authorised? is the only
+; authority gate here (current parent, orphan-owner recovery, owner
+; delegation, or unowned). Whoever currently holds/carries a thing may
+; relocate it regardless of who node-owner says owns it — you can carry (and
+; drop) another's property; ownership only matters for :claim/:lock/:owner.
 (define (handle-node-set-parent! args msg)
   (let ((did (node-effective-did args msg))
         (rest (node-effective-args args msg)))
@@ -434,8 +512,6 @@
            (reply-error msg "set-parent must be requested by current parent"))
           ((not (valid-did? did))
            (reply-error msg "set-parent requires DID with did:ma: prefix"))
-          ((not (node-owner-or-unowned? did))
-           (reply-error msg "only owner may set-parent this actor"))
           ((null? rest)
            (reply-error msg "usage: :set-parent <target-parent-did-url> [ctx-map]"))
           ((not (node-valid-parent-ref? (car rest)))
@@ -452,6 +528,32 @@
                  #f)
              (propose-node-parent! (car rest))
              (reply-ok-with msg "set-parent requested"))))))
+
+; :hold implicitly targets the caller (a bare avatar DID, msg-from) as new
+; parent - unlike :set-parent, no argument is accepted at all. This is the
+; wire verb a client's `hold`/`take`/`take-from` send (ma-zion's
+; inbox_poll.rs replies :child to confirm the resulting unsolicited
+; :parent proposal). Shared body lives in node.ma; registered by thing.ma/
+; container.ma/agent.ma only — rooms are not holdable.
+;
+; Ownership plays no part here at all: anyone (or anything) present in the
+; same room may hold any item regardless of who owns it, and holding never
+; assigns or changes ownership as a side effect. Ownership is set only by
+; the explicit :claim verb (handle-node-claim!).
+(define (handle-node-hold! args msg)
+  (let ((did (msg-from msg)))
+    (cond ((not (null? args))
+           (reply-error msg "usage: :hold"))
+          ((not (valid-did? did))
+           (reply-error msg "hold requires caller with did:ma: prefix, not a DID-URL"))
+          ((not (node-same-room-as-parent? did))
+           (begin
+             (announce-node-parent!)
+             (reply-error msg "hold refused: not in the same room, try again")))
+          (else
+           (begin
+             (propose-node-hold! did)
+             (reply-ok-with msg "hold requested"))))))
 
 (define (handle-node-parent args msg)
   (cond ((null? args)
@@ -500,7 +602,7 @@
          (begin
            (remember-child! (car args))
            (ma-send! (canonical-actor (ctx-text (car args) "actor"))
-                     (list :child (car args)))
+                     (list :child (child-ack-ctx (car args))))
            (node-children-changed!)
            (reply-ok msg)))))
 
@@ -561,9 +663,9 @@
   (let ((target-parent (ctx-text ctx "parent")))
     (and (actor-ctx-shape? ctx)
          (same-actor? (ctx-text ctx "actor") (self))
-         (valid-did-url? target-parent)
          (same-actor? (msg-from msg) target-parent)
-         (node-parent-admissible? target-parent))))
+         (or (node-parent-admissible? target-parent)
+             (node-hold-admissible? target-parent)))))
 
 (define (commit-node-parent! ctx)
   (let ((old-parent (node-parent))
@@ -593,8 +695,8 @@
           ((node-confirmation-stale? (car args))
            (reply-ok msg))
         ((and (same-actor? (node-parent) (ctx-text (car args) "parent"))
-              (equal? (node-ctx) (car args)))
-         (reply-ok msg))
+              (equal? (node-ctx) (map-delete (car args) "parent-ctx")))
+         (begin (set-parent-ctx! (car args)) (reply-ok msg)))
         (else
          (begin
            (commit-node-parent! (car args))
