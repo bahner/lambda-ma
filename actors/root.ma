@@ -78,6 +78,19 @@
               (reply-error msg "root service ctx is not configured with full DID-URLs")))
         (reply-error msg "usage: :ctx?"))))
 
+; Unqualified entry always gets a ctx from root, even if it is a dumb default
+; (the configured "start" room). A richer root may consult #house internally
+; and return a DID-specific ctx instead; that is an implementation detail
+; invisible to the caller.
+(set-rpc-method! :enter?
+  (lambda (args msg)
+    (if (not (null? args))
+        (reply-error msg "usage: :enter?")
+        (let ((room (root-service-ref "start")))
+          (if room
+              (reply-ok-with msg (map-set (map-set (make-map) "parent" room) "rev" 1))
+              (reply-error msg "root has no start room configured"))))))
+
 (set-internal-rpc-method! :register
   (lambda (args msg)
     (let ((subscriber (msg-from msg))

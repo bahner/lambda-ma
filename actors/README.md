@@ -7,9 +7,12 @@ Lambda-ma is a direct-DID world profile.
 - `#root`, `#house`, and `#scheduler` are metanames in this document. Actor
   messages always use their configured full DID-URLs.
 - Root is the local trust anchor. Its `:ctx?` reply is the runtime service
-  directory and contains full DID-URLs only.
-- House is runtime-agnostic. It stores `did-ctxs` keyed by bare DID and
-  `entity-ctxs` keyed by full actor DID-URL.
+  directory and contains full DID-URLs only. `:enter?` gives unqualified-entry
+  discovery, always replying with a ctx naming a room to enter. Only `#root`
+  is required in a given runtime.
+- House is an optional, runtime-agnostic registry — a runtime need not have
+  one. It stores `did-ctxs` keyed by bare DID and `entity-ctxs` keyed by full
+  actor DID-URL.
 - Rooms own local bare-DID presence, exits, presentation, and room policy.
 - Exits return direct DID traversal results; the DID then enters the target
   room directly.
@@ -26,10 +29,17 @@ DID presence is room-local state. It is not an entity and is not a node child.
 Node `children` remains the single actor ctx map keyed by full actor DID-URL.
 
 After a room commits entry, it sends `:did-ctx <did> <ctx>` to the full
-`ctx.house` DID-URL. House stores the new ctx, then sends `:leave <did>` to a
-different previously recorded parent. `:did-ctx? <did>` returns the stored ctx;
-the lookup is open until world ACL policy is added. A room accepts targeted
-`:leave <did>` only from exact `ctx.house`.
+`ctx.house` DID-URL, when the room is configured with one. House stores the
+new ctx, then sends `:leave <did>` to a different previously recorded parent.
+`:did-ctx? <did>` returns the stored ctx; the lookup is open until world ACL
+policy is added. A room accepts targeted `:leave <did>` only from exact
+`ctx.house`.
+
+A client with no known room address asks `#root :enter?` instead. Root always
+replies with a ctx, `{ parent, rev }`, naming a room to enter — the configured
+`start` room by default. Root may consult `#house` internally for a
+DID-specific answer (e.g. returning a previous room instead of `start`); that
+is a root implementation detail, not a protocol requirement.
 
 ## Authority and transfer
 

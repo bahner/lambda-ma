@@ -37,6 +37,7 @@ There is no identity entity. The bare controlling DID is `msg.from`.
 | room | `:say`, `:emote` | Broadcasts an in-world event to present DID identities. |
 | exit | `:traverse <{ did, parent }>` | Returns `{ did, parent, text, exit, direction }`; client follows with direct room entry. |
 | root | `:ctx?`, `:register` | Returns the runtime service ctx; `:register` subscribes `msg.from` and sends it the current ctx. |
+| root | `:enter?` | Unqualified-entry discovery: always replies with a ctx, `{ parent, rev }`, naming a room to enter. Defaults to the configured `start` room; may consult `#house` internally for a DID-specific answer. |
 | house | `:did-ctx <did> <ctx>` | Internal room publication. Removes the DID from a previous parent, then records the DID ctx. |
 | house | `:did-ctx? <did>` | Returns the latest recorded DID ctx for a bare DID; open until an ACL is introduced. |
 | house | `:entity-ctx <ctx>` | Records a base actor ctx under the full sender DID-URL. |

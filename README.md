@@ -29,10 +29,17 @@ owns its commands and presentation; zion does not bundle or load either file
 automatically.
 
 The bootstrap creates `#root`, `#house`, `#scheduler`, and `#construct`.
-`#root :ctx?` exposes the runtime service directory. A bare DID enters a room
-directly with `:enter`; the room replies with the committed DID ctx and
-publishes it to the full DID-URL in `ctx.house`. House keeps the latest ctx,
-including name, nick, description, and parent, indexed by bare DID.
+`#root :ctx?` exposes the runtime service directory. Only `#root` is required
+in a given runtime — `#house` is an optional convenience and a runtime need
+not have one. A bare DID enters a room directly with `:enter`; the room
+replies with the committed DID ctx and, if a `#house` is configured, publishes
+it to the full DID-URL in `ctx.house`. House keeps the latest ctx, including
+name, nick, description, and parent, indexed by bare DID.
+
+A client that has no room address yet asks `#root :enter?`, which always
+replies with a ctx naming a room to enter — the configured `start` room by
+default, or a richer DID-specific answer if root chooses to consult `#house`
+internally.
 
 The normative contract is
 [ma-lambda-ma-v1.md](../ma-spec/runtime/ma-lambda-ma-v1.md). Local actor APIs

@@ -8,8 +8,10 @@ lambda-ma world profile. It is not runtime code.
 - Never modify files outside this workspace without explicit user approval.
 - Commit source and template files, never generated `dist/`,
   `scheme-actor/target/`, or `scheme-actor/actor.wasm`.
-- Use British English for project-owned names and prose.- Write DRY, KISS code: avoid duplicated logic and prefer the simplest
-  implementation that meets the requirement.- Do not modify `rust-ma-runtime` for world-profile work.
+- Use British English for project-owned names and prose.
+- Write DRY, KISS code: avoid duplicated logic and prefer the simplest
+  implementation that meets the requirement.
+- Do not modify `rust-ma-runtime` for world-profile work.
 
 ## Direct-DID profile
 
@@ -17,7 +19,10 @@ A bare DID in `msg.from` is the authenticated identity; no identity entity
 exists.
 
 - `#root` is the hardcoded local trust anchor. `:ctx?` publishes dynamic full
-  DID-URL service references such as `#scheduler` and `#house`.
+  DID-URL service references such as `#scheduler` and `#house`. `:enter?`
+  gives unqualified-entry discovery: it always replies with a ctx naming a
+  room to enter, defaulting to the configured `start` room. Only `#root` is
+  required in a runtime — `#house` is optional and need not exist.
 - `#house` owns world policy for DID ctx and entity ctx. It must not
   impersonate or forward commands for an identity.
 - A client enters a known room directly with `:enter`; the room stores a

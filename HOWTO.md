@@ -44,6 +44,13 @@ room target from root or known bootstrap state and enter it directly:
 @runtime#construct:enter {name: "Visitor", nick: "Visitor"}
 ```
 
+Without a known room address, ask root instead — it always answers with a
+room to enter:
+
+```text
+@runtime#root:enter?
+```
+
 The room's reply is the current DID ctx. Plain focused commands and direct
 methods both address that confirmed room; there is no intermediate actor.
 The room also publishes the committed ctx to house, where it can be queried as

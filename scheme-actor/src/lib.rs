@@ -4010,6 +4010,56 @@ mod tests {
     }
 
     #[test]
+    fn root_enter_replies_with_configured_start_room() {
+        let env = root_actor_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#root".to_string());
+        config.insert("start".to_string(), "did:ma:runtime#construct".to_string());
+        crate::state::set_config(config);
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_msg("did:ma:caller", "did:ma:runtime#root")),
+        );
+
+        eval_all("((find-method :enter?) '() msg)", &env).unwrap();
+
+        assert_eq!(
+            eval_all("(car (get-prop \"reply-term:1\"))", &env).unwrap(),
+            Value::symbol(":ok")
+        );
+        assert_eq!(
+            eval_str(
+                "(ctx-text (car (cdr (get-prop \"reply-term:1\"))) \"parent\")",
+                &env
+            ),
+            "did:ma:runtime#construct"
+        );
+    }
+
+    #[test]
+    fn root_enter_errors_without_a_configured_start_room() {
+        let env = root_actor_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#root".to_string());
+        crate::state::set_config(config);
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_msg("did:ma:caller", "did:ma:runtime#root")),
+        );
+
+        eval_all("((find-method :enter?) '() msg)", &env).unwrap();
+
+        assert_eq!(
+            eval_all("(car (get-prop \"reply-term:1\"))", &env).unwrap(),
+            Value::symbol(":error")
+        );
+    }
+
+    #[test]
     fn root_registers_local_full_actor_and_sends_its_runtime_ctx() {
         let env = root_actor_env();
         install_send_reply_recorders(&env);
