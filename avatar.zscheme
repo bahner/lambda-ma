@@ -469,6 +469,16 @@
   (actor-call (resolve-one name) "recycle")
   nil)
 
+; Room ownership decides whether this repair is authorised. The target stays
+; unresolved here so the room can match every current child, including a
+; direct bare DID that is no longer in the avatar's presentation snapshot.
+(define (remove . words)
+  (if (null? words)
+    (error "usage: remove <child...>")
+    (begin
+      (display (room-call "remove" (join-words words)))
+      nil)))
+
 (define (tell-usage-error)
   (error "usage: tell <target...> to <verb> [args...]"))
 
@@ -585,6 +595,7 @@
         "claim <name>            claim ownership of something\n"
         "owner <name>            show who owns something\n"
         "recycle <name>          destroy something you own\n"
+        "remove <child...>       owner repairs a stale room child\n"
         "dig <direction>         create a new exit\n"
         "fill <direction>        remove an exit\n"
         "forge <kind> named <name...> [in <target...>]  create it (default: your inventory)\n"

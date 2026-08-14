@@ -6,7 +6,7 @@
 (define (direction) (get-prop "direction"))
 (define (owner) (get-prop "owner"))
 
-(register-ctx-props! (list "direction"))
+(register-ctx-props! (list "direction" "target-room" "target-name"))
 
 (define (name)
   (let ((n (get-prop "name")))
@@ -109,12 +109,7 @@
           (ma-send! (canonical-actor (car args)) (list :print (string-append "Owner: " (if (owner) (owner) "(none)"))))
           (reply-ok msg)))))
 
-(set-internal-rpc-method! :report-parent
-  (lambda (args msg)
-    (let ((tick (if (or (null? args) (null? (cdr args))) "" (car (cdr args))))
-          (nonce (if (or (null? args) (null? (cdr args)) (null? (cdr (cdr args)))) "" (car (cdr (cdr args))))))
-      (ma-send! (canonical-actor (msg-from msg))
-                (list :parent-report (canonical-actor (self)) (node-parent) tick nonce)))))
+(set-internal-rpc-method! :report-parent handle-node-report-parent!)
 
 (set-rpc-method! :locked?
   (lambda (args msg)
@@ -176,7 +171,15 @@
                         (traversal-reply ctx (node-parent) "This exit leads nowhere.")))))))))
 
 (define (node-protocol) "/ma/exit/0.0.1")
-(define (node-kind) "actor")
+(define (node-kind) "exit")
 (define (node-name) (name))
 (define (node-nick) (name))
 (define (node-description) (description))
+
+(define (extend-node-ctx ctx)
+  (map-set
+    (map-set
+      (map-set ctx "direction" (direction))
+      "target-room" (target-room))
+    "target-name" (let ((target-name (get-prop "target-name")))
+                     (if target-name target-name ""))))

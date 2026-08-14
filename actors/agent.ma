@@ -128,12 +128,7 @@
   (lambda (args msg)
     (reply-ok-with msg (if (equal? (node-parent) "") "(none)" (node-parent)))))
 
-(set-internal-rpc-method! :report-parent
-  (lambda (args msg)
-    (let ((tick (if (or (null? args) (null? (cdr args))) "" (car (cdr args))))
-          (nonce (if (or (null? args) (null? (cdr args)) (null? (cdr (cdr args)))) "" (car (cdr (cdr args))))))
-      (ma-send! (canonical-actor (msg-from msg))
-                (list :parent-report (canonical-actor (self)) (node-parent) tick nonce)))))
+(set-internal-rpc-method! :report-parent handle-node-report-parent!)
 
 (set-rpc-method! :owner handle-node-owner)
 (set-rpc-method! :owner? handle-node-owner?)

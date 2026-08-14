@@ -302,6 +302,26 @@
         #f
         (ma-send! current (list :parent (node-ctx))))))
 
+; A room repair asks a child with the short existing :report-parent form to
+; reannounce through the normal parent handshake. The scheduler's older
+; three-argument probe form keeps its :parent-report reply unchanged.
+(define (handle-node-report-parent! args msg)
+  (cond ((and (not (null? args))
+              (null? (cdr args))
+              (same-actor? (car args) (node-parent)))
+         (announce-node-parent!))
+        ((and (not (null? args))
+              (not (null? (cdr args)))
+              (not (null? (cdr (cdr args))))
+              (null? (cdr (cdr (cdr args)))))
+         (ma-send! (canonical-actor (msg-from msg))
+                   (list :parent-report
+                         (canonical-actor (self))
+                         (node-parent)
+                         (car (cdr args))
+                         (car (cdr (cdr args))))))
+        (else #f)))
+
 (define (children-map)
   (prop-map "children"))
 

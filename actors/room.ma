@@ -1,34 +1,32 @@
 ; Locked room actor.
 ; Rooms own exits, bare-DID presence, and local policy for movable actors.
 
-; Kinds and timing constants.
+; Kinds.
 (define ROOM_KIND "/ma/room/0.0.1")
 (define EXIT_KIND "/ma/exit/0.0.1")
-(define PRESENCE_INTERVAL "30s")
-(define PRESENCE_TIMEOUT_TICKS 10)
 
-; Actor membership and presentation are derived from the node's child ctx map.
-; Bare-DID presence is deliberately separate from the actor parent tree.
-(define DID_PRESENCE_KEY "did-presence")
-
-(define (did-presence-map)
-  (let ((value (get-prop DID_PRESENCE_KEY)))
-    (if (map? value) value (make-map))))
-
+; Every room resident lives in the inherited children map. Bare direct DIDs
+; are ordinary child keys alongside actor DID-URLs; views derive from ctxs.
 (define (did-ctx did)
-  (map-ref (did-presence-map) did #f))
+  (let ((ctx (child-ctx did)))
+    (if (and (map? ctx) (valid-did? (ctx-text ctx "actor"))) ctx #f)))
 
 (define (did-occupants)
-  (map-keys (did-presence-map)))
+  (let loop ((ctxs (child-ctxs)) (acc '()))
+    (cond ((null? ctxs) (reverse acc))
+          ((valid-did? (ctx-text (car ctxs) "actor"))
+           (loop (cdr ctxs) (cons (ctx-text (car ctxs) "actor") acc)))
+          (else (loop (cdr ctxs) acc)))))
 
+; Normalise legacy/direct-entry ctxs without introducing a second store.
 (define (set-did-ctx! did ctx)
   (begin
-    (set-prop! DID_PRESENCE_KEY (map-set (did-presence-map) did ctx))
-    (ma-save-state!)))
-
-(define (remove-did-ctx! did)
-  (begin
-    (set-prop! DID_PRESENCE_KEY (map-delete (did-presence-map) did))
+    (remember-child!
+      (map-set
+        (map-set
+          (map-set ctx "actor" did)
+          "kind" "agent")
+        "protocol" "/ma/agent/0.0.1"))
     (ma-save-state!)))
 (define (claims-map) (children-map))
 
@@ -91,84 +89,10 @@
   (let ((ctx (child-ctx actor)))
     (and (map? ctx) (non-empty-string? (ctx-text ctx "nick")))))
 
-; Presence liveness. Rooms periodically challenge occupants; stale local actors
-; are removed before they produce repeated delivery failures.
-(define (presence-tick)
-  (let ((value (get-prop "presence:tick")))
-    (if (number? value) value 0)))
-
-(define (presence-last-report-key actor)
-  (string-append "presence:last-report:" (canonical-actor actor)))
-
-(define (presence-last-request-key actor)
-  (string-append "presence:last-request:" (canonical-actor actor)))
-
-(define (presence-nonce-key actor)
-  (string-append "presence:nonce:" (canonical-actor actor)))
-
-(define (presence-parent-key actor)
-  (string-append "presence:last-parent:" (canonical-actor actor)))
-
-(define (presence-last-report actor)
-  (let ((value (get-prop (presence-last-report-key actor))))
-    (if (number? value) value 0)))
-
-(define (presence-touch! actor tick)
-  (begin
-    (set-prop! (presence-last-report-key actor) tick)
-    (del-prop! (presence-nonce-key actor))))
-
-(define (presence-request! actor tick nonce)
-  (begin
-    (set-prop! (presence-last-request-key actor) tick)
-    (set-prop! (presence-nonce-key actor) nonce)
-    (ma-send! (canonical-actor actor) (list :report-parent (canonical-actor (self)) tick nonce))))
-
-(define (presence-nonce-for actor tick)
-  (blake3 (string-append "presence" (canonical-actor (self)) (canonical-actor actor) (number->string tick)) 8))
-
-(define (presence-remove! actor)
-  (begin
-    (remove-claim! actor)
-    (del-prop! (presence-last-report-key actor))
-    (del-prop! (presence-last-request-key actor))
-    (del-prop! (presence-nonce-key actor))
-    (del-prop! (presence-parent-key actor))))
-
-(define (presence-timed-out? actor tick)
-  (> (- tick (presence-last-report actor)) PRESENCE_TIMEOUT_TICKS))
-
-(define (presence-nonce actor)
-  (let ((value (get-prop (presence-nonce-key actor))))
-    (if value value "")))
-
-(define (presence-report-valid? actor tick nonce)
-  (and (member-entry? actor (occupants))
-       (equal? nonce (presence-nonce actor))))
-
-(define (next-presence-tick!)
-  (let ((tick (+ 1 (presence-tick))))
-    (set-prop! "presence:tick" tick)
-    tick))
-
-(define (schedule-presence!)
-  (let ((key "schedule:presence:started-at"))
-    (if (scheduled-this-runtime? key)
-        #f
-        (begin
-          (mark-scheduled! key)
-          (let ((ctx (stored-runtime-ctx)))
-            (if ctx
-                (ma-send! (ctx-text ctx "scheduler") (list "presence" :interval PRESENCE_INTERVAL :presence-tick))
-                #f))))))
-
 ; Presentation helpers.
 (define (speaker-name actor)
-  (if (valid-did? actor)
-      (let ((ctx (did-ctx actor)))
-        (if (map? ctx) (ctx-text ctx "nick") actor))
-      (let ((ctx (child-ctx actor)))
-        (if (map? ctx) (child-label ctx) actor))))
+  (let ((ctx (child-ctx actor)))
+    (if (map? ctx) (child-label ctx) actor)))
 
 (define (visible-occupant-matches token)
   (let loop ((xs (occupants)))
@@ -179,6 +103,19 @@
 
 (define (unique-visible-occupant-ref token)
   (let ((matches (visible-occupant-matches token)))
+    (cond ((null? matches) #f)
+          ((null? (cdr matches)) (car matches))
+          (else :ambiguous))))
+
+(define (visible-child-matches token)
+  (let loop ((ctxs (child-ctxs)) (matches '()))
+    (cond ((null? ctxs) (reverse matches))
+          ((equal? (child-label (car ctxs)) token)
+           (loop (cdr ctxs) (cons (ctx-text (car ctxs) "actor") matches)))
+          (else (loop (cdr ctxs) matches)))))
+
+(define (unique-visible-child-ref token)
+  (let ((matches (visible-child-matches token)))
     (cond ((null? matches) #f)
           ((null? (cdr matches)) (car matches))
           (else :ambiguous))))
@@ -290,7 +227,7 @@
 (define (room-ctx-parent)
   (canonical-actor (root)))
 
-(register-ctx-props! (list "ctx:rev" "children" "exits"))
+(register-ctx-props! (list "ctx:rev" "children"))
 
 (define (presentation-entry kind protocol actor name nick description)
   (map-set
@@ -322,10 +259,7 @@
         (presentation-entry "thing" "/ma/thing/0.0.1" actor token token token))))
 
 (define (exit-entry-ctx direction)
-  (let ((actor (exit-target direction)))
-    (map-set
-      (presentation-entry "exit" EXIT_KIND actor direction direction direction)
-      "direction" direction)))
+  (exit-ctx direction))
 
 (define (agent-entry-list actors)
   (let loop ((xs actors)
@@ -370,7 +304,10 @@
                 "name" (room-name))
               "nick" (room-nick))
             "description" (room-description))
-          "who" (did-presence-map))
+            "who" (let loop ((dids (did-occupants)) (entries (make-map)))
+                (if (null? dids)
+                  entries
+                  (loop (cdr dids) (map-set entries (car dids) (did-ctx (car dids)))))))
         "agents" (agent-entry-list (occupants)))
       "things" (thing-entry-list (thing-token-names)))
     "exits" (exit-entry-list (exit-directions))))
@@ -443,8 +380,11 @@
              0))))
 
 (define (did-presence-ctx did name nick)
-  (make-map "did" did
+  (make-map "actor" did
+            "did" did
             "parent" (canonical-actor (self))
+            "kind" "agent"
+            "protocol" "/ma/agent/0.0.1"
             "name" name
             "nick" nick
             "description" "A direct DID presence."
@@ -462,7 +402,8 @@
          (nick (did-nick-from-entry args did))
          (was-present (member-string? did (did-occupants)))
          (ctx (did-presence-ctx did name nick)))
-    (set-did-ctx! did ctx)
+          (remember-child! ctx)
+          (ma-save-state!)
     (if was-present #f (broadcast-term-except did (list :arrive ctx)))
     (broadcast-room-ctx!)
     (publish-did-ctx! did ctx)
@@ -498,9 +439,7 @@
           (set-label! actor nick)
           (if was-known
               #f
-              (begin
-                (presence-touch! actor (presence-tick))
-                (broadcast-term-except actor (list :arrive ctx))))
+              (broadcast-term-except actor (list :arrive ctx)))
           (ma-save-state!)
           (ma-send! (canonical-actor actor) (direct-room-ctx "agent" nick (arrival-text)))
           (broadcast-room-ctx!)
@@ -562,12 +501,15 @@
            (handle-agent-enter! msg actor ctx))
           ((and (or (thing-kind? kind) (container-kind? kind)) (enter-ctx-valid? ctx))
            (handle-thing-enter! msg actor ctx name))
+          ((and (exit-kind? kind) (enter-ctx-valid? ctx))
+           (handle-node-parent (list ctx) msg))
           (else
            (reply-error msg "child ctx must include actor, parent, kind, protocol, name, nick, description")))))
 
 (define (agent-kind? kind) (equal? kind "agent"))
 (define (thing-kind? kind) (equal? kind "thing"))
 (define (container-kind? kind) (equal? kind "container"))
+(define (exit-kind? kind) (equal? kind "exit"))
 (define (movable-kind? kind)
   (or (agent-kind? kind) (thing-kind? kind) (container-kind? kind)))
 
@@ -698,29 +640,24 @@
                  (reply-command-ok msg mediated (string-append "Ambiguous name: " token "\n" (entry-lines lines)))))))))
 
 (define (reconcile-caller-occupant! actor)
-  (if (member-entry? actor (occupants))
-      (presence-touch! actor (presence-tick))
-      #f))
+  (member-entry? actor (occupants)))
 
 ; Exit state and traversal helpers.
-(define (exits)
-  (let ((xs (get-prop "exits")))
-    (if (map? xs) xs (make-map))))
+(define (exit-ctxs) (child-ctxs-by-kind "exit"))
 
-(define (put-exit! direction exit)
-  (set-prop! "exits" (map-set (exits) direction exit)))
-
-(define (remove-exit! direction)
-  (begin
-    (set-prop! "exits" (map-delete (exits) direction))
-    (del-prop! (exit-target-key direction))
-    (del-prop! (exit-target-name-key direction))))
+(define (exit-ctx direction)
+  (let loop ((ctxs (exit-ctxs)))
+    (cond ((null? ctxs) #f)
+          ((equal? (ctx-text (car ctxs) "direction") direction) (car ctxs))
+          (else (loop (cdr ctxs))))))
 
 (define (exit-target direction)
-  (map-ref (exits) direction #f))
+  (let ((ctx (exit-ctx direction)))
+    (if ctx (ctx-text ctx "actor") #f)))
 
 (define (exit-room-target direction)
-  (get-prop (exit-target-key direction)))
+  (let ((ctx (exit-ctx direction)))
+    (if ctx (ctx-text ctx "target-room") #f)))
 
 (define (named-room-fragment direction target-name)
   (blake3 (string-append "lambda-ma room v2\n" (canonical-actor (self)) "\n" direction "\n" target-name) 8))
@@ -734,13 +671,17 @@
         (let ((fragment (exit-fragment direction)))
           (ma-create-actor EXIT_KIND #f (exit-init direction target-room) fragment)
           (let ((healed (entity-url fragment)))
-            (put-exit! direction healed)
+            (remember-child!
+              (map-set (exit-ctx direction) "actor" healed))
             (ma-save-state!)
             healed))
         #f)))
 
 (define (exit-directions)
-  (map-keys (exits)))
+  (let loop ((ctxs (exit-ctxs)) (directions '()))
+    (if (null? ctxs)
+        (reverse directions)
+        (loop (cdr ctxs) (cons (ctx-text (car ctxs) "direction") directions)))))
 
 (define (known-exit? actor)
   (let loop ((directions (exit-directions)))
@@ -993,7 +934,7 @@
   (cond ((equal? event :leave-occupant)
          (let ((actor (msg-from msg)))
            (let ((ctx (claim-ctx actor)))
-           (presence-remove! actor)
+           (forget-child! actor)
            (ma-save-state!)
            (if (map? ctx) (broadcast-term (list :leave ctx)) #f))))
         (else #f)))
@@ -1020,7 +961,8 @@
         (if (and (valid-did? actor) (member-string? actor (did-occupants)))
             (begin
               (let ((ctx (did-ctx actor)))
-              (remove-did-ctx! actor)
+              (forget-child! actor)
+              (ma-save-state!)
               (if (map? ctx) (broadcast-term (list :leave ctx)) #f))
               (reply-ok msg))
             (reply-ok msg))
@@ -1028,51 +970,37 @@
 
 (define (remove-candidate token)
   (cond ((not (string? token)) #f)
-  ((and (valid-did? token) (member-entry? token (occupants))) token)
-        ((member-entry? token (occupants)) (canonical-actor token))
-    (else (unique-visible-occupant-ref token))))
+    ((and (or (valid-did? token) (valid-did-url? token))
+      (map? (child-ctx token)))
+     (canonical-actor token))
+    (else (unique-visible-child-ref token))))
 
 (define (handle-remove! msg args)
   (let ((remove-args args))
     (cond ((null? remove-args)
-           (reply-error msg "Usage: remove <occupant>"))
+           (reply-error msg "Usage: remove <child>"))
           ((not (owned?))
-           (reply-error msg "This room is unowned. Claim it before removing occupants."))
+           (reply-error msg "This room is unowned. Claim it before removing children."))
           ((not (valid-owner? (owner)))
            (reply-error msg "Owner must be a DID."))
           ((not (owner-message? msg))
-           (reply-error msg "Only this room's owner can remove occupants."))
+           (reply-error msg "Only this room's owner can remove children."))
           (else
            (let* ((target (join-words remove-args))
                   (actor (remove-candidate target)))
              (cond ((equal? actor :ambiguous)
-                    (reply-error msg (string-append "Ambiguous occupant nick: " target ". Use a DID or DID-URL.")))
+                    (reply-error msg (string-append "Ambiguous child nick: " target ". Use a DID or DID-URL.")))
                    (actor
                  (let ((name (speaker-name actor)))
-                   (let ((ctx (claim-ctx actor)))
-                   (presence-remove! actor)
+                   (let ((ctx (child-ctx actor)))
+                   (forget-child! actor)
                    (ma-save-state!)
-                   (if (map? ctx) (broadcast-term (list :leave ctx)) #f))
-                   (reply-ok-with msg (string-append "Removed " name " from this room."))))
+                   (broadcast-room-ctx!)
+                   (if (map? ctx) (broadcast-term (list :leave ctx)) #f)
+                   (ma-send! actor (list :report-parent (canonical-actor (self)))))
+                   (reply-ok-with msg (string-append "Removed " name " from this room; asked it to reannounce."))))
                    (else
-                    (reply-error msg (string-append "No such occupant: " target)))))))))
-
-(define (presence-sweep! tick)
-  (let loop ((xs (occupants))
-             (changed #f))
-    (cond ((null? xs) changed)
-          ((dead-local-actor? (car xs))
-           (begin
-             (presence-remove! (car xs))
-             (loop (cdr xs) #t)))
-          ((presence-timed-out? (car xs) tick)
-           (begin
-             (presence-remove! (car xs))
-             (loop (cdr xs) #t)))
-          (else
-           (begin
-             (presence-request! (car xs) tick (presence-nonce-for (car xs) tick))
-             (loop (cdr xs) #t))))))
+                    (reply-error msg (string-append "No such child: " target)))))))))
 
 (define (broadcast-term term)
   (let loop ((xs (did-occupants)))
@@ -1101,9 +1029,6 @@
 
 ; Exit build/link state. Existing-room links handshake across both rooms;
 ; new-room digs wait for a child-alive callback before installing the exit.
-(define (exit-target-key direction) (string-append "exit-target:" direction))
-(define (exit-target-name-key direction) (string-append "exit-target-name:" direction))
-
 (define (pending-link-key direction) (string-append "pending-link:" direction))
 (define (pending-link-did-key direction) (string-append "pending-link-did:" direction))
 (define (pending-link-requester-key direction) (string-append "pending-link-requester:" direction))
@@ -1128,24 +1053,18 @@
     (del-prop! (pending-new-room-target-name-key direction))
     (del-prop! (pending-new-room-nonce-key direction))))
 
-(define (remember-exit-target! direction target-room target-name)
-  (begin
-    (set-prop! (exit-target-key direction) (canonical-actor target-room))
-    (if target-name
-        (set-prop! (exit-target-name-key direction) target-name)
-        (del-prop! (exit-target-name-key direction)))))
-
 (define (remembered-new-room-target direction target-name)
-  (if (and target-name (equal? (get-prop (exit-target-name-key direction)) target-name))
-      (get-prop (exit-target-key direction))
-      #f))
+  (let ((ctx (exit-ctx direction)))
+    (if (and ctx
+             target-name
+             (equal? (ctx-text ctx "target-name") target-name))
+        (ctx-text ctx "target-room")
+        #f)))
 
 (define (create-exit! direction target-room target-name)
-  (let* ((exit-fragment (ma-create-actor EXIT_KIND #f (exit-init direction target-room) (exit-fragment direction)))
+  (let* ((exit-fragment (ma-create-actor EXIT_KIND #f (exit-init direction target-room target-name) (exit-fragment direction)))
          (exit (entity-url exit-fragment)))
-    (put-exit! direction exit)
-    (remember-exit-target! direction target-room target-name)
-    (broadcast-room-ctx!)
+    (ma-send! exit (list :report-parent (canonical-actor (self))))
     exit))
 
 (define (room-init name owner-did custom-init ready-init)
@@ -1174,12 +1093,13 @@
         (ma-send! parent (list :child-alive (config-actor (self)) ROOM_KIND nonce direction))
         #f)))
 
-(define (exit-init direction target-room)
+(define (exit-init direction target-room target-name)
   (string-append
     "(set-init-prop! \"direction\" \"" direction "\")\n"
     (if (owner) (string-append "(set-init-prop! \"owner\" \"" (owner) "\")\n") "")
     "(set-init-prop! \"parent\" \"" (canonical-actor (self)) "\")\n"
     "(set-init-prop! \"target-room\" \"" (canonical-actor target-room) "\")\n"
+    (if target-name (string-append "(set-init-prop! \"target-name\" \"" target-name "\")\n") "")
     "(ma-save-state!)\n"))
 
 (define (dig-target-args args)
@@ -1356,7 +1276,11 @@
 
 (set-cmd-method! :who?
   (lambda (args msg)
-    (reply-ok-with msg (did-presence-map))))
+    (reply-ok-with msg
+      (let loop ((dids (did-occupants)) (entries (make-map)))
+        (if (null? dids)
+            entries
+            (loop (cdr dids) (map-set entries (car dids) (did-ctx (car dids)))))))))
 
 (set-cmd-method! :occupants?
   (lambda (args msg)
@@ -1569,7 +1493,7 @@
   (lambda (args msg)
     (handle-room-prop! msg args)))
 
-; ── Link handshake and scheduled presence callbacks ───────────────────────
+; ── Link handshake callbacks ──────────────────────────────────────────────
 
 (set-internal-rpc-method! :ping
   (lambda (args msg)
@@ -1598,34 +1522,6 @@
           (if (owner? did)
               (ma-send! (canonical-actor source-room) (list :link-authorised did direction (canonical-actor requester)))
               (ma-send! (canonical-actor source-room) (list :link-denied did direction (canonical-actor requester) "You must own both rooms to link them.")))))))
-
-(set-internal-rpc-method! :presence-tick
-  (lambda (args msg)
-    (let ((tick (next-presence-tick!)))
-      (if (presence-sweep! tick)
-          (ma-save-state!)
-          #f))))
-
-(set-internal-rpc-method! :parent-report
-  (lambda (args msg)
-    (if (or (null? args)
-            (null? (cdr args))
-            (null? (cdr (cdr args)))
-            (null? (cdr (cdr (cdr args)))))
-        #f
-        (let ((actor (canonical-actor (car args)))
-              (parent (car (cdr args)))
-              (tick (car (cdr (cdr args))))
-              (nonce (car (cdr (cdr (cdr args))))))
-          (if (and (same-actor? actor (msg-from msg))
-                   (presence-report-valid? actor tick nonce))
-              (begin
-                (set-prop! (presence-parent-key actor) parent)
-                (if (same-actor? parent (self))
-                    (presence-touch! actor tick)
-                    (presence-remove! actor))
-                (ma-save-state!))
-              #f)))))
 
 (set-internal-rpc-method! :link-denied
   (lambda (args msg)
@@ -1731,7 +1627,7 @@
                     (if exit
                         (begin
                           (ma-send! (canonical-actor exit) (list :fill))
-                          (remove-exit! direction)
+                          (forget-child! exit)
                           (ma-save-state!)
                           (broadcast-room-ctx!)
                           (let ((ctx (did-ctx did)))
@@ -1790,7 +1686,6 @@
   (cond ((or (equal? (verb-of term) :init)
              (equal? (verb-of term) :start))
          (begin
-           (schedule-presence!)
            (propose-node-parent! (room-ctx-parent))))
         ((equal? (verb-of term) :shutdown)
          (ma-save-state!))
