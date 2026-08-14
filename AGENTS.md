@@ -107,8 +107,9 @@ being moved (thing/container/agent alike — agents are ordinary
 
 `:hold` is deliberately ownership-blind: anyone (or anything) present in the
 same room may hold any item regardless of who owns it, and holding never
-assigns or changes ownership as a side effect — only the explicit `:claim`
-verb does that. Its sole gate is a same-room check (`node-same-room-as-
+assigns or changes ownership as a side effect. For an existing movable node,
+only the explicit `:claim` verb may change ownership; `:forge` creates a new
+node with `msg.from` as its initial owner. Its sole gate is a same-room check (`node-same-room-as-
 parent?`) when the object's cached parent is a room: it looks up the caller
 in that room's cached occupant list (`parent-ctx`'s `"who"` map) and, on a
 mismatch, re-announces to the current parent to refresh the cache and
@@ -118,15 +119,16 @@ hand over (see "Parent-ctx caching" below) — but it is the whole requirement
 for `:hold`, unlike `:set-parent`, which gates on
 `node-transfer-caller-authorised?` alone.
 
-**Parenting is not ownership.** `handle-node-set-parent!`'s only authority
-check is `node-transfer-caller-authorised?` (current parent, orphan-owner
+**Parenting is not ownership.** Neither `:set-parent` nor `:hold` changes
+`owner`. `handle-node-set-parent!`'s only authority check is
+`node-transfer-caller-authorised?` (current parent, orphan-owner
 recovery, owner delegation, or unowned) — it deliberately does **not** also
 require `node-owner-or-unowned?`/current-owner-hood. Whoever currently
 holds/carries a thing (i.e. is its parent) may relocate it further —
 `drop`/`put` — regardless of who `node-owner` says owns it. You can be
 carrying someone else's (or nobody's) property and still put it down or hand
-it off; only `:claim`/`:lock`/`:owner`/`:set-recovery-secret` are genuinely
-ownership-gated. A prior revision of `handle-node-set-parent!` *did* also
+it off. `:lock` and `:set-recovery-secret` require an existing owner; they do
+not implicitly claim an unowned node. A prior revision of `handle-node-set-parent!` *did* also
 require ownership there ("only owner may set-parent this actor"), which was
 a bug: it made `:hold`'s deliberate ownership-blindness pointless, since a
 non-owner could pick an owned item up but then could never legally put it

@@ -522,7 +522,6 @@
            (reply-error msg "ctx-map must include non-empty parent, kind, protocol, name, nick, description"))
           (else
            (begin
-             (if (not (owner)) (set-owner! did) #f)
              (if (and (not (null? (cdr rest))) (node-valid-transfer-ctx? (car (cdr rest))))
                  (set-claim! did (car (cdr rest)))
                  #f)

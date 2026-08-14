@@ -171,7 +171,7 @@
 ; The single place that turns (word, pool) into one resolved entry or raises
 ; no-match/ambiguous — never builds the pool itself; every caller assembles
 ; its own candidate list first and hands it in here.
-(define (resolve-entry-in-pool word pool)
+(define (resolve-one-entry word pool)
   (if (starts-with-did? word)
     (candidate-for-did pool word)
     (let ((hits (resolve-ref word pool)))
@@ -179,19 +179,13 @@
             ((null? (cdr hits)) (candidate-for-did pool (car hits)))
             (else (ambiguous-error word (map (lambda (did) (candidate-for-did pool did)) hits)))))))
 
-; The full ctx-map for a uniquely resolved word against the default pool —
-; lets a caller (hold/take) remember name/nick alongside the DID for later,
-; e.g. what's now in the hand.
-(define (resolve-one-entry word)
-  (resolve-entry-in-pool word (default-pool)))
-
 (define (resolve-one word)
-  (entry-actor (resolve-one-entry word)))
+  (entry-actor (resolve-one-entry word (default-pool))))
 
 ; Resolve a word against an arbitrary caller-supplied pool (e.g. drop's
 ; hand+inventory search space) rather than the default room+inventory pool.
 (define (resolve-in-given-pool word pool)
-  (entry-actor (resolve-entry-in-pool word pool)))
+  (entry-actor (resolve-one-entry word pool)))
 
 ; Exits match on their direction word first ("north"), falling back to any
 ; nick/name they might also carry.
@@ -382,15 +376,16 @@
   entry)
 
 (define (hold name)
-  (let ((entry (resolve-one-entry name)))
+  (let ((entry (resolve-one-entry name (default-pool))))
     (hold-target! (entry-actor entry) #f)
     (remember-held! entry)
     nil))
 
 ; take = hold, then relay straight into your own inventory once the hold is
-; actually confirmed (see the `hold-then` follow-up in inbox_poll.rs).
+; actually confirmed (see the `hold-then` follow-up in inbox_poll.rs). Unlike
+; hold, it only resolves items present in the room, never your inventory.
 (define (take name)
-  (let ((entry (resolve-one-entry name)))
+  (let ((entry (resolve-one-entry name (resolve-room-pool))))
     (hold-target! (entry-actor entry) (my-inv))
     (remember-held! entry)
     nil))
@@ -431,14 +426,24 @@
     (when (equal? target held) (set! held-entry #f))
     nil))
 
-(define (put container)
-  (let ((held (my-hold)))
-    (if (equal? held "")
-      (error "you aren't holding anything.")
-      (begin (actor-call held "set-parent" (resolve-one container)) nil))))
+(define (put-usage-error)
+  (error "usage: put <item...> in <container...>"))
 
-(define (put-in container)
-  (put container))
+; Like forge/tell, `in` is a hard separator so both references may use their
+; human-readable multi-word names. Relocation is performed directly on the
+; resolved item; the item need not first be placed in the hand.
+(define (put . words)
+  (let ((item-words (words-before-keyword words "in"))
+        (container-words (words-after-keyword words "in")))
+    (if (or (null? item-words) (not container-words) (null? container-words))
+      (put-usage-error)
+      (let ((item (resolve-one (join-words item-words)))
+            (container (resolve-one (join-words container-words))))
+        (actor-call item "set-parent" container)
+        nil))))
+
+(define (put-in . words)
+  (apply put words))
 
 (define (recycle-from container name)
   (actor-call (resolve-in-container name (resolve-one container)) "recycle")
@@ -568,10 +573,10 @@
         "exits?                  list exits here\n"
         "here?                   show the current room's address\n"
         "hold <name>             hold something (room or your own inventory), empty-handed\n"
-        "take <name>             hold something (room or your own inventory) into your inventory\n"
+        "take <name>             hold something from the room into your inventory\n"
         "take-from <container> <name>  hold something out of a container into your inventory\n"
         "drop                    drop whatever you're holding into the room\n"
-        "put <container>         put whatever you're holding into a container\n"
+        "put <item...> in <container...>  put something into a container\n"
         "recycle-from <container> <name>  destroy something inside a container that you own\n"
         "inv                     show what you're holding and your own inventory\n"
         "inv <container>         point your inventory at any container\n"
