@@ -56,6 +56,17 @@ methods both address that confirmed room; there is no intermediate actor.
 The room also publishes the committed ctx to house, where it can be queried as
 `@runtime#house:did-ctx? did:ma:<identity>` until world ACL policy is enabled.
 
+## Lock a container
+
+After claiming a container, its owner may lock it directly. A supplied secret
+allows another authenticated DID to unlock it; calling `:lock` with a different
+secret replaces the old one immediately.
+
+```text
+@runtime#bag:lock supersecret
+@runtime#bag:unlock supersecret
+```
+
 ## Profile references
 
 - Normative contract: [ma-lambda-ma-v1.md](../ma-spec/runtime/ma-lambda-ma-v1.md)

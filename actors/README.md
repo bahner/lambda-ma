@@ -48,6 +48,19 @@ resolution, actor workflows use full DID-URLs. A movable child requests
 `:parent <ctx>` from a candidate parent, accepts `:child <ctx>`, commits its
 parent, then informs the previous parent. Valid retries are idempotent.
 
+Parentage is placement, not ownership. `:set-parent` and `:hold` never change
+an existing actor's owner; `:claim` is the explicit ownership transition.
+`:forge` creates the sole exception by setting the new actor's initial owner to
+`msg.from`. Owner-gated policy such as container locking must require that
+existing owner and must not claim implicitly.
+
+## Container locks
+
+Only a claimed container's owner can lock it. `:lock <secret>` also replaces
+the optional stored unlock secret, allowing any caller holding that value to
+call `:unlock <secret>`. The owner can always call `:unlock` without a secret;
+bare `:lock` is idempotent and preserves an existing stored secret.
+
 ## Traversal
 
 A DID asks an exit for `:traverse` with transient `{ did, parent }`. The exit

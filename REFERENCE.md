@@ -65,6 +65,22 @@ confirms `:child <ctx>`, the child commits, then informs its old parent. Each
 actor verifies `msg.from` before accepting ctx. Revisions provide ordering and
 idempotency, not authority.
 
+Parenting is placement, not ownership. `:set-parent` and `:hold` may change a
+movable actor's parent but MUST NOT change its `owner`; an unowned actor remains
+unowned after either operation. For an existing movable actor, `:claim` is the
+only ownership-changing verb. `:forge` is the sole creation exception: it
+initialises the newly created actor's owner from `msg.from`. Owner-gated actions
+such as locking a container require a prior claim and never claim implicitly.
+
+## Container locks
+
+A claimed container's owner may call `:lock` and `:unlock` at any time. Calling
+`:lock <secret>` locks the container and stores that secret for a non-owner to
+use with `:unlock <secret>`. A later `:lock <new-secret>` replaces the secret
+immediately, even if the container is already locked. Bare `:lock` leaves an
+existing secret unchanged; a container locked without a secret can only be
+unlocked by its owner.
+
 ## Replies and events
 
 Use `ma-reply!` for technical results: queries, metadata, configuration,

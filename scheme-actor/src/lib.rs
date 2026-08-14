@@ -1652,7 +1652,6 @@ mod tests {
         ));
     }
 
-
     #[test]
     fn room_ctx_contains_protocol_rev_root_parent_and_visible_entries() {
         let env = room_env();
@@ -2771,7 +2770,7 @@ mod tests {
     }
 
     #[test]
-    fn thing_unowned_can_be_taken_directly_by_a_stranger() {
+    fn thing_unowned_can_be_reparented_without_claiming_it() {
         let env = thing_env();
         install_send_reply_recorders(&env);
         let mut config = std::collections::HashMap::new();
@@ -2799,7 +2798,10 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(eval_str("(get-prop \"owner\")", &env), "did:ma:stranger");
+        assert_eq!(
+            eval_all("(get-prop \"owner\")", &env).unwrap(),
+            Value::Bool(false)
+        );
         assert_eq!(
             eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
             Value::list(vec![
@@ -3065,7 +3067,7 @@ mod tests {
     }
 
     #[test]
-    fn container_lock_blocks_contents_and_preserves_message() {
+    fn container_lock_allows_owner_or_current_secret_to_unlock() {
         let env = container_env();
         install_send_reply_recorders(&env);
         let mut config = std::collections::HashMap::new();
@@ -3076,46 +3078,90 @@ mod tests {
             Rc::from("owner_msg"),
             Value::Msg(sample_msg("did:ma:owner", "did:ma:runtime#bag")),
         );
+        env.define(
+            Rc::from("guest_msg"),
+            Value::Msg(sample_msg("did:ma:guest", "did:ma:runtime#bag")),
+        );
 
         eval_all(
             r#"
-            ((find-method :lock) (list "The" "bag" "is" "tied" "shut.") owner_msg)
+            ((find-method :lock) '() owner_msg)
+            ((find-method :claim) '() owner_msg)
+            ((find-method :lock) (list "supersecret") owner_msg)
             ((find-method :contents?) '() owner_msg)
-            ((find-method :unlock) '() owner_msg)
+            ((find-method :unlock) (list "wrong") guest_msg)
+            ((find-method :unlock) (list "supersecret") guest_msg)
+            ((find-method :lock) (list "newsecret") owner_msg)
+            ((find-method :unlock) (list "supersecret") guest_msg)
+            ((find-method :unlock) (list "newsecret") guest_msg)
             ((find-method :lock) '() owner_msg)
             ((find-method :contents?) '() owner_msg)
+            ((find-method :unlock) '() owner_msg)
             "#,
             &env,
         )
         .unwrap();
 
         assert_eq!(eval_str("(get-prop \"owner\")", &env), "did:ma:owner");
-        assert_eq!(
-            eval_str("(get-prop \"locked-message\")", &env),
-            "The bag is tied shut."
-        );
-        assert_eq!(eval_int("(get-prop \"reply-count\")", &env), 5);
+        assert_eq!(eval_str("(get-prop \"lock-secret\")", &env), "newsecret");
+        assert_eq!(eval_int("(get-prop \"reply-count\")", &env), 12);
         assert_eq!(
             eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
-            Value::list(vec![Value::symbol(":ok"), Value::str("locked")])
-        );
-        assert_eq!(
-            eval_all("(get-prop \"reply-term:2\")", &env).unwrap(),
             Value::list(vec![
                 Value::symbol(":error"),
-                Value::str("The bag is tied shut.")
+                Value::str("only owner may lock this container")
             ])
         );
         assert_eq!(
+            eval_all("(get-prop \"reply-term:2\")", &env).unwrap(),
+            Value::list(vec![Value::symbol(":ok"), Value::str("claimed")])
+        );
+        assert_eq!(
             eval_all("(get-prop \"reply-term:3\")", &env).unwrap(),
-            Value::list(vec![Value::symbol(":ok"), Value::str("unlocked")])
+            Value::list(vec![Value::symbol(":ok"), Value::str("locked")])
+        );
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:4\")", &env).unwrap(),
+            Value::list(vec![
+                Value::symbol(":error"),
+                Value::str("The container is locked.")
+            ])
         );
         assert_eq!(
             eval_all("(get-prop \"reply-term:5\")", &env).unwrap(),
             Value::list(vec![
                 Value::symbol(":error"),
-                Value::str("The bag is tied shut.")
+                Value::str("only owner or lock secret may unlock this container")
             ])
+        );
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:7\")", &env).unwrap(),
+            Value::list(vec![
+                Value::symbol(":ok"),
+                Value::str("locked")
+            ])
+        );
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:8\")", &env).unwrap(),
+            Value::list(vec![
+                Value::symbol(":error"),
+                Value::str("only owner or lock secret may unlock this container")
+            ])
+        );
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:9\")", &env).unwrap(),
+            Value::list(vec![Value::symbol(":ok"), Value::str("unlocked")])
+        );
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:11\")", &env).unwrap(),
+            Value::list(vec![
+                Value::symbol(":error"),
+                Value::str("The container is locked.")
+            ])
+        );
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:12\")", &env).unwrap(),
+            Value::list(vec![Value::symbol(":ok"), Value::str("unlocked")])
         );
     }
 

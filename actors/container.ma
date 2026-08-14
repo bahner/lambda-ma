@@ -21,6 +21,15 @@
 (define (locked?)
   (equal? (get-prop "locked") "true"))
 
+(define (lock-secret)
+  (get-prop "lock-secret"))
+
+(define (set-lock-secret! secret)
+  (if (non-empty-string? secret)
+      (set-prop! "lock-secret" secret)
+      #f)
+  (ma-save-state!))
+
 (define (locked-message)
   (let ((text (get-prop "locked-message")))
     (if (non-empty-string? text) text "The container is locked.")))
@@ -141,9 +150,6 @@
            (set-container-prop! (car args) (join-words (cdr args)))
            (reply-ok-with msg "prop updated")))))
 
-(define (ensure-owner! did)
-  (if (not (owner)) (set-owner! did) #f))
-
 (define (reply-locked msg)
   (reply-error msg (locked-message)))
 
@@ -202,25 +208,26 @@
           (rest (node-effective-args args msg)))
       (cond ((not (valid-did? did))
              (reply-error msg "lock requires DID with did:ma: prefix"))
-            ((not (node-owner-or-unowned? did))
+            ((not (node-owner-did? did))
              (reply-error msg "only owner may lock this container"))
             (else
              (begin
-               (ensure-owner! did)
-               (if (null? rest) #f (set-locked-message! (join-words rest)))
+               (if (null? rest) #f (set-lock-secret! (join-words rest)))
                (set-locked! #t)
                (reply-ok-with msg "locked")))))))
 
 (set-rpc-method! :unlock
   (lambda (args msg)
-    (let ((did (node-effective-did args msg)))
+    (let ((did (node-effective-did args msg))
+          (rest (node-effective-args args msg)))
       (cond ((not (valid-did? did))
              (reply-error msg "unlock requires DID with did:ma: prefix"))
-            ((not (node-owner-or-unowned? did))
-             (reply-error msg "only owner may unlock this container"))
+            ((and (not (node-owner-did? did))
+                  (or (null? rest)
+                      (not (equal? (join-words rest) (lock-secret)))))
+             (reply-error msg "only owner or lock secret may unlock this container"))
             (else
              (begin
-               (ensure-owner! did)
                (set-locked! #f)
                (reply-ok-with msg "unlocked")))))))
 

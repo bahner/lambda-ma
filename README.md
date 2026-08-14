@@ -41,6 +41,10 @@ replies with a ctx naming a room to enter — the configured `start` room by
 default, or a richer DID-specific answer if root chooses to consult `#house`
 internally.
 
+Claimed containers support owner-controlled locks. An owner may use `:lock` or
+`:unlock`; `:lock <secret>` additionally grants anyone with that secret access
+to `:unlock <secret>`, until the owner replaces it with another `:lock` call.
+
 The normative contract is
 [ma-lambda-ma-v1.md](../ma-spec/runtime/ma-lambda-ma-v1.md). Local actor APIs
 and bootstrap details are in [REFERENCE.md](REFERENCE.md); operational setup is
