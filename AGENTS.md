@@ -25,13 +25,14 @@ exists.
   required in a runtime — `#house` is optional and need not exist.
 - `#house` owns world policy for DID ctx and entity ctx. It must not
   impersonate or forward commands for an identity.
-- A client enters a known room directly with `:enter`; the room stores a
-  DID-keyed presence record and replies with its committed snapshot.
+- A client enters a known room directly with `:enter`; the room stores its
+  DID-keyed child ctx and replies with its committed snapshot.
 - Clients route focused room commands directly to the confirmed room DID-URL.
 - `msg.from` is the sole authenticated fact. Ctx and revisions are not
   authentication; revisions only order authoritative snapshots and retries.
-- Node child records stay keyed by full actor DID-URLs. DID-keyed presence is
-  room state, not a child actor.
+- Every room node, including a bare DID, is stored in the single authoritative
+  `children` map. Bare DIDs have no identity entity, but their child ctx is
+  still room state.
 
 ## RPC and events
 
@@ -194,6 +195,14 @@ under "Hold — client-side object-transfer state". `avatar.zscheme`'s
 `hold`/`take`/`take-from` send `:hold` (implicit target); `drop`/`put` send
 `:set-parent`; `recycle-from` sends `:recycle`. None of them confirm the
 resulting `:parent` proposal on their own — that is `inbox_poll.rs`'s job.
+
+An avatar has one hand. When it requests another item while holding one,
+`avatar.zscheme` silently moves the held item to its existing ordinary
+inventory and stores one replacement request in
+`.my.ctx.hold-queued`/`.my.ctx.hold-queued-then`. Zion starts that ordinary
+`:hold` only after the held item's authoritative departure notice clears the
+hand. This is avatar-client sequencing, not a container behaviour or a new
+inventory kind.
 
 ## Scheme actor
 

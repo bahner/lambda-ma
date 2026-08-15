@@ -55,10 +55,10 @@ clients continue to use argument-free `:leave` for themselves.
 
 ## Actor hierarchy
 
-`/ma/node/0.0.1` provides one persisted `children` map keyed by full actor
-DID-URL. Rooms filter that map for agents, things, containers, and exits. A
-room's DID-keyed presence records are separate room state; no identity entity
-is created.
+`/ma/node/0.0.1` provides one persisted `children` map keyed by each node's
+DID or full actor DID-URL. Rooms filter that map for bare-DID clients, agents,
+things, containers, and exits. A bare DID has no identity entity, but remains
+a node in the room hierarchy.
 
 Parent changes are target-accepted: a child sends `:parent <ctx>`, the target
 confirms `:child <ctx>`, the child commits, then informs its old parent. Each
@@ -71,6 +71,19 @@ unowned after either operation. For an existing movable actor, `:claim` is the
 only ownership-changing verb. `:forge` is the sole creation exception: it
 initialises the newly created actor's owner from `msg.from`. Owner-gated actions
 such as locking a container require a prior claim and never claim implicitly.
+
+## Avatar hand and inventory
+
+An avatar has one client-side hold slot. Its inventory is an ordinary container
+created and owned by that avatar; it has no special runtime kind or container
+behaviour. When the avatar requests another item while its hand is occupied, it
+silently sends the held item its ordinary `:set-parent <inventory>` request.
+After Zion receives the item's authoritative departure notice and clears the
+hold slot, it sends the queued ordinary `:hold` request for the next item.
+
+`drop [name]` remains independent of this convenience: it resolves against the
+held item and the inventory, then sends the chosen item its direct
+`:set-parent <room>` request.
 
 ## Container locks
 

@@ -269,8 +269,8 @@
       (display result)))
   nil)
 
-(define (dig direction)
-  (room-call "dig" direction))
+(define (dig . args)
+  (apply room-call "dig" args))
 
 (define (fill direction)
   (room-call "fill" direction))
@@ -346,11 +346,33 @@
 (define (my-hold-pending)
   (guard (e (#t "")) (#.my.ctx.hold-pending)))
 
+(define (my-hold-queued)
+  (guard (e (#t "")) (#.my.ctx.hold-queued)))
+
+(define (clear-queued-hold!)
+  (#.my.ctx.hold-queued:)
+  (#.my.ctx.hold-queued-then:))
+
+(define (queue-hold-after-stow! held target then)
+  (#.my.ctx.hold-queued: target)
+  (if then (#.my.ctx.hold-queued-then: then) (#.my.ctx.hold-queued-then:))
+  ; The avatar is the held item's current parent, so it may stow that item
+  ; in its ordinary inventory. Zion waits for the authoritative departure
+  ; notice before it starts the queued :hold request.
+  (guard (e (#t (begin
+                  (clear-queued-hold!)
+                  (error e))))
+    (actor-call held "set-parent" (my-inv)))
+  nil)
+
 (define (hold-target! target then)
-  (cond ((not (equal? (my-hold) ""))
-         (error (string-append "your hands are full — drop " (my-hold) " first.")))
-        ((not (equal? (my-hold-pending) ""))
+  (let ((held (my-hold)))
+    (cond ((not (equal? (my-hold-pending) ""))
          (error (string-append "already reaching for " (my-hold-pending) ".")))
+        ((not (equal? (my-hold-queued) ""))
+         (error (string-append "already stowing for " (my-hold-queued) ".")))
+        ((not (equal? held ""))
+         (queue-hold-after-stow! held target then))
         (else
          (begin
            (#.my.ctx.hold-pending: target)
@@ -364,7 +386,7 @@
                            (#.my.ctx.hold-then:)
                            (error e))))
              (actor-call target "hold"))
-           nil))))
+           nil)))))
 
 ; The entry remembered at hold/take time, so drop can later resolve a name
 ; against the hand even before an item has landed in the room/inventory

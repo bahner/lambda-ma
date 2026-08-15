@@ -18,7 +18,7 @@
            (loop (cdr ctxs) (cons (ctx-text (car ctxs) "actor") acc)))
           (else (loop (cdr ctxs) acc)))))
 
-; Normalise legacy/direct-entry ctxs without introducing a second store.
+; Normalise direct-entry ctxs without introducing a second store.
 (define (set-did-ctx! did ctx)
   (begin
     (remember-child!
@@ -315,8 +315,8 @@
 (define (node-ctx-for-parent target-parent)
   (map-set (room-ctx) "parent" (canonical-actor target-parent)))
 
-; Every current child (thing/container/agent, not just did-presence occupants)
-; gets a fresh :child so its cached parent-ctx never goes stale.
+; Every current child, including a bare-DID client, gets a fresh :child so its
+; cached parent-ctx never goes stale.
 (define (broadcast-room-ctx!)
   (begin
     (set-prop! "ctx:rev" (+ (room-ctx-rev) 1))
@@ -379,7 +379,7 @@
              (map-ref previous "rev" #f)
              0))))
 
-(define (did-presence-ctx did name nick)
+(define (did-child-ctx did name nick)
   (make-map "actor" did
             "did" did
             "parent" (canonical-actor (self))
@@ -401,7 +401,7 @@
          (name (did-name-from-entry args did))
          (nick (did-nick-from-entry args did))
          (was-present (member-string? did (did-occupants)))
-         (ctx (did-presence-ctx did name nick)))
+         (ctx (did-child-ctx did name nick)))
           (remember-child! ctx)
           (ma-save-state!)
     (if was-present #f (broadcast-term-except did (list :arrive ctx)))
@@ -644,6 +644,35 @@
 
 ; Exit state and traversal helpers.
 (define (exit-ctxs) (child-ctxs-by-kind "exit"))
+
+; Rooms published before child records were consolidated stored an exit map.
+; Preserve those exits by deriving equivalent child ctxs during the next load.
+(define (legacy-exits)
+  (let ((value (get-prop "exits")))
+    (if (map? value) value (make-map))))
+
+(define (legacy-exit-ctx direction actor)
+  (make-map "actor" (canonical-actor actor)
+            "parent" (canonical-actor (self))
+            "kind" "exit"
+            "protocol" EXIT_KIND
+            "name" direction
+            "nick" direction
+            "description" direction
+            "direction" direction
+            "target-room" (get-prop (exit-target-key direction))
+            "target-name" (get-prop (exit-target-name-key direction))))
+
+(define (migrate-legacy-exits!)
+  (let loop ((directions (map-keys (legacy-exits))))
+    (if (null? directions)
+        #f
+        (let ((direction (car directions)))
+          (if (exit-ctx direction)
+              #f
+              (let ((actor (map-ref (legacy-exits) direction #f)))
+                (if actor (remember-child! (legacy-exit-ctx direction actor)) #f)))
+          (loop (cdr directions))))))
 
 (define (exit-ctx direction)
   (let loop ((ctxs (exit-ctxs)))
@@ -1135,11 +1164,7 @@
         #f)))
 
 (define (existing-room-target target)
-  (cond ((and target (local-actor-ref? target) (ma-entity-exists? (canonical-actor target)))
-         (canonical-actor target))
-        ((and target (valid-did-url? target)) target)
-        ((and target (ma-entity-exists? target)) target)
-        (else #f)))
+  (if (and target (valid-did-url? target)) target #f))
 
 (define (request-link-authorisation! requester did direction target-room)
   (begin
@@ -1686,6 +1711,8 @@
   (cond ((or (equal? (verb-of term) :init)
              (equal? (verb-of term) :start))
          (begin
+           (migrate-legacy-exits!)
+           (ma-save-state!)
            (propose-node-parent! (room-ctx-parent))))
         ((equal? (verb-of term) :shutdown)
          (ma-save-state!))

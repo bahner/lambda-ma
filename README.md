@@ -5,8 +5,8 @@ publishes Scheme actor behaviours and a bootstrap YAML that builders can fork,
 reshape, and extend.
 
 The world has no identity entity. A user acts as their authenticated bare
-`did:ma:` DID. Rooms hold DID-keyed presence, while agents, things,
-and containers remain ordinary actors with full DID-URLs.
+`did:ma:` DID. Rooms store every node, including bare DIDs, in one `children`
+map; agents, things, and containers use full DID-URLs as their child keys.
 
 ## Contents
 

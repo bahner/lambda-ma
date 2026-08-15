@@ -1208,7 +1208,6 @@ mod tests {
         );
         assert_eq!(eval_str("(ctx-text (did-ctx did) \"actor\")", &env), did);
         assert!(eval_bool("(map-has-key? (children-map) did)", &env));
-        assert!(!eval_bool("(get-prop \"did-presence\")", &env));
         assert_eq!(eval_str("(speaker-name did)", &env), "Pondus");
         assert_eq!(eval_int("(get-prop \"reply-count\")", &env), 1);
         assert_eq!(eval_str("(who-text)", &env), "Who: Pondus");
@@ -1441,13 +1440,12 @@ mod tests {
                                                                         "house" "did:ma:world#house44"
                                                                         "scheduler" "did:ma:runtime#scheduler"
                                                                         "rev" 1))
-                                                (set-prop! "did-presence"
-                                                    (map-set (make-map) "did:ma:alice"
-                                                        (make-map "parent" "did:ma:runtime#room"
-                                                                            "name" "Alice"
-                                                                            "nick" "Alice"
-                                                                            "description" "A visitor."
-                                                                            "rev" 1)))
+                                                (set-did-ctx! "did:ma:alice"
+                                                    (make-map "parent" "did:ma:runtime#room"
+                                                              "name" "Alice"
+                                                              "nick" "Alice"
+                                                              "description" "A visitor."
+                                                              "rev" 1))
                         "#,
                         &env,
                 )
@@ -1578,6 +1576,10 @@ mod tests {
     fn room_announces_actor_child_departure() {
         let env = room_env();
         install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#room".to_string());
+        crate::state::set_config(config);
         eval_all(
             r#"
             (remember-child!
@@ -1618,7 +1620,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 1);
+        assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 2);
         assert!(eval_bool(
             "(equal? (car (get-prop \"sent-term:1\")) :leave)",
             &env
@@ -1630,6 +1632,10 @@ mod tests {
             ),
             "did:ma:runtime#duckie"
         );
+        assert!(eval_bool(
+            "(equal? (car (get-prop \"sent-term:2\")) :child)",
+            &env
+        ));
         assert!(eval_bool(
             "(not (map-has-key? (children-map) \"did:ma:runtime#duckie\"))",
             &env
@@ -4232,13 +4238,33 @@ mod tests {
             "did:ma:runtime#kitchen",
             "køkken",
         );
-
         assert_eq!(
             eval_str("(remembered-new-room-target \"dør\" \"køkken\")", &env),
             "did:ma:runtime#kitchen"
         );
         assert!(eval_bool(
             "(not (remembered-new-room-target \"dør\" \"stue\"))",
+            &env
+        ));
+    }
+
+    #[test]
+    fn room_dig_links_only_full_did_urls() {
+        let env = room_env();
+
+        assert_eq!(
+            eval_str(
+                r#"(existing-room-target "did:ma:runtime#kitchen")"#,
+                &env
+            ),
+            "did:ma:runtime#kitchen"
+        );
+        assert!(eval_bool(
+            r#"(not (existing-room-target "did:ma:runtime"))"#,
+            &env
+        ));
+        assert!(eval_bool(
+            r#"(not (existing-room-target "bar"))"#,
             &env
         ));
     }
