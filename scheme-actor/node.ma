@@ -207,6 +207,24 @@
   (let ((o (owner)))
     (and o (msg-from-owner? o msg))))
 
+; Shared editable ctx text for ordinary movable nodes.
+(define (node-editable-text-prop? key)
+  (or (equal? key "name")
+      (equal? key "nick")
+      (equal? key "description")))
+
+(define (handle-node-text-prop! kind msg args)
+  (cond ((not (owner-caller? msg))
+         (reply-error msg (string-append "only owner may edit " kind " props")))
+        ((null? args)
+         (reply-error msg "usage: :prop <name|nick|description> [value]"))
+        ((not (node-editable-text-prop? (car args)))
+         (reply-error msg (string-append "editable " kind " props: name, nick, description")))
+        (else
+         (begin
+           (set-node-prop! (car args) (join-words (cdr args)))
+           (reply-ok-with msg "prop updated")))))
+
 ; Shared :owner/:owner?/:set-recovery-secret/:claim bodies — identical across
 ; thing/container/agent, kept here once instead of duplicated per kind file.
 (define (handle-node-owner args msg)

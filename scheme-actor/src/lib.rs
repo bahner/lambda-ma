@@ -2595,6 +2595,44 @@ mod tests {
     }
 
     #[test]
+    fn agent_owner_can_update_name_with_prop() {
+        let env = agent_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#duckie".to_string());
+        crate::state::set_config(config);
+
+        eval_all(
+            r#"
+            (set-prop! "owner" "did:ma:owner")
+            (set-prop! "name" "Rubber Duckie")
+            "#,
+            &env,
+        )
+        .unwrap();
+        env.define(
+            Rc::from("prop_msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:owner",
+                "did:ma:runtime#duckie",
+                Value::list(vec![
+                    Value::symbol(":prop"),
+                    Value::str("name"),
+                    Value::str("Burnin' rubber duck"),
+                ]),
+            )),
+        );
+        eval_all("(on-message prop_msg)", &env).unwrap();
+
+        assert_eq!(eval_str("(name)", &env), "Burnin' rubber duck");
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
+            Value::list(vec![Value::symbol(":ok"), Value::str("prop updated")]),
+        );
+    }
+
+    #[test]
     fn room_ctx_prop_updates_announce_updated_ctx_to_root() {
         let env = room_env();
         install_send_reply_recorders(&env);

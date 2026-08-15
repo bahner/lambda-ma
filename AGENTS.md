@@ -69,6 +69,13 @@ ambiguity at the command boundary. It does not invent a new wire protocol; it
 uses the runtime's object-reference result shape and forwards object movement
 verbs to the runtime actor as ordinary RPC or `:set-parent` traffic.
 
+All ordinary avatar object RPCs use `(command object method . params)`. That
+single boundary resolves `object` over room `who`/`agents`/`things`/`exits`
+plus inventory contents, accepts exactly one match, and reports no-match or all
+ambiguous DID/DID-URL candidates. Do not duplicate resolver logic per verb.
+`look <object>` uses the same room-plus-inventory candidate pool, but renders
+the resolved child ctx locally rather than calling the target actor.
+
 ## Data over presentation (descriptive, not normative)
 
 Actors do not print or format prose for query replies — that is a client's
@@ -136,10 +143,13 @@ back down. Removed 2026-08-13 — do not re-add an ownership check to
 `:set-parent`.
 
 `:drop` is a distinct, room-only capacity pre-check (`handle-room-drop!` in
-`actors/room.ma`), sent by the avatar to the room *before* the held item's
-own unchanged `:set-parent <room>` call — it never itself relocates
-anything. `avatar.zscheme`'s `drop` calls it first and lets a refusal raise
-before `:set-parent` is ever sent. `drop` takes an *optional* name, resolved
+`actors/room.ma`), sent by the avatar to the room before object-transfer
+sequencing begins — it never itself relocates anything. `avatar.zscheme`'s
+`drop` calls it first and lets a refusal raise before any transfer request.
+An item already in hand receives the ordinary `:set-parent <room>` call. A
+named inventory child must instead go through `:hold` with the room as its
+client-side `hold-then` target; after confirmation Zion sends `:set-parent`
+as the item's current parent. `drop` takes an *optional* name, resolved
 against both the hand (whatever `.my.ctx.hold` currently holds, using the
 ctx cached client-side at `hold`/`take` time) and your own inventory
 contents — `resolve-in-given-pool` over `drop-pool`, not the fixed room+

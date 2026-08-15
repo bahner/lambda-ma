@@ -32,26 +32,6 @@
           #f)
       (ma-end))))
 
-(define (editable-prop? key)
-  (or (equal? key "name")
-      (equal? key "nick")
-      (equal? key "description")))
-
-(define (set-thing-prop! key value)
-  (set-node-prop! key value))
-
-(define (handle-thing-prop! msg args)
-  (cond ((not (owner-caller? msg))
-         (reply-error msg "only owner may edit thing props"))
-        ((null? args)
-         (reply-error msg "usage: :prop <name|nick|description> [value]"))
-        ((not (editable-prop? (car args)))
-         (reply-error msg "editable thing props: name, nick, description"))
-        (else
-         (begin
-           (set-thing-prop! (car args) (join-words (cdr args)))
-           (reply-ok-with msg "prop updated")))))
-
 ; Public methods.
 (set-rpc-method! :about
   (lambda (args msg)
@@ -77,7 +57,7 @@
 
 (set-rpc-method! :prop
   (lambda (args msg)
-    (handle-thing-prop! msg args)))
+    (handle-node-text-prop! "thing" msg args)))
 
 (set-rpc-method! :set-recovery-secret handle-node-set-recovery-secret!)
 

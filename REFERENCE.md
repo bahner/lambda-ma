@@ -82,8 +82,10 @@ After Zion receives the item's authoritative departure notice and clears the
 hold slot, it sends the queued ordinary `:hold` request for the next item.
 
 `drop [name]` remains independent of this convenience: it resolves against the
-held item and the inventory, then sends the chosen item its direct
-`:set-parent <room>` request.
+held item and the inventory. It sends an already-held item its direct
+`:set-parent <room>` request. For an inventory child it starts the ordinary
+`:hold` handshake with the room as the client-side follow-up target, so Zion
+sends `:set-parent <room>` only after becoming the item's current parent.
 
 ## Container locks
 
