@@ -647,6 +647,9 @@
 
 ; Rooms published before child records were consolidated stored an exit map.
 ; Preserve those exits by deriving equivalent child ctxs during the next load.
+(define (exit-target-key direction) (string-append "exit-target:" direction))
+(define (exit-target-name-key direction) (string-append "exit-target-name:" direction))
+
 (define (legacy-exits)
   (let ((value (get-prop "exits")))
     (if (map? value) value (make-map))))

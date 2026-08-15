@@ -3935,6 +3935,39 @@ mod tests {
     }
 
     #[test]
+    fn room_start_migrates_legacy_exit_properties() {
+        let env = room_env();
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#room".to_string());
+        crate::state::set_config(config);
+
+        eval_all(
+            r#"
+            (set-prop! "exits" (make-map "north" "did:ma:runtime#north-exit"))
+            (set-prop! "exit-target:north" "did:ma:runtime#kitchen")
+            (set-prop! "exit-target-name:north" "Kitchen")
+            (on-signal :start)
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        assert_eq!(
+            eval_str("(exit-target \"north\")", &env),
+            "did:ma:runtime#north-exit"
+        );
+        assert_eq!(
+            eval_str("(exit-room-target \"north\")", &env),
+            "did:ma:runtime#kitchen"
+        );
+        assert_eq!(
+            eval_str("(ctx-text (exit-ctx \"north\") \"target-name\")", &env),
+            "Kitchen"
+        );
+    }
+
+    #[test]
     fn room_exit_init_persists_exit_state() {
         let env = room_env();
         let mut config = std::collections::HashMap::new();
