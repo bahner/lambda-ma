@@ -13,18 +13,13 @@
       (equal? (ctx-text ctx "kind") "container")))
 
 (define (root-orphan-repair-ctx actor)
-  (map-set
-    (map-set
-      (map-set
-        (map-set
-          (map-set
-            (map-set
-              (map-set (make-map) "actor" (canonical-actor actor))
-              "kind" "orphan")
-            "protocol" "/ma/orphan/0.0.1")
-          "parent" (local-self))
-        "name" (canonical-actor actor))
-      "nick" (canonical-actor actor))
+  (make-map
+    "actor" (canonical-actor actor)
+    "kind" "orphan"
+    "protocol" "/ma/orphan/0.0.1"
+    "parent" (local-self)
+    "name" (canonical-actor actor)
+    "nick" (canonical-actor actor)
     "description" "An unavailable orphaned actor."))
 
 (define (root-orphan-ctxs)
@@ -58,14 +53,11 @@
     (if (and (valid-did-url? root-url)
              (valid-did-url? house-url)
              (valid-did-url? scheduler-url))
-        (map-set
-          (map-set
-            (map-set
-              (map-set
-                (map-set (make-map) "runtime" (runtime))
-                "root" root-url)
-              "house" house-url)
-            "scheduler" scheduler-url)
+        (make-map
+          "runtime" (runtime)
+          "root" root-url
+          "house" house-url
+          "scheduler" scheduler-url
           "rev" 1)
         #f)))
 
@@ -88,7 +80,7 @@
         (reply-error msg "usage: :enter?")
         (let ((room (root-service-ref "start")))
           (if room
-              (reply-ok-with msg (map-set (map-set (make-map) "parent" room) "rev" 1))
+              (reply-ok-with msg (make-map "parent" room "rev" 1))
               (reply-error msg "root has no start room configured"))))))
 
 (set-internal-rpc-method! :register

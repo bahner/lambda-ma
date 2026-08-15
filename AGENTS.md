@@ -58,14 +58,13 @@ There is no dedicated ACL capability or handshake for `tell`; the receiving
 actor's own `set-cmd-method!`/`reply-error` decides whether to comply or
 refuse, same as every other verb.
 
-The resolver contract in this profile is deliberately layered. The generic
-stdlib lives at the evaluator/compiler level and provides reusable helpers such
-as list folding, string checks, and `unique-list`. The lambda-ma runtime domain
-lives higher up in the runtime library surface (`runtime.zscheme`): it provides
+The resolver contract in this profile is deliberately layered. The zscheme
+stdlib provides reusable helpers such as list folding, string checks, and
+`unique-list`. The zscheme runtime library lives above it and provides
 object-reference helpers such as `resolve-ref`, which flatten attribute-specific
 scans like `resolve-name`/`resolve-nick`/`resolve-description` down to a list of
-DIDs (deduped by `unique-list`). The avatar layer (`avatar.zscheme`) sits above
-that and translates a human word into a single resolution or a caller-visible
+DIDs (deduped by `unique-list`). Its avatar library sits above that and
+translates a human word into a single resolution or a caller-visible
 ambiguity at the command boundary. It does not invent a new wire protocol; it
 uses the runtime's object-reference result shape and forwards object movement
 verbs to the runtime actor as ordinary RPC or `:set-parent` traffic.

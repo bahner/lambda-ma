@@ -37,18 +37,13 @@
 
 (define (node-ctx-for-parent target-parent)
   (extend-node-ctx
-    (map-set
-    (map-set
-      (map-set
-        (map-set
-          (map-set
-            (map-set
-              (map-set (make-map) "actor" (canonical-actor (self)))
-              "kind" (node-kind))
-            "protocol" (node-protocol))
-          "parent" (canonical-actor target-parent))
-        "name" (node-name))
-      "nick" (node-nick))
+    (make-map
+      "actor" (canonical-actor (self))
+      "kind" (node-kind)
+      "protocol" (node-protocol)
+      "parent" (canonical-actor target-parent)
+      "name" (node-name)
+      "nick" (node-nick)
       "description" (node-description))))
 
 (define (node-ctx)

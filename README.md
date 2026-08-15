@@ -15,18 +15,16 @@ actors/root.ma          local trust anchor and runtime service directory
 actors/house.ma         DID and actor ctx registry and transition coordinator
 actors/room.ma          room presence, exits, presentation, and room policy
 actors/exit.ma          direct DID traversal policy
-avatar.zscheme          local zion vocabulary and world event presentation
-events.zscheme          routing: dispatches incoming events/replies to avatar.zscheme handlers
 kinds/                  kinds used by the generated bootstrap
 scheme-actor/           Scheme layers and the Wasm actor host
 Makefile                publishes sources and generates dist/lambda-ma.yaml
 ```
 
-Load `avatar.zscheme` then `events.zscheme` explicitly into zion's local
-session environment when using this world profile, in that order, since
-`events.zscheme` routes to handlers defined in `avatar.zscheme`. Lambda-ma
-owns its commands and presentation; zion does not bundle or load either file
-automatically.
+The zscheme repository owns the Zion-side `stdlib.zscheme`, `runtime.zscheme`,
+`avatar.zscheme`, and `events.zscheme` libraries. Its combined `.my.z.scheme`
+source provides the ordinary client vocabulary for this profile. Lambda-ma
+owns the actor behaviours and wire contract, not duplicate client-library
+sources.
 
 The bootstrap creates `#root`, `#house`, `#scheduler`, and `#construct`.
 `#root :ctx?` exposes the runtime service directory. Only `#root` is required

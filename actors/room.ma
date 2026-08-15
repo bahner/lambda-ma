@@ -230,16 +230,12 @@
 (register-ctx-props! (list "ctx:rev" "children"))
 
 (define (presentation-entry kind protocol actor name nick description)
-  (map-set
-    (map-set
-      (map-set
-        (map-set
-          (map-set
-            (map-set (make-map) "actor" (canonical-actor actor))
-            "kind" kind)
-          "protocol" protocol)
-        "name" name)
-      "nick" nick)
+  (make-map
+    "actor" (canonical-actor actor)
+    "kind" kind
+    "protocol" protocol
+    "name" name
+    "nick" nick
     "description" description))
 
 (define (claim-or-fallback-entry token actor kind protocol)
@@ -282,34 +278,26 @@
         (reverse acc)
         (loop (cdr xs) (cons (exit-entry-ctx (car xs)) acc)))))
 
+(define (did-entry-map dids)
+  (let loop ((xs dids)
+             (entries (make-map)))
+    (if (null? xs)
+        entries
+        (loop (cdr xs) (map-set entries (car xs) (did-ctx (car xs)))))))
+
 (define (room-ctx)
-  (map-set
-    (map-set
-      (map-set
-        (map-set
-          (map-set
-            (map-set
-              (map-set
-                (map-set
-                  (map-set
-                    (map-set
-                      (map-set
-                        (map-set
-                          (make-map)
-                          "protocol" ROOM_KIND)
-                        "kind" "room")
-                      "actor" (canonical-actor (self)))
-                    "parent" (room-ctx-parent))
-                  "rev" (room-ctx-rev))
-                "name" (room-name))
-              "nick" (room-nick))
-            "description" (room-description))
-            "who" (let loop ((dids (did-occupants)) (entries (make-map)))
-                (if (null? dids)
-                  entries
-                  (loop (cdr dids) (map-set entries (car dids) (did-ctx (car dids)))))))
-        "agents" (agent-entry-list (occupants)))
-      "things" (thing-entry-list (thing-token-names)))
+  (make-map
+    "protocol" ROOM_KIND
+    "kind" "room"
+    "actor" (canonical-actor (self))
+    "parent" (room-ctx-parent)
+    "rev" (room-ctx-rev)
+    "name" (room-name)
+    "nick" (room-nick)
+    "description" (room-description)
+    "who" (did-entry-map (did-occupants))
+    "agents" (agent-entry-list (occupants))
+    "things" (thing-entry-list (thing-token-names))
     "exits" (exit-entry-list (exit-directions))))
 
 (define (node-ctx-for-parent target-parent)
@@ -1304,11 +1292,7 @@
 
 (set-cmd-method! :who?
   (lambda (args msg)
-    (reply-ok-with msg
-      (let loop ((dids (did-occupants)) (entries (make-map)))
-        (if (null? dids)
-            entries
-            (loop (cdr dids) (map-set entries (car dids) (did-ctx (car dids)))))))))
+    (reply-ok-with msg (did-entry-map (did-occupants)))))
 
 (set-cmd-method! :occupants?
   (lambda (args msg)
