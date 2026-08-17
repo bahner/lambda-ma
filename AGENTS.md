@@ -205,17 +205,17 @@ duplication is exactly the kind of thing the DRY rule above exists to catch.
 `hold` — the client-side confirm/clear half of the resulting `:parent`
 proposal (a single-slot "what am I currently the parent of" pointer,
 `.my.ctx.hold`/`.my.ctx.hold-pending`/`.my.ctx.hold-then`) is not part of this
-repository. It is implemented in `ma-zion`'s `src/inbox_poll.rs`
-(`handle_hold_parent_proposal`) and documented in that repository's AGENTS.md
-under "Hold — client-side object-transfer state". `avatar.zscheme`'s
-`hold`/`take`/`take-from` send `:hold` (implicit target); `drop`/`put` send
-`:set-parent`; `recycle-from` sends `:recycle`. None of them confirm the
-resulting `:parent` proposal on their own — that is `inbox_poll.rs`'s job.
+repository. It belongs in the composed zscheme avatar/event layers, never in
+Zion. Zion only forwards the typed `:parent` event to `.z.scheme`;
+`avatar.zscheme` confirms with `:child`, updates the hold state, and sends any
+follow-up `:hold` or `:set-parent`. `hold`/`take`/`take-from`, `drop`/`put`,
+and `recycle-from` are all zscheme policy and must not gain a hardcoded Zion
+dispatch path.
 
 An avatar has one hand. When it requests another item while holding one,
 `avatar.zscheme` silently moves the held item to its existing ordinary
 inventory and stores one replacement request in
-`.my.ctx.hold-queued`/`.my.ctx.hold-queued-then`. Zion starts that ordinary
+`.my.ctx.hold-queued`/`.my.ctx.hold-queued-then`. Zscheme starts that ordinary
 `:hold` only after the held item's authoritative departure notice clears the
 hand. This is avatar-client sequencing, not a container behaviour or a new
 inventory kind.
