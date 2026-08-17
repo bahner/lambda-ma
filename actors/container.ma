@@ -195,7 +195,7 @@
   (lambda (args msg)
     (if (locked?)
         (reply-locked msg)
-        (reply-ok-with msg (map-values (contents-map))))))
+        (reply-ok-with msg (prune-dead-local-children!)))))
 
 (set-rpc-method! :lock
   (lambda (args msg)

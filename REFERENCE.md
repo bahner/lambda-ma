@@ -72,6 +72,25 @@ only ownership-changing verb. `:forge` is the sole creation exception: it
 initialises the newly created actor's owner from `msg.from`. Owner-gated actions
 such as locking a container require a prior claim and never claim implicitly.
 
+An owner may prepare a consent-based transfer with
+`:set-recovery-secret <one-time-secret>`. A later
+`:claim <one-time-secret>` from an authenticated bare DID atomically sets that
+DID as owner and clears the secret; replay therefore fails. Client commands
+such as `give <object> to <person>` may distribute that full claim command in
+an ordinary text message, but no runtime actor changes ownership merely because
+an offer was sent.
+
+## Random values
+
+Scheme actors expose two sibling bounded-integer functions. `(random n)` uses
+the actor-local deterministic PRNG seeded from runtime metadata. It is suitable
+for world behaviour, but not secrets. `(ma-random n)` requests cryptographic
+entropy from the runtime's `ma_random_bytes` host function and returns an
+unbiased integer in `[0, n)`. Both require one positive integer argument.
+
+`ma-random` fails when the kind does not grant `ma_random_bytes` or the host
+cannot provide secure bytes; it never falls back to the actor-local PRNG.
+
 ## Avatar hand and inventory
 
 An avatar has one client-side hold slot. Its inventory is an ordinary container

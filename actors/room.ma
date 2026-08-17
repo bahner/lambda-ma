@@ -689,8 +689,7 @@
   (let ((target-room (exit-room-target direction)))
     (if (and (dead-local-actor? exit) target-room)
         (let ((fragment (exit-fragment direction)))
-          (ma-create-actor EXIT_KIND #f (exit-init direction target-room) fragment)
-          (let ((healed (entity-url fragment)))
+          (let ((healed (ma-create-actor EXIT_KIND #f (exit-init direction target-room) fragment)))
             (remember-child!
               (map-set (exit-ctx direction) "actor" healed))
             (ma-save-state!)
@@ -1085,8 +1084,7 @@
         #f)))
 
 (define (create-exit! direction target-room target-name)
-  (let* ((exit-fragment (ma-create-actor EXIT_KIND #f (exit-init direction target-room target-name) (exit-fragment direction)))
-         (exit (entity-url exit-fragment)))
+  (let ((exit (ma-create-actor EXIT_KIND #f (exit-init direction target-room target-name) (exit-fragment direction))))
     (ma-send! exit (list :report-parent (canonical-actor (self))))
     exit))
 
@@ -1256,10 +1254,10 @@
                               #f))
          (requester (canonical-actor (msg-from msg)))
          (nonce (pending-new-room-nonce direction requester did target))
-         (target-room (entity-url (ma-create-actor ROOM_KIND
-                                                   custom-behaviour
-                                                   (room-init target did custom-init (child-alive-init nonce direction))
-                                                   target-fragment))))
+         (target-room (ma-create-actor ROOM_KIND
+                                       custom-behaviour
+                                       (room-init target did custom-init (child-alive-init nonce direction))
+                                       target-fragment)))
     (remember-pending-new-room! direction target-room requester did target nonce)
     (reply-to-sender msg (string-append "Digging " direction "..."))))
 

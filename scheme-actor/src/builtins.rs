@@ -246,35 +246,40 @@ fn next_random_u64() -> u64 {
     })
 }
 
-fn random_below(n: u64) -> u64 {
-    if n == 1 {
-        return 0;
-    }
-    let zone = u64::MAX - (u64::MAX % n);
-    loop {
-        let value = next_random_u64();
-        if value < zone {
-            return value % n;
-        }
-    }
+fn b_random(args: &[Value]) -> EvalResult<Value> {
+    bounded_random("random", args, || Ok(next_random_u64()))
 }
 
-fn b_random(args: &[Value]) -> EvalResult<Value> {
-    let upper = one_arg("random", args)?;
+pub(crate) fn bounded_random(
+    name: &str,
+    args: &[Value],
+    mut next: impl FnMut() -> EvalResult<u64>,
+) -> EvalResult<Value> {
+    let upper = one_arg(name, args)?;
     let Value::Int(n) = upper else {
         return Err(EvalError::new(format!(
-            "random: expected an integer upper bound, found {}",
+            "{name}: expected an integer upper bound, found {}",
             upper.type_name()
         )));
     };
     if *n <= 0 {
-        return Err(EvalError::new("random: upper bound must be > 0"));
+        return Err(EvalError::new(format!("{name}: upper bound must be > 0")));
     }
-    let n = u64::try_from(*n).map_err(|_| EvalError::new("random: upper bound too large"))?;
-    let value = random_below(n);
-    i64::try_from(value)
-        .map(Value::Int)
-        .map_err(|_| EvalError::new("random: result overflow"))
+    let n =
+        u64::try_from(*n).map_err(|_| EvalError::new(format!("{name}: upper bound too large")))?;
+    if n == 1 {
+        return Ok(Value::Int(0));
+    }
+
+    let zone = u64::MAX - (u64::MAX % n);
+    loop {
+        let value = next()?;
+        if value < zone {
+            return i64::try_from(value % n)
+                .map(Value::Int)
+                .map_err(|_| EvalError::new(format!("{name}: result overflow")));
+        }
+    }
 }
 
 fn numeric_chain(args: &[Value], op: fn(f64, f64) -> bool) -> EvalResult<Value> {

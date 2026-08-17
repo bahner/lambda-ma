@@ -248,7 +248,11 @@
   (let ((stored (recovery-secret))
         (did (claim-caller-did args msg))
         (claim-args (claim-command-args args msg)))
-    (cond ((and (not (owner)) (not stored) (null? claim-args))
+    (cond ((not (valid-did? did))
+           (reply-user-error msg did "claim requires a bare DID sender"))
+          ((not (or (null? claim-args) (null? (cdr claim-args))))
+           (reply-user-error msg did "usage: :claim [secret]"))
+          ((and (not (owner)) (not stored) (null? claim-args))
            (begin
              (set-owner! did)
              (reply-user-ok msg did "claimed")))
@@ -441,6 +445,23 @@
 
 (define (child-ctxs)
   (map-values (children-map)))
+
+(define (prune-dead-local-children!)
+  (let loop ((ctxs (child-ctxs)) (changed #f))
+    (if (null? ctxs)
+        (begin
+          (if changed
+              (begin
+                (ma-save-state!)
+                (node-children-changed!))
+              #f)
+          (child-ctxs))
+        (let ((actor (ctx-text (car ctxs) "actor")))
+          (if (dead-local-actor? actor)
+              (begin
+                (forget-child! actor)
+                (loop (cdr ctxs) #t))
+              (loop (cdr ctxs) changed))))))
 
 (define (child-ctxs-by-kind kind)
   (let loop ((ctxs (child-ctxs)) (acc '()))
@@ -763,10 +784,10 @@
           (else
            (let* ((owner (canonical-actor (msg-from msg)))
                   (behaviour (ctx-text ctx "behaviour"))
-                  (fragment (ma-create-actor (ctx-text ctx "kind")
-                                              (if (non-empty-string? behaviour) behaviour #f)
-                                              (forge-init (ctx-text ctx "name") owner)
-                                              #f)))
-             (reply-ok-with msg (entity-url fragment)))))))
+                (actor (ma-create-actor (ctx-text ctx "kind")
+                                (if (non-empty-string? behaviour) behaviour #f)
+                                (forge-init (ctx-text ctx "name") owner)
+                                #f)))
+             (reply-ok-with msg actor))))))
 
 (set-rpc-method! :forge handle-node-forge)

@@ -11,6 +11,7 @@ mod host {
         fn ma_reply(input: Vec<u8>) -> Vec<u8>;
         fn ma_set_state(input: Vec<u8>) -> Vec<u8>;
         fn ma_set_behaviour(input: Vec<u8>) -> Vec<u8>;
+        fn ma_random_bytes(input: Vec<u8>) -> Vec<u8>;
     }
 
     pub fn send(input: &[u8]) -> Result<(), String> {
@@ -36,6 +37,10 @@ mod host {
             .map(|_| ())
             .map_err(|e| e.to_string())
     }
+
+    pub fn random_bytes(len: usize) -> Result<Vec<u8>, String> {
+        unsafe { ma_random_bytes(len.to_string().into_bytes()) }.map_err(|e| e.to_string())
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -58,6 +63,13 @@ mod host {
     pub fn set_behaviour(_input: &str) -> Result<(), String> {
         Err(
             "ma_set_behaviour is only available compiled to wasm32 (no host to call natively)"
+                .to_string(),
+        )
+    }
+
+    pub fn random_bytes(_len: usize) -> Result<Vec<u8>, String> {
+        Err(
+            "ma_random_bytes is only available compiled to wasm32 (no host to call natively)"
                 .to_string(),
         )
     }
@@ -87,6 +99,10 @@ pub fn install(env: &Rc<Env>) {
         Rc::from("ma-set-behaviour!"),
         Value::Builtin("ma-set-behaviour!", b_ma_set_behaviour),
     );
+    env.define(
+        Rc::from("ma-random"),
+        Value::Builtin("ma-random", b_ma_random),
+    );
 }
 
 pub fn reply_to(msg: &crate::msg::MsgRecord, term: &Value) -> EvalResult<()> {
@@ -96,6 +112,20 @@ pub fn reply_to(msg: &crate::msg::MsgRecord, term: &Value) -> EvalResult<()> {
 
 pub fn set_behaviour_reference(reference: &str) -> EvalResult<()> {
     host::set_behaviour(reference).map_err(|e| EvalError::new(format!("ma-set-behaviour!: {e}")))
+}
+
+fn b_ma_random(args: &[Value]) -> EvalResult<Value> {
+    crate::builtins::bounded_random("ma-random", args, || {
+        let bytes =
+            host::random_bytes(8).map_err(|error| EvalError::new(format!("ma-random: {error}")))?;
+        let bytes: [u8; 8] = bytes.try_into().map_err(|bytes: Vec<u8>| {
+            EvalError::new(format!(
+                "ma-random: host returned {} bytes, expected 8",
+                bytes.len()
+            ))
+        })?;
+        Ok(u64::from_be_bytes(bytes))
+    })
 }
 
 fn b_ma_send(args: &[Value]) -> EvalResult<Value> {
@@ -231,6 +261,14 @@ mod tests {
             content_type: CONTENT_TYPE_TERM.to_string(),
             content: Value::symbol(":ping"),
         }
+    }
+
+    #[test]
+    fn ma_random_fails_closed_without_wasm_host() {
+        let error = b_ma_random(&[Value::Int(10)]).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("ma_random_bytes is only available compiled to wasm32"));
     }
 
     #[test]

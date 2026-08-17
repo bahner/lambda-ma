@@ -142,6 +142,13 @@ non-owner could pick an owned item up but then could never legally put it
 back down. Removed 2026-08-13 — do not re-add an ownership check to
 `:set-parent`.
 
+`give` is a client-side consent flow over the existing recovery-secret
+contract, not a node `:owner` setter. The giver sets a one-time secret and sends
+the intended recipient a plain-text `claim <full-object-did-url> <secret>`
+command. Only the recipient's later authenticated `:claim` changes owner, and
+successful claim clears the secret. Do not add unilateral ownership transfer
+to ordinary movable nodes or automatically execute the offer message.
+
 `:drop` is a distinct, room-only capacity pre-check (`handle-room-drop!` in
 `actors/room.ma`), sent by the avatar to the room before object-transfer
 sequencing begins — it never itself relocates anything. `avatar.zscheme`'s

@@ -134,7 +134,7 @@ fn b_ma_entity_exists(args: &[Value]) -> EvalResult<Value> {
 /// - `fragment` (string or `#f`) — explicit entity fragment to create, when
 ///   the actor owns a deterministic naming scheme.
 ///
-/// Returns the new entity's generated fragment (a string) on success.
+/// Returns the new entity's full DID-URL (a string) on success.
 /// Actual plugin loading happens after the current dispatch returns
 /// (ma-runtime-v1.md's `ma_create_entity` semantics) — a successful return
 /// here means the request was queued, not that the entity is live yet.
@@ -196,12 +196,17 @@ fn b_ma_create_actor(args: &[Value]) -> EvalResult<Value> {
 
     let out =
         host::create_entity(&buf).map_err(|e| EvalError::new(format!("ma-create-actor: {e}")))?;
-    let fragment: String = ciborium::de::from_reader(out.as_slice()).map_err(|e| {
+    let actor: String = ciborium::de::from_reader(out.as_slice()).map_err(|e| {
         EvalError::new(format!(
-            "ma-create-actor: decoding fragment reply failed: {e}"
+            "ma-create-actor: decoding actor DID-URL reply failed: {e}"
         ))
     })?;
-    Ok(Value::Str(Rc::from(fragment.as_str())))
+    if !actor.starts_with("did:ma:") || !actor.contains('#') {
+        return Err(EvalError::new(
+            "ma-create-actor: host returned an invalid actor DID-URL",
+        ));
+    }
+    Ok(Value::Str(Rc::from(actor.as_str())))
 }
 
 /// `#f` (or, permissively, `'()`) means "not given"; a string is passed

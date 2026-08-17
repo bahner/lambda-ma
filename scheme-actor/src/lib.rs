@@ -171,7 +171,7 @@ mod tests {
         eval_all(include_str!("../node.ma"), &env).unwrap();
         eval_all(include_str!("../../actors/container.ma"), &env).unwrap();
         eval_all(
-            "(define (ma-send! target term) #f) (define (ma-reply! msg term) #f) (define (ma-save-state!) #f) (define (ma-end) (set-prop! \"ended\" \"yes\"))",
+            "(define (ma-send! target term) #f) (define (ma-reply! msg term) #f) (define (ma-save-state!) #f) (define (ma-entity-exists? actor) #t) (define (ma-end) (set-prop! \"ended\" \"yes\"))",
             &env,
         )
         .unwrap();
@@ -696,7 +696,7 @@ mod tests {
               (set-prop! "forge-behaviour" (if behaviour behaviour "none"))
               (set-prop! "forge-init" init)
               (set-prop! "forge-fragment" (if fragment fragment "none"))
-              "newthing1")
+              "did:ma:runtime#newthing1")
             "#,
             &env,
         )
@@ -2517,6 +2517,86 @@ mod tests {
     }
 
     #[test]
+    fn thing_owner_can_offer_one_time_claim_to_bare_did() {
+        let env = thing_env();
+        install_send_reply_recorders(&env);
+        env.define(
+            Rc::from("owner_msg"),
+            Value::Msg(sample_msg("did:ma:bob", "did:ma:runtime#duckie")),
+        );
+        env.define(
+            Rc::from("alice_msg"),
+            Value::Msg(sample_msg("did:ma:alice", "did:ma:runtime#duckie")),
+        );
+        env.define(
+            Rc::from("eve_msg"),
+            Value::Msg(sample_msg("did:ma:eve", "did:ma:runtime#duckie")),
+        );
+        eval_all(
+            r#"
+            (set-owner! "did:ma:bob")
+            ((find-method :set-recovery-secret) (list "one-time-token") owner_msg)
+            ((find-method :claim) (list "one-time-token") alice_msg)
+            ((find-method :claim) (list "one-time-token") eve_msg)
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        assert_eq!(eval_str("(owner)", &env), "did:ma:alice");
+        assert!(eval_bool("(not (recovery-secret))", &env));
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:2\")", &env).unwrap(),
+            Value::list(vec![Value::symbol(":ok"), Value::str("claimed")])
+        );
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:3\")", &env).unwrap(),
+            Value::list(vec![Value::symbol(":error"), Value::str("claim failed")])
+        );
+    }
+
+    #[test]
+    fn thing_claim_offer_rejects_non_owner_setup_and_extra_arguments() {
+        let env = thing_env();
+        install_send_reply_recorders(&env);
+        env.define(
+            Rc::from("owner_msg"),
+            Value::Msg(sample_msg("did:ma:bob", "did:ma:runtime#duckie")),
+        );
+        env.define(
+            Rc::from("alice_msg"),
+            Value::Msg(sample_msg("did:ma:alice", "did:ma:runtime#duckie")),
+        );
+        eval_all(
+            r#"
+            (set-owner! "did:ma:bob")
+            ((find-method :set-recovery-secret) (list "stolen-token") alice_msg)
+            ((find-method :set-recovery-secret) (list "real-token") owner_msg)
+            ((find-method :claim) (list "real-token" "extra") alice_msg)
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        assert_eq!(eval_str("(owner)", &env), "did:ma:bob");
+        assert_eq!(eval_str("(recovery-secret)", &env), "real-token");
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
+            Value::list(vec![
+                Value::symbol(":error"),
+                Value::str("only owner may set recovery secret")
+            ])
+        );
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:3\")", &env).unwrap(),
+            Value::list(vec![
+                Value::symbol(":error"),
+                Value::str("usage: :claim [secret]")
+            ])
+        );
+    }
+
+    #[test]
     fn agent_does_not_route_new_move_while_entry_pending() {
         let env = agent_env();
         env.define(
@@ -3319,6 +3399,52 @@ mod tests {
         assert_eq!(
             eval_all("(get-prop \"reply-term:4\")", &env).unwrap(),
             Value::list(vec![Value::symbol(":ok"), Value::list(vec![])])
+        );
+    }
+
+    #[test]
+    fn container_contents_prune_dead_local_actor_urls() {
+        let env = container_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#bag".to_string());
+        crate::state::set_config(config);
+        eval_all(
+            r#"
+            (define (ma-entity-exists? actor)
+              (not (equal? actor "did:ma:runtime#dead")))
+            (remember-child! (make-map "actor" "did:ma:runtime#dead"))
+            (remember-child! (make-map "actor" "did:ma:elsewhere#remote"))
+            "#,
+            &env,
+        )
+        .unwrap();
+        env.define(
+            Rc::from("contents_msg"),
+            Value::Msg(sample_msg("did:ma:owner", "did:ma:runtime#bag")),
+        );
+
+        eval_all("((find-method :contents?) '() contents_msg)", &env).unwrap();
+
+        assert!(eval_bool(
+            r#"(not (child-ctx "did:ma:runtime#dead"))"#,
+            &env
+        ));
+        assert!(eval_bool(
+            r#"(map? (child-ctx "did:ma:elsewhere#remote"))"#,
+            &env
+        ));
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
+            Value::list(vec![
+                Value::symbol(":ok"),
+                Value::list(vec![eval_all(
+                    r#"(child-ctx "did:ma:elsewhere#remote")"#,
+                    &env,
+                )
+                .unwrap()])
+            ])
         );
     }
 

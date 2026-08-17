@@ -9,6 +9,7 @@ attributes:
 host_functions:
   - ma_reply
   - ma_send
+  - ma_random_bytes
   - ma_ipfs_include
   - ma_create_entity
   - ma_entity_exists
