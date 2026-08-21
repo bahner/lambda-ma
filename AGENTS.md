@@ -30,9 +30,13 @@ exists.
 - Clients route focused room commands directly to the confirmed room DID-URL.
 - `msg.from` is the sole authenticated fact. Ctx and revisions are not
   authentication; revisions only order authoritative snapshots and retries.
-- Every room node, including a bare DID, is stored in the single authoritative
-  `children` map. Bare DIDs have no identity entity, but their child ctx is
-  still room state.
+- Every node has exactly one authoritative child-ctx collection: `children`.
+  This includes every room node and bare DID. Never add parallel child lists
+  split by kind, lifecycle/state, inventory, occupancy, or another category.
+  Bare DIDs have no identity entity, but their child ctx is still room state.
+  Kind/state/presentation views must be derived by filtering `children`; a
+  second source of truth invites divergence in parentage, ctx updates,
+  persistence, and removal and is an interoperability risk.
 
 ## RPC and events
 
@@ -150,20 +154,12 @@ successful claim clears the secret. Do not add unilateral ownership transfer
 to ordinary movable nodes or automatically execute the offer message.
 
 `:drop` is a distinct, room-only capacity pre-check (`handle-room-drop!` in
-`actors/room.ma`), sent by the avatar to the room before object-transfer
-sequencing begins — it never itself relocates anything. `avatar.zscheme`'s
-`drop` calls it first and lets a refusal raise before any transfer request.
-An item already in hand receives the ordinary `:set-parent <room>` call. A
-named inventory child must instead go through `:hold` with the room as its
-client-side `hold-then` target; after confirmation Zion sends `:set-parent`
-as the item's current parent. `drop` takes an *optional* name, resolved
-against both the hand (whatever `.my.ctx.hold` currently holds, using the
-ctx cached client-side at `hold`/`take` time) and your own inventory
-contents — `resolve-in-given-pool` over `drop-pool`, not the fixed room+
-inventory pools `resolve-ref` always searches. With no name it acts on
-whatever is in hand, same as before. `put`/`put-in` (arbitrary container
-targets) are unaffected and still act on whatever is in hand only; containers
-have no equivalent capacity gate yet.
+`actors/room.ma`), sent by the avatar to the room before object transfer
+begins — it never itself relocates anything. Object relocation then uses the
+ordinary `:set-parent <room> [ctx]` request, with the actor-provided ctx as
+the authority. `put`/`put-in` likewise address the object directly with its
+target parent and ctx; neither command requires a client-side hand slot or
+queued follow-up.
 
 ### Parent-ctx caching
 
@@ -202,23 +198,17 @@ are not shared with node.ma. Before duplicating any cond-based handler body
 across kind files, check whether it belongs in `node.ma` instead — that
 duplication is exactly the kind of thing the DRY rule above exists to catch.
 
-`hold` — the client-side confirm/clear half of the resulting `:parent`
-proposal (a single-slot "what am I currently the parent of" pointer,
-`.my.ctx.hold`/`.my.ctx.hold-pending`/`.my.ctx.hold-then`) is not part of this
-repository. It belongs in the composed zscheme avatar/event layers, never in
-Zion. Zion only forwards the typed `:parent` event to `.z.scheme`;
-`avatar.zscheme` confirms with `:child`, updates the hold state, and sends any
-follow-up `:hold` or `:set-parent`. `hold`/`take`/`take-from`, `drop`/`put`,
-and `recycle-from` are all zscheme policy and must not gain a hardcoded Zion
-dispatch path.
+Transfer is carried by actor-provided `ctx` values and the ordinary
+`:parent`/`:child` handshake. Transfer state is carried by the actor ctx, not
+by a client-side queue. Zion only forwards typed events;
+the composed zscheme layer acknowledges `:parent` with the received ctx and
+issues ordinary `:hold` or `:set-parent` requests. `hold`/`take`/`take-from`,
+`drop`/`put`, and `recycle-from` remain zscheme policy and must not gain a
+hardcoded Zion dispatch path.
 
-An avatar has one hand. When it requests another item while holding one,
-`avatar.zscheme` silently moves the held item to its existing ordinary
-inventory and stores one replacement request in
-`.my.ctx.hold-queued`/`.my.ctx.hold-queued-then`. Zscheme starts that ordinary
-`:hold` only after the held item's authoritative departure notice clears the
-hand. This is avatar-client sequencing, not a container behaviour or a new
-inventory kind.
+An avatar may request any object transfer directly. The actor ctx and
+parent/child handshake carry the authoritative relationship; no local hand
+slot or queued replacement is required.
 
 ## Scheme actor
 

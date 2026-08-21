@@ -44,18 +44,12 @@
       #f)
   (ma-save-state!))
 
-(define (contents-map)
-  (children-map))
-
-(define (set-contents-map! contents)
-  (set-children-map! contents))
-
 (define (content-lines entries)
   (cond ((null? entries) '())
         (else (cons (child-line (car entries)) (content-lines (cdr entries))))))
 
 (define (contents-text)
-  (let ((lines (content-lines (map->alist (contents-map)))))
+  (let ((lines (content-lines (map->alist (children-map)))))
     (if (null? lines)
         "Contents: none."
         (string-append "Contents:\n" (actor-entry-lines lines)))))
@@ -65,9 +59,7 @@
     (if (number? value) value 0)))
 
 (define (extend-node-ctx ctx)
-  (map-set
-    (map-set ctx "rev" (container-ctx-rev))
-    "contents" (contents-map)))
+  (map-set ctx "rev" (container-ctx-rev)))
 
   (register-ctx-props! (list "ctx:rev" "children"))
 

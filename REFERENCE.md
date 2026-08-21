@@ -91,20 +91,14 @@ unbiased integer in `[0, n)`. Both require one positive integer argument.
 `ma-random` fails when the kind does not grant `ma_random_bytes` or the host
 cannot provide secure bytes; it never falls back to the actor-local PRNG.
 
-## Avatar hand and inventory
+## Avatar transfer and inventory
 
-An avatar has one client-side hold slot. Its inventory is an ordinary container
-created and owned by that avatar; it has no special runtime kind or container
-behaviour. When the avatar requests another item while its hand is occupied, it
-silently sends the held item its ordinary `:set-parent <inventory>` request.
-After Zion receives the item's authoritative departure notice and clears the
-hold slot, it sends the queued ordinary `:hold` request for the next item.
-
-`drop [name]` remains independent of this convenience: it resolves against the
-held item and the inventory. It sends an already-held item its direct
-`:set-parent <room>` request. For an inventory child it starts the ordinary
-`:hold` handshake with the room as the client-side follow-up target, so Zion
-sends `:set-parent <room>` only after becoming the item's current parent.
+An avatar's inventory is an ordinary container created and owned by that
+avatar; it has no special runtime kind or container behaviour. Transfer
+relationships are authoritative in actor ctx values and the parent/child
+handshake. Clients do not maintain a hold slot, pending transfer, queue, or
+follow-up state. `hold` and `put` issue ordinary actor requests using the ctx
+received from the relevant actor.
 
 ## Container locks
 

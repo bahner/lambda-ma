@@ -609,6 +609,28 @@ mod tests {
             eval_int("(get-prop \"reply-count\")", &env),
             first_reply_count + 1
         );
+
+        let refreshed_ctx = eval_all(
+            "(map-set (node-ctx) \"description\" \"refreshed\")",
+            &env,
+        )
+        .unwrap();
+        env.define(
+            Rc::from("refreshed_parent_msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:runtime#dog",
+                "did:ma:runtime#collar",
+                Value::list(vec![Value::symbol(":child"), refreshed_ctx]),
+            )),
+        );
+
+        eval_all("(on-message refreshed_parent_msg)", &env).unwrap();
+
+        assert_eq!(
+            eval_int("(get-prop \"sent-count\")", &env),
+            first_sent_count
+        );
+        assert_eq!(eval_str("(node-description)", &env), "refreshed");
     }
 
     #[test]
@@ -1978,7 +2000,7 @@ mod tests {
                                         "nick" "Vadsekk")
                                     "description" "A sturdy canvas bag.")
                                 "rev" 2)
-                            "contents" (make-map))
+                                "children" (make-map))
                         "#,
                         &env,
                 )
@@ -3320,8 +3342,8 @@ mod tests {
     fn container_contents_reflect_admitted_and_departed_children() {
         // :put-in/:take-from no longer exist — items admit themselves into a
         // container via the generic :parent/:child handshake (:set-parent on
-        // the item side), and :contents? is just container.ma's contents-map
-        // alias for node.ma's shared children-map. This exercises that wiring
+        // the item side), and :contents? reads container.ma's live children-map.
+        // This exercises that wiring
         // directly, without re-testing the handshake itself (already covered
         // by the node_* admission/departure tests).
         let env = container_env();
@@ -3330,6 +3352,10 @@ mod tests {
         config.insert("runtime".to_string(), "did:ma:runtime".to_string());
         config.insert("self".to_string(), "did:ma:runtime#bag".to_string());
         crate::state::set_config(config);
+        assert!(!eval_bool(
+            "(map-has-key? (container-ctx) \"contents\")",
+            &env
+        ));
         let child_ctx = eval_all(
             r#"
             (map-set

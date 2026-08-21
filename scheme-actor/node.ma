@@ -339,6 +339,19 @@
                          (car (cdr (cdr args))))))
         (else #f)))
 
+; A parent may ask a child to reannounce its authoritative ctx during a
+; human-controlled container roll call. The response uses the ordinary
+; :parent/:child handshake, so the parent keeps one authoritative children map.
+(define (handle-node-roll-call-child! args msg)
+  (cond ((not (null? args))
+         (reply-error msg "usage: :roll-call-child"))
+        ((not (node-caller-is-parent? msg))
+         (reply-error msg "roll-call-child must be requested by current parent"))
+        (else
+         (begin
+           (announce-node-parent!)
+           (reply-ok msg)))))
+
 (define (children-map)
   (prop-map "children"))
 
@@ -434,7 +447,97 @@
   (set-children-map!
     (map-set (children-map)
              (canonical-actor (ctx-text ctx "actor"))
-             ctx)))
+             ctx))
+  (roll-call-note-child! ctx))
+
+(define (roll-call-active?)
+  (equal? (get-prop "roll-call-active") "true"))
+
+(define (roll-call-authorised? msg)
+  (or (owner-caller? msg) (node-caller-is-parent? msg)))
+
+(define (roll-call-status)
+  (get-prop "roll-call-status"))
+
+(define (roll-call-status-text)
+  (let loop ((entries (map->alist (children-map))) (lines ""))
+    (if (null? entries)
+        lines
+        (let ((ctx (cdr (car entries))))
+          (let ((actor (ctx-text ctx "actor")))
+            (let ((label (if (non-empty-string? (ctx-text ctx "name"))
+                             (ctx-text ctx "name")
+                             actor)))
+              (let ((ready (if (map? (roll-call-status))
+                               (map-ref (roll-call-status)
+                                        (canonical-actor actor)
+                                        #f)
+                               #f)))
+                (loop (cdr entries)
+                      (string-append lines
+                                     (if (equal? lines "") "" "\n")
+                                     label ": "
+                                     (if ready "#t" "#f")))))))))))
+
+(define (roll-call-note-child! ctx)
+  (let ((status (roll-call-status))
+        (actor (ctx-text ctx "actor")))
+    (if (and (roll-call-active?) (map? status) (non-empty-string? actor))
+        (begin
+          (set-prop! "roll-call-status"
+                     (map-set status (canonical-actor actor) #t))
+          (ma-save-state!))
+        #f)))
+
+(define (roll-call-begin! msg seconds)
+  (if (roll-call-active?)
+      (reply-error msg "roll-call already active")
+      (let loop ((entries (map->alist (children-map))) (status (make-map)))
+        (if (null? entries)
+            (begin
+              (set-prop! "roll-call-status" status)
+              (set-prop! "roll-call-active" "true")
+              (ma-save-state!)
+              (let send ((children (map-values (children-map))))
+                (if (null? children)
+                  (begin
+                    (if (and (number? seconds) (> seconds 0))
+                      (roll-call-schedule-end! seconds)
+                      #f)
+                    (reply-ok-with msg "roll-call begun"))
+                    (begin
+                      (ma-send! (canonical-actor (ctx-text (car children) "actor"))
+                                (list :roll-call-child))
+                      (send (cdr children))))))
+            (loop (cdr entries)
+                  (map-set status
+                           (canonical-actor (ctx-text (cdr (car entries)) "actor"))
+                           #f))))))
+
+(define (roll-call-schedule-end! seconds)
+  (ma-send! (entity-url "scheduler")
+            (list "roll-call-end" :delay seconds (list :roll-call "end"))))
+
+(define (roll-call-end! msg)
+  (if (not (roll-call-active?))
+      (reply-error msg "no roll-call active")
+      (let ((status (roll-call-status)))
+        (let loop ((entries (map->alist (children-map))) (kept (make-map)))
+          (if (null? entries)
+              (begin
+                (set-children-map! kept)
+                (set-prop! "roll-call-status" "")
+                (set-prop! "roll-call-active" "")
+                (ma-save-state!)
+                (node-children-changed!)
+                (reply-ok-with msg "roll-call ended"))
+              (let* ((entry (car entries))
+                     (actor (canonical-actor (car entry)))
+                     (ctx (cdr entry)))
+                (loop (cdr entries)
+                      (if (and (map? status) (map-ref status actor #f))
+                          (map-set kept actor ctx)
+                          kept))))))))
 
 (define (forget-child! actor)
   (set-children-map!
@@ -747,9 +850,14 @@
          (reply-error msg "child ctx must name self and come from target parent"))
           ((node-confirmation-stale? (car args))
            (reply-ok msg))
-        ((and (same-actor? (node-parent) (ctx-text (car args) "parent"))
-              (equal? (node-ctx) (map-delete (car args) "parent-ctx")))
-         (begin (set-parent-ctx! (car args)) (reply-ok msg)))
+        ((same-actor? (node-parent) (ctx-text (car args) "parent"))
+         (begin
+           ; A parent may refresh a child's ctx (for example after its own
+           ; contents or revision changes). The relationship is already
+           ; committed, so refresh locally without announcing it again.
+           (apply-node-parent-ctx! (map-delete (car args) "parent-ctx"))
+           (set-parent-ctx! (car args))
+           (reply-ok msg)))
         (else
          (begin
            (commit-node-parent! (car args))
@@ -759,7 +867,30 @@
 (set-rpc-method! :parent? handle-node-parent?)
 (set-rpc-method! :children? handle-node-children?)
 (set-meta-method! :child handle-node-child)
+(set-internal-rpc-method! :roll-call-child handle-node-roll-call-child!)
 (set-internal-rpc-method! :orphan-root handle-node-root-orphan!)
+(set-rpc-method! :roll-call
+  (lambda (args msg)
+    (cond ((not (or (roll-call-authorised? msg)
+                    (and (not (null? args))
+                         (equal? (car args) "end")
+                         (same-actor? (msg-from msg) (self)))))
+           (reply-error msg "only owner or current parent may roll-call"))
+          ((not (or (null? args)
+                    (and (equal? (car args) "end")
+                         (null? (cdr args)))
+                    (and (equal? (car args) "begin")
+                         (or (null? (cdr args))
+                             (and (null? (cdr (cdr args)))
+                                  (number? (car (cdr args))))))))
+           (reply-error msg "usage: :roll-call [begin [seconds]|end]"))
+          ((and (null? args) (not (roll-call-active?)))
+           (reply-error msg "no roll-call active"))
+          ((and (null? args) (roll-call-active?))
+           (reply-ok-with msg (roll-call-status-text)))
+          ((equal? (car args) "begin")
+           (roll-call-begin! msg (if (null? (cdr args)) #f (car (cdr args)))))
+          (else (roll-call-end! msg)))))
 
 ; ma-lambda-ma-v1.md §7: forge ctx MUST have kind/name, MUST NOT carry an
 ; owner or caller-supplied init — owner is always msg-from, parent is self.
