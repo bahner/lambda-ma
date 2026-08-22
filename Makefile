@@ -31,12 +31,15 @@ BOOTSTRAP_KIND_FILES := \
 	kinds/ma-scheme-container.yaml \
 	kinds/ma-scheduler.yaml
 
-.PHONY: all publish root-cid kinds-cid bootstrap check clean show-cids FORCE
+.PHONY: all publish root-cid kinds-cid bootstrap check clean show-cids fmt test FORCE
 
 all: $(OUT)
 
 fmt:
-	$(MAKE) -C scheme-actor
+	$(MAKE) -C scheme-actor fmt
+
+test:
+	$(MAKE) -C "$(SCHEME_ACTOR_DIR)" test
 
 publish: $(SCHEME_ACTOR_CID_FILE) $(SCHEME_STDLIB_CID_FILE) $(SCHEME_ACTOR_LIB_CID_FILE) $(SCHEME_STATE_CID_FILE) $(SCHEME_NODE_CID_FILE) $(CID_FILES) $(KINDS_CID_FILE)
 
