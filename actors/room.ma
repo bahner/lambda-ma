@@ -679,8 +679,9 @@
   (let ((ctx (exit-ctx direction)))
     (if ctx (ctx-text ctx "target-room") #f)))
 
-(define (named-room-fragment direction target-name)
-  (blake3 (string-append "lambda-ma room v2\n" (canonical-actor (self)) "\n" direction "\n" target-name) 8))
+; Paired with exit-fragment: same input + "\ndst" suffix.
+(define (room-fragment direction)
+  (blake3 (string-append "lambda-ma exit v2\n" (canonical-actor (self)) "\n" direction "\ndst") 8))
 
 (define (exit-fragment direction)
   (blake3 (string-append "lambda-ma exit v2\n" (canonical-actor (self)) "\n" direction) 8))
@@ -1078,8 +1079,8 @@
 (define (remembered-new-room-target direction target-name)
   (let ((ctx (exit-ctx direction)))
     (if (and ctx
-             target-name
-             (equal? (ctx-text ctx "target-name") target-name))
+             (or (not target-name)
+                 (equal? (ctx-text ctx "target-name") target-name)))
         (ctx-text ctx "target-room")
         #f)))
 
@@ -1261,9 +1262,7 @@
 ; Start a new-room dig and persist pending state until the child-alive callback
 ; arrives from the freshly created room.
 (define (request-new-room! msg did direction target custom-init custom-behaviour)
-  (let* ((target-fragment (if (and target (not custom-init) (not custom-behaviour))
-                              (named-room-fragment direction target)
-                              #f))
+  (let* ((target-fragment (room-fragment direction))
          (requester (canonical-actor (msg-from msg)))
          (nonce (pending-new-room-nonce direction requester did target))
          (target-room (ma-create-actor ROOM_KIND

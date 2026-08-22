@@ -4451,33 +4451,23 @@ mod tests {
     }
 
     #[test]
-    fn room_named_dig_fragments_are_deterministic() {
+    fn room_fragment_is_deterministic_by_direction() {
         let env = room_env();
         let mut config = std::collections::HashMap::new();
         config.insert("runtime".to_string(), "did:ma:k51runtime".to_string());
         config.insert("self".to_string(), "#source".to_string());
         crate::state::set_config(config);
 
-        let kitchen = eval_str("(named-room-fragment \"dør\" \"køkken\")", &env);
-        assert_eq!(kitchen.len(), 16);
-        assert!(kitchen.chars().all(|c| c.is_ascii_hexdigit()));
-        assert_eq!(
-            kitchen,
-            eval_str("(named-room-fragment \"dør\" \"køkken\")", &env)
-        );
-        assert_ne!(
-            kitchen,
-            eval_str("(named-room-fragment \"vindu\" \"køkken\")", &env)
-        );
-        assert_ne!(
-            kitchen,
-            eval_str("(named-room-fragment \"dør\" \"stue\")", &env)
-        );
+        let door_frag = eval_str("(room-fragment \"dør\")", &env);
+        assert_eq!(door_frag.len(), 16);
+        assert!(door_frag.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(door_frag, eval_str("(room-fragment \"dør\")", &env));
+        assert_ne!(door_frag, eval_str("(room-fragment \"vindu\")", &env));
 
         let exit = eval_str("(exit-fragment \"dør\")", &env);
         assert_eq!(exit.len(), 16);
         assert_eq!(exit, eval_str("(exit-fragment \"dør\")", &env));
-        assert_ne!(exit, kitchen);
+        assert_ne!(exit, door_frag);
     }
 
     #[test]

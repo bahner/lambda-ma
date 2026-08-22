@@ -994,9 +994,10 @@ fn stdlib_ctx_shape_valid_requires_kind_parent_protocol() {
 }
 
 #[test]
-fn stdlib_actor_ctx_shape_requires_name_nick_description() {
+fn stdlib_actor_ctx_shape_requires_only_name() {
     let env = stdlib_env();
 
+    // Full ctx with all optional fields is valid.
     assert!(eval_bool(
         r#"(actor-ctx-shape?
               (make-map "kind"        "thing"
@@ -1008,14 +1009,24 @@ fn stdlib_actor_ctx_shape_requires_name_nick_description() {
         &env
     ));
 
-    // Missing description.
-    assert!(!eval_bool(
+    // Only name — no nick or description — is still valid.
+    assert!(eval_bool(
         r#"(actor-ctx-shape?
               (make-map "kind"     "thing"
                         "parent"   "did:ma:runtime#room"
                         "protocol" "/ma/thing/0.0.1"
-                        "name"     "Lamp"
-                        "nick"     "lamp"))"#,
+                        "name"     "Lamp"))"#,
+        &env
+    ));
+
+    // Missing name entirely is invalid.
+    assert!(!eval_bool(
+        r#"(actor-ctx-shape?
+              (make-map "kind"        "thing"
+                        "parent"      "did:ma:runtime#room"
+                        "protocol"    "/ma/thing/0.0.1"
+                        "nick"        "lamp"
+                        "description" "A warm desk lamp."))"#,
         &env
     ));
 }
