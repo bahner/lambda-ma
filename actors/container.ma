@@ -105,9 +105,7 @@
     (if (and (member-string? "ctx:rev" keys)
              (null? (cdr keys)))
         (announce-node-parent!)
-        (begin
-          (announce-ctx-to-root!)
-          (send-container-ctx!))))
+        (send-container-ctx!)))
 
   (define (node-child-admission-error ctx msg)
     (cond ((or (locked?) (closed?)) (locked-message))
@@ -366,9 +364,7 @@
 
 (define (on-signal term)
   (cond ((equal? (verb-of term) :start)
-         (begin
-           (announce-ctx-to-root!)
-           (send-container-ctx!)))
+         (send-container-ctx!))
         ((equal? (verb-of term) :shutdown)
          (ma-save-state!))
         (else #f)))

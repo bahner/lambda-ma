@@ -13,7 +13,7 @@
   (del-init-prop! "parent"))
   (ma-save-state!))
 
-(register-ctx-props! (list "parent" "name" "nick" "description"))
+(register-ctx-props! (list "parent" "name" "nick" "description" "here"))
 
 (define (node-protocol)
   (let ((value (ma-get-config-key "kind")))
@@ -339,8 +339,26 @@
         #f
         (ma-send! current (list :parent (node-ctx))))))
 
-(define (announce-ctx-to-root!)
-  (ma-send! (root) (list :ctx (node-ctx))))
+; Unconditional fire-and-forget cascade: every child learns its current room.
+(define (handle-node-here! args msg)
+  (cond ((null? args)
+         (reply-error msg "usage: :here <room-did-url>"))
+        ((not (node-caller-is-parent? msg))
+         (reply-error msg "only parent may send :here"))
+        ((not (valid-did-url? (car args)))
+         (reply-error msg ":here requires a room DID-URL"))
+        (else
+         (begin
+           (set-prop! "here" (car args))
+           (ma-save-state!)
+           (let loop ((ctxs (child-ctxs)))
+             (when (not (null? ctxs))
+               (ma-send! (canonical-actor (ctx-text (car ctxs) "actor"))
+                         (list :here (car args)))
+               (loop (cdr ctxs))))
+           (reply-ok msg)))))
+
+(set-meta-method! :here handle-node-here!)
 
 ; A room repair asks a child with the short existing :report-parent form to
 ; reannounce through the normal parent handshake. The scheduler's older
@@ -848,9 +866,7 @@
       (if (and (non-empty-string? old-parent)
                (not (same-actor? old-parent new-parent)))
           (ma-send! old-parent (list :parent (node-ctx)))
-          #f)
-      ; Inform root of new location so it can update its spatial registry.
-      (announce-ctx-to-root!))))
+          #f))))
 
 (define (handle-node-child args msg)
   (cond ((null? args)

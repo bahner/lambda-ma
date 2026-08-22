@@ -10,7 +10,10 @@
 ; Lambda-ma identity helpers. Room ownership is directly DID based.
 
 (define (self) (ma-get-config-key "self"))
-(define (runtime) (ma-get-config-key "runtime"))
+; derive current runtime from spatial here-prop; fall back to plugin load-time config
+(define (runtime)
+  (or (actor-runtime (get-prop "here"))
+      (ma-get-config-key "runtime")))
 (define (root)
   (let ((configured (ma-get-config-key "root")))
     (if configured configured (entity-url "root"))))

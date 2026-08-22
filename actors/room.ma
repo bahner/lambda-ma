@@ -431,6 +431,7 @@
           (ma-save-state!)
           (ma-send! (canonical-actor actor) (direct-room-ctx "agent" nick (arrival-text)))
           (broadcast-room-ctx!)
+          (ma-send! actor (list :here (self)))
           (ma-reply! msg (list :ok "entered"))))))
 
 (define (handle-thing-enter! msg did ctx name)
@@ -457,6 +458,7 @@
            (set-thing! token actor)
            (if was-known #f (broadcast-term (list :arrive ctx)))
            (broadcast-room-ctx!)
+           (ma-send! actor (list :here (self)))
            (ma-reply! msg (list :ok "entered"))))))
 
 (define (child-parent-target ctx)
@@ -1659,7 +1661,6 @@
          (begin
            (migrate-legacy-exits!)
            (ma-save-state!)
-           (announce-ctx-to-root!)
            (propose-node-parent! (room-ctx-parent))))
         ((equal? (verb-of term) :shutdown)
          (ma-save-state!))
