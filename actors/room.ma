@@ -929,18 +929,18 @@
 (define (require-valid-owner did msg thunk)
   (if (valid-owner? did)
       (thunk)
-      (reply-to-sender msg "Owner must be a DID.")))
+      (reply-error msg "Owner must be a DID.")))
 
 ; Exit building keeps its historical messages; ownership transfer uses the
 ; narrower helper below so :owner does not mention building exits.
 (define (require-owner msg thunk)
   (cond ((not (owned?))
-         (reply-to-sender msg "This room is unowned. Claim it before building here."))
+         (reply-error msg "This room is unowned. Claim it before building here."))
    ((not (valid-owner? (owner)))
-    (reply-to-sender msg "Owner must be a DID."))
+    (reply-error msg "Owner must be a DID."))
    ((owner-message? msg) (thunk))
         (else
-         (reply-to-sender msg "Only this room's owner can build exits here."))))
+         (reply-error msg "Only this room's owner can build exits here."))))
 
 (define (require-owner-transfer msg thunk)
   (cond ((not (owned?))
@@ -1170,7 +1170,8 @@
     (set-prop! (pending-link-requester-key direction) requester)
     (ma-save-state!)
     (ma-send! (canonical-actor target-room) (list :ping did direction requester))
-    (reply-to-sender msg (string-append "Checking reachability of " target-room "."))))
+    (reply-to-sender msg (string-append "Checking reachability of " target-room "."))
+    (reply-ok msg)))
 
 (define (pending-link-matches? direction did target-room requester)
   (and (same-actor? (get-prop (pending-link-key direction)) target-room)
@@ -1239,12 +1240,23 @@
 (define (ping-direction term) (car (cdr (cdr term))))
 (define (ping-requester term) (car (cdr (cdr (cdr term)))))
 
-; After a successful dig, the requesting DID may immediately enter
-; the newly linked target if it is still present in the source room.
+; After a successful dig, move the requester into the target room.
+; Full bare DIDs from claim-ctx are used throughout — msg-from of ma-send! is
+; always a DID-URL so the bare-DID `:enter` path is unreachable from here.
 (define (enter-dig-target! requester did target-room)
   (if (member-entry? requester (occupants))
-  (ma-send! (canonical-actor target-room) (list :enter did (canonical-actor requester) (canonical-actor (self)) (speaker-name requester)))
-      #f))
+    (let* ((ctx (claim-ctx requester))
+           (entry-ctx (if (map? ctx)
+                          (map-set ctx "parent" (canonical-actor target-room))
+                          #f)))
+      (when entry-ctx
+        (let ((leave-ctx ctx))
+          (forget-child! requester)
+          (ma-save-state!)
+          (when (map? leave-ctx) (broadcast-term (list :leave leave-ctx)))
+          (broadcast-room-ctx!))
+        (ma-send! (canonical-actor target-room) (list :enter entry-ctx))))
+    #f))
 
 ; Start a new-room dig and persist pending state until the child-alive callback
 ; arrives from the freshly created room.
@@ -1259,7 +1271,8 @@
                                        (room-init target did custom-init (child-alive-init nonce direction))
                                        target-fragment)))
     (remember-pending-new-room! direction target-room requester did target nonce)
-    (reply-to-sender msg (string-append "Digging " direction "..."))))
+    (reply-to-sender msg (string-append "Digging " direction "..."))
+    (reply-ok msg)))
 
 ; ── Presence and presentation methods ─────────────────────────────────────
 
@@ -1615,13 +1628,14 @@
                                           #f
                                           (remembered-new-room-target direction target))))
                 (cond ((and existing-room (or custom-init custom-behaviour))
-                       (reply-to-sender msg "Custom room code only applies when digging a new room."))
+                       (reply-error msg "Custom room code only applies when digging a new room."))
                       (existing-room
                        (request-existing-link! msg did direction existing-room))
                       (remembered-room
                        (begin
                          (reply-to-sender msg (string-append "Exit " direction " already leads to " target "."))
-                         (enter-dig-target! (msg-from msg) did remembered-room)))
+                         (enter-dig-target! (msg-from msg) did remembered-room)
+                         (reply-ok msg)))
                       (else
                        (request-new-room! msg did direction target custom-init custom-behaviour)))))))))))
 
@@ -1630,7 +1644,7 @@
     (let* ((did (owner))
            (fill-args args))
       (if (null? fill-args)
-          (reply-to-sender msg "Usage: fill <direction>")
+          (reply-error msg "Usage: fill <direction>")
           (require-valid-owner did msg
             (lambda ()
               (require-owner msg
@@ -1646,7 +1660,7 @@
                           (let ((ctx (did-ctx did)))
                             (if (map? ctx) (broadcast-term (list :fill ctx direction)) #f))
                           (reply-ok msg))
-                        (reply-to-sender msg (string-append "No exit " direction "."))))))))))))
+                        (reply-error msg (string-append "No exit " direction "."))))))))))))
 
 (set-cmd-method! :move
   (lambda (args msg)
