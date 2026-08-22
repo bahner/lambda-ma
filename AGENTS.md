@@ -38,6 +38,25 @@ exists.
   second source of truth invites divergence in parentage, ctx updates,
   persistence, and removal and is an interoperability risk.
 
+## Props and ctx
+
+Props are the authoritative stored state: `get-prop`/`set-prop!`/`del-prop!`.
+Ctx is a derived, lazily-generated map — computed from the current prop values
+at the moment it is needed and never stored separately.
+
+`register-ctx-props!` is a **change-detection hook only**. It declares which
+prop keys, when changed via `set-prop!`, should trigger `ctx-props-changed!`
+so the ctx can be re-generated and broadcast. It does not create a separate
+"ctx" storage layer.
+
+Consequences:
+- Never cache a ctx and mutate it directly — mutate the underlying props and
+  let the ctx be re-derived.
+- A function that returns a ctx (e.g. `room-ctx`, `node-ctx`) always calls
+  `get-prop` internally; it is always fresh.
+- `register-ctx-props!` is not about categorising props; it is about knowing
+  when to push a fresh ctx to clients after a message is handled.
+
 ## RPC and events
 
 Use `ma-reply!` for getters, setters, configuration, introspection, metadata,

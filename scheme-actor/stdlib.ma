@@ -82,6 +82,7 @@
       (equal? kind "agent")
       (equal? kind "room")
       (equal? kind "container")
+      (equal? kind "exit")
       (equal? kind "actor")))
 
 (define (ctx-shape-valid? ctx)
@@ -113,9 +114,7 @@
 
 (define (actor-ctx-shape? ctx)
   (and (ctx-shape-valid? ctx)
-       (non-empty-string? (ctx-text ctx "name"))
-       (non-empty-string? (ctx-text ctx "nick"))
-       (non-empty-string? (ctx-text ctx "description"))))
+       (non-empty-string? (ctx-text ctx "name"))))
 
 (define (actor-ctx? ctx msg)
   (and (actor-ctx-shape? ctx)
