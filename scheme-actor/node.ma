@@ -295,10 +295,25 @@
        (or (not (equal? (node-protocol) "/ma/room/0.0.1"))
            (same-actor? target-parent (root)))))
 
+; Persistent pending-parent: set when proposing a move, cleared on commit.
+; Stored as a prop (not a Scheme global) so it survives across wasm invocations.
+; Prevents stale :child broadcasts (e.g. room broadcast-room-ctx! during put)
+; from overriding a parent change that is already in flight.
+(define (node-pending-parent)
+  (let ((value (get-prop "pending-parent")))
+    (if (non-empty-string? value) value "")))
+
+(define (set-node-pending-parent! did)
+  (if (non-empty-string? did)
+      (set-prop! "pending-parent" (canonical-actor did))
+      (del-prop! "pending-parent"))
+  (ma-save-state!))
+
 (define (propose-node-parent! target-parent)
   (let ((target (canonical-actor target-parent)))
     (if (node-parent-admissible? target)
         (begin
+          (set-node-pending-parent! target)
           (ma-send! target (list :parent (node-ctx-for-parent target)))
           #t)
         #f)))
@@ -313,6 +328,7 @@
 (define (propose-node-hold! did)
   (if (node-hold-admissible? did)
       (begin
+        (set-node-pending-parent! did)
         (ma-send! did (list :parent (node-ctx-for-parent did)))
         #t)
       #f))
@@ -808,17 +824,23 @@
            (reply-ok msg)))))
 
 (define (node-confirmation-valid? ctx msg)
-  (let ((target-parent (ctx-text ctx "parent")))
+  (let ((target-parent (ctx-text ctx "parent"))
+        (pending (node-pending-parent)))
     (and (actor-ctx-shape? ctx)
          (same-actor? (ctx-text ctx "actor") (self))
          (same-actor? (msg-from msg) target-parent)
          (or (node-parent-admissible? target-parent)
-             (node-hold-admissible? target-parent)))))
+             (node-hold-admissible? target-parent))
+         ; Must match the pending parent set by propose-node-parent!/hold!.
+         ; Guards against stale :child from a previous parent's broadcast.
+         (non-empty-string? pending)
+         (same-actor? target-parent pending))))
 
 (define (commit-node-parent! ctx)
   (let ((old-parent (node-parent))
         (new-parent (canonical-actor (ctx-text ctx "parent"))))
     (begin
+      (set-node-pending-parent! "")
       (apply-node-parent-ctx! ctx)
       (set-node-parent! new-parent)
       (node-parent-committed!)
@@ -840,18 +862,20 @@
       (reply-error msg "only owner may list children"))))
         ((not (null? (cdr args)))
          (reply-error msg "usage: :child [ctx]"))
+        ; Refresh: current parent updates our ctx without changing the relationship.
+        ; No pending-parent needed — the sender is already our committed parent.
+        ((same-actor? (node-parent) (ctx-text (car args) "parent"))
+         (if (not (same-actor? (ctx-text (car args) "actor") (self)))
+             (reply-error msg "child ctx actor must match self")
+             (begin
+               (apply-node-parent-ctx! (map-delete (car args) "parent-ctx"))
+               (set-parent-ctx! (car args))
+               (reply-ok msg))))
+        ; New parent commit: requires pending-parent set by propose-node-parent!/hold!.
         ((not (node-confirmation-valid? (car args) msg))
          (reply-error msg "child ctx must name self and come from target parent"))
           ((node-confirmation-stale? (car args))
            (reply-ok msg))
-        ((same-actor? (node-parent) (ctx-text (car args) "parent"))
-         (begin
-           ; A parent may refresh a child's ctx (for example after its own
-           ; contents or revision changes). The relationship is already
-           ; committed, so refresh locally without announcing it again.
-           (apply-node-parent-ctx! (map-delete (car args) "parent-ctx"))
-           (set-parent-ctx! (car args))
-           (reply-ok msg)))
         (else
          (begin
            (commit-node-parent! (car args))

@@ -218,22 +218,52 @@
         (reply-locked msg)
         (reply-ok-with msg (prune-dead-local-children!)))))
 
-; Root sends :put after spatial validation; container enforces locked/full and notifies requestor.
-(set-cmd-method! :put
+; :put has three callers:
+;   1. Avatar/parent → initiate: auth-gated, sends :put-request to root, replies with id.
+;   2. Root → this-as-item: drives propose-node-parent! to target container.
+;   3. Root → this-as-target: admission check; notifies requestor on refusal.
+(set-rpc-method! :put
   (lambda (args msg)
-    (when (and (node-caller-is-local-root? msg)
-               (not (null? args))
-               (map? (car args)))
-      (let ((put-ctx (car args)))
-        (cond ((or (locked?) (closed?))
-               (ma-send! (canonical-actor (map-ref put-ctx "requestor" ""))
-                         (list :put-event (map-set (map-set put-ctx "status" "failed")
-                                                    "reason" (locked-message)))))
-              ((>= (node-children-count) (node-max-children))
-               (ma-send! (canonical-actor (map-ref put-ctx "requestor" ""))
-                         (list :put-event (map-set (map-set put-ctx "status" "failed")
-                                                    "reason" "container is full"))))
-              (else #f))))))
+    (if (node-caller-is-local-root? msg)
+        (if (and (not (null? args)) (map? (car args)))
+            (let ((put-ctx (car args)))
+              (if (same-actor? (canonical-actor (self))
+                               (canonical-actor (map-ref put-ctx "item" "")))
+                  ; Root → this container is the item: drive movement.
+                  (begin (propose-node-parent! (map-ref put-ctx "container" ""))
+                         (reply-ok msg))
+                  ; Root → this container is the target: admission check.
+                  (begin
+                    (cond ((or (locked?) (closed?))
+                           (ma-send! (canonical-actor (map-ref put-ctx "requestor" ""))
+                                     (list :put-event (map-set (map-set put-ctx "status" "failed")
+                                                               "reason" (locked-message)))))
+                          ((>= (node-children-count) (node-max-children))
+                           (ma-send! (canonical-actor (map-ref put-ctx "requestor" ""))
+                                     (list :put-event (map-set (map-set put-ctx "status" "failed")
+                                                               "reason" "container is full"))))
+                          (else #f))
+                    (reply-ok msg))))
+            (reply-error msg "usage: :put <put-ctx>"))
+        ; Avatar/parent initiates: validate auth, send :put-request to root.
+        (let ((caller (node-effective-did args msg))
+              (rest (node-effective-args args msg)))
+          (cond ((not (node-transfer-caller-authorised? caller msg))
+                 (reply-error msg "not authorised to put this container"))
+                ((null? rest)
+                 (reply-error msg "usage: :put <container-did-url>"))
+                ((not (valid-did-url? (car rest)))
+                 (reply-error msg ":put requires a container DID-URL"))
+                (else
+                 (let* ((target (canonical-actor (car rest)))
+                        (id (generate-action-id))
+                        (put-ctx (make-map "action" "put"
+                                           "id" id
+                                           "requestor" caller
+                                           "item" (canonical-actor (self))
+                                           "container" target)))
+                   (ma-send! (root) (list :put-request put-ctx))
+                   (reply-ok-with msg id))))))))
 
 ; Avatar initiates take; container validates lock and child presence, then forwards to root.
 (set-rpc-method! :take

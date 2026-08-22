@@ -186,13 +186,16 @@
     (ma-send! (canonical-actor (map-ref take-ctx "requestor" ""))
               (list :take-event full-ctx))))
 
+; Bare-DID requestors (remote users) have no registry entry, so only child and
+; container co-location is required. Requestor authorisation is already gated
+; on the item before the :put-request / :take-request reaches root.
 (define (action-co-located? subject child-did container-did)
   (let ((subject-room (find-effective-room subject))
         (child-room (find-effective-room child-did))
         (container-room (find-effective-room container-did)))
-    (and subject-room child-room container-room
-         (equal? subject-room container-room)
-         (equal? subject-room child-room))))
+    (and child-room container-room
+         (equal? child-room container-room)
+         (or (not subject-room) (equal? subject-room child-room)))))
 
 ; Walk parent chain, skipping containers, to check if subject is the holder.
 (define (actor-effectively-held-by? did subject)
@@ -212,6 +215,13 @@
   (lambda (args msg)
     (when (and (not (null? args)) (map? (car args)))
       (registry-put! (msg-from msg) (car args)))))
+
+; External RPC variant of :ctx — called from avatar via actor-call; replies :ok.
+(set-rpc-method! :ctx-update
+  (lambda (args msg)
+    (when (and (not (null? args)) (map? (car args)))
+      (registry-put! (msg-from msg) (car args)))
+    (reply-ok msg)))
 
 ; item initiates put: validates caller, root validates spatial, then gates container and drives item
 (set-internal-rpc-method! :put-request
