@@ -528,7 +528,7 @@ mod tests {
     }
 
     #[test]
-    fn node_child_commits_parent_and_notifies_both_parents() {
+    fn node_child_commits_parent_and_notifies_only_old_parent() {
         let env = node_env();
         let mut config = std::collections::HashMap::new();
         config.insert("runtime".to_string(), "did:ma:runtime".to_string());
