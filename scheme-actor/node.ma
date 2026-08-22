@@ -830,7 +830,7 @@
       (apply-node-parent-ctx! ctx)
       (set-node-parent! new-parent)
       (node-parent-committed!)
-      (announce-node-parent!)
+      ; New parent already knows from the :child exchange — only notify old parent.
       (if (and (non-empty-string? old-parent)
                (not (same-actor? old-parent new-parent)))
           (ma-send! old-parent (list :parent (node-ctx)))

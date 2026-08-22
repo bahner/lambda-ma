@@ -577,13 +577,9 @@ mod tests {
         .unwrap();
 
         assert_eq!(eval_str("(node-parent)", &env), "did:ma:runtime#dog");
-        assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 2);
+        assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 1);
         assert_eq!(
             eval_str("(get-prop \"sent-target:1\")", &env),
-            "did:ma:runtime#dog"
-        );
-        assert_eq!(
-            eval_str("(get-prop \"sent-target:2\")", &env),
             "did:ma:runtime#inventory"
         );
 
@@ -3725,18 +3721,14 @@ mod tests {
         eval_all("((find-method :child) (list room_ctx) room_msg)", &env).unwrap();
 
         assert_eq!(eval_str("(node-parent)", &env), "did:ma:runtime#room");
-        assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 2);
+        assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 1);
         assert_eq!(
             eval_str("(get-prop \"sent-target:1\")", &env),
-            "did:ma:runtime#room"
-        );
-        assert_eq!(
-            eval_str("(get-prop \"sent-target:2\")", &env),
             "did:ma:runtime#inventory"
         );
         assert!(eval_bool(
-            r#"(let ((ctx (car (cdr (get-prop "sent-term:2")))))
-                 (and (equal? (car (get-prop "sent-term:2")) :parent)
+            r#"(let ((ctx (car (cdr (get-prop "sent-term:1")))))
+                 (and (equal? (car (get-prop "sent-term:1")) :parent)
                       (equal? (ctx-text ctx "actor") "did:ma:runtime#bag")
                       (equal? (ctx-text ctx "parent") "did:ma:runtime#room")))"#,
             &env,
@@ -3883,7 +3875,7 @@ mod tests {
         assert_eq!(eval_str("(nick)", &env), "new lamp");
         assert_eq!(
             eval_str("(get-prop \"sent-target:1\")", &env),
-            "did:ma:runtime#mother"
+            "did:ma:runtime#father"
         );
         assert_eq!(
             eval_all("(car (get-prop \"sent-term:1\"))", &env).unwrap(),
@@ -3897,23 +3889,12 @@ mod tests {
             "did:ma:runtime#mother"
         );
         assert_eq!(
-            eval_str("(get-prop \"sent-target:2\")", &env),
-            "did:ma:runtime#father"
-        );
-        assert_eq!(
-            eval_str(
-                "(ctx-text (car (cdr (get-prop \"sent-term:2\"))) \"parent\")",
-                &env
-            ),
-            "did:ma:runtime#mother"
-        );
-        assert_eq!(
             eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
             Value::symbol(":ok"),
         );
 
         eval_all("(on-message parent_msg)", &env).unwrap();
-        assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 2);
+        assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 1);
         assert_eq!(eval_int("(get-prop \"reply-count\")", &env), 2);
     }
 
@@ -4012,18 +3993,10 @@ mod tests {
         assert_eq!(eval_str("(nick)", &env), "rms-on-tour");
         assert_eq!(
             eval_str("(get-prop \"sent-target:1\")", &env),
-            "did:ma:runtime#mother"
-        );
-        assert_eq!(
-            eval_all("(car (get-prop \"sent-term:1\"))", &env).unwrap(),
-            Value::symbol(":parent"),
-        );
-        assert_eq!(
-            eval_str("(get-prop \"sent-target:2\")", &env),
             "did:ma:runtime#father"
         );
         assert_eq!(
-            eval_all("(car (get-prop \"sent-term:2\"))", &env).unwrap(),
+            eval_all("(car (get-prop \"sent-term:1\"))", &env).unwrap(),
             Value::symbol(":parent"),
         );
         assert_eq!(
@@ -4032,7 +4005,7 @@ mod tests {
         );
 
         eval_all("(on-message parent_msg)", &env).unwrap();
-        assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 2);
+        assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 1);
         assert_eq!(eval_int("(get-prop \"reply-count\")", &env), 2);
     }
 
