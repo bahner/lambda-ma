@@ -63,6 +63,47 @@
 
 (set-cmd-method! :claim handle-node-claim!)
 
+(define (generate-transfer-id)
+  (string-append (number->string (ma-random 9223372036854775807))
+                 "-"
+                 (number->string (ma-random 9223372036854775807))))
+
+; Avatar initiates (owner/parent-gated); root executes (drives propose-node-parent!).
+(set-rpc-method! :put
+  (lambda (args msg)
+    (if (node-caller-is-local-root? msg)
+        (if (and (not (null? args)) (map? (car args)))
+            (begin (propose-node-parent! (map-ref (car args) "container" ""))
+                   (reply-ok msg))
+            (reply-error msg "usage: :put <put-ctx>"))
+        (let ((caller (node-effective-did args msg))
+              (rest (node-effective-args args msg)))
+          (cond ((not (node-transfer-caller-authorised? caller msg))
+                 (reply-error msg "not authorised to put this item"))
+                ((null? rest)
+                 (reply-error msg "usage: :put <container-did-url>"))
+                ((not (valid-did-url? (car rest)))
+                 (reply-error msg ":put requires a container DID-URL"))
+                (else
+                 (let* ((container (canonical-actor (car rest)))
+                        (id (generate-transfer-id))
+                        (put-ctx (make-map "action" "put"
+                                           "id" id
+                                           "requestor" caller
+                                           "item" (canonical-actor (self))
+                                           "container" container)))
+                   (ma-send! (root) (list :put-request put-ctx))
+                   (reply-ok-with msg id))))))))
+
+; Root sends :take after spatial validation; item validates requestor (override to restrict).
+(set-cmd-method! :take
+  (lambda (args msg)
+    (when (and (node-caller-is-local-root? msg)
+               (not (null? args))
+               (map? (car args)))
+      ; Requestor is a bare avatar DID, so use hold-admissibility (not DID-URL).
+      (propose-node-hold! (map-ref (car args) "requestor" "")))))
+
 ; Parent-mediated transfer: the object proposes itself to a new parent
 ; (ma-spec sec 6); direct did calls are deliberately rejected. Shared body
 ; lives in node.ma as handle-node-set-parent!.

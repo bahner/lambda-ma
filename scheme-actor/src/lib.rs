@@ -1092,6 +1092,7 @@ mod tests {
                 Value::list(vec![
                     Value::symbol(":move"),
                     Value::symbol(":claim"),
+                    Value::symbol(":take"),
                     Value::symbol(":set-parent"),
                     Value::symbol(":hold"),
                     Value::symbol(":recycle"),
@@ -1148,6 +1149,7 @@ mod tests {
                 Value::list(vec![
                     Value::symbol(":move"),
                     Value::symbol(":claim"),
+                    Value::symbol(":take"),
                     Value::symbol(":set-parent"),
                     Value::symbol(":hold"),
                     Value::symbol(":recycle"),
@@ -1171,6 +1173,7 @@ mod tests {
                 Value::list(vec![
                     Value::symbol(":move"),
                     Value::symbol(":claim"),
+                    Value::symbol(":take"),
                     Value::symbol(":set-parent"),
                     Value::symbol(":hold"),
                     Value::symbol(":recycle"),
@@ -2227,7 +2230,7 @@ mod tests {
             "did:ma:runtime#root"
         );
         assert!(eval_bool(
-            r#"(equal? (car (get-prop "sent-term:1")) :ctx-update)"#,
+            r#"(equal? (car (get-prop "sent-term:1")) :ctx)"#,
             &env,
         ));
         assert_eq!(
@@ -2246,7 +2249,7 @@ mod tests {
             "did:ma:runtime#root"
         );
         assert!(eval_bool(
-            r#"(equal? (car (get-prop "sent-term:3")) :ctx-update)"#,
+            r#"(equal? (car (get-prop "sent-term:3")) :ctx)"#,
             &env,
         ));
         assert_eq!(
@@ -2285,6 +2288,7 @@ mod tests {
                 Value::symbol(":ok"),
                 Value::list(vec![
                     Value::symbol(":claim"),
+                    Value::symbol(":take"),
                     Value::symbol(":set-parent"),
                     Value::symbol(":hold"),
                     Value::symbol(":recycle"),
@@ -3206,7 +3210,7 @@ mod tests {
     }
 
     #[test]
-    fn room_drop_is_a_capacity_precheck_only() {
+    fn room_drop_checks_caller_in_room_and_capacity() {
         let env = room_env();
         install_send_reply_recorders(&env);
         let mut config = std::collections::HashMap::new();
@@ -3218,33 +3222,37 @@ mod tests {
             Value::Msg(sample_msg("did:ma:avatar", "did:ma:runtime#room")),
         );
 
+        // no item arg
         eval_all("((find-method :drop) '() msg)", &env).unwrap();
         assert_eq!(
             eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
-            Value::symbol(":ok")
+            Value::list(vec![Value::symbol(":error"), Value::str("usage: :drop <item-did-url>")])
         );
-        assert!(eval_bool("(not (get-prop \"sent-count\"))", &env));
 
-        eval_all(
-            r#"
-            (set-prop! "max-children" "0")
-            ((find-method :drop) '() msg)
-            "#,
-            &env,
-        )
-        .unwrap();
+        // caller not in room children
+        eval_all("((find-method :drop) (list \"did:ma:item#lamp\") msg)", &env).unwrap();
         assert_eq!(
             eval_all("(get-prop \"reply-term:2\")", &env).unwrap(),
-            Value::list(vec![
-                Value::symbol(":error"),
-                Value::str("drop refused: room is full")
-            ])
+            Value::list(vec![Value::symbol(":error"), Value::str("not in room")])
         );
 
-        eval_all("((find-method :drop) (list \"extra\") msg)", &env).unwrap();
+        // register avatar as occupant, then drop succeeds
+        eval_all(
+            r#"(remember-child! (make-map "actor" "did:ma:avatar" "parent" "did:ma:runtime#room" "kind" "agent"))"#,
+            &env,
+        ).unwrap();
+        eval_all("((find-method :drop) (list \"did:ma:item#lamp\") msg)", &env).unwrap();
         assert_eq!(
             eval_all("(get-prop \"reply-term:3\")", &env).unwrap(),
-            Value::list(vec![Value::symbol(":error"), Value::str("usage: :drop")])
+            Value::symbol(":ok")
+        );
+
+        // room full
+        eval_all(r#"(set-prop! "max-children" "0")"#, &env).unwrap();
+        eval_all("((find-method :drop) (list \"did:ma:item#lamp\") msg)", &env).unwrap();
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:4\")", &env).unwrap(),
+            Value::list(vec![Value::symbol(":error"), Value::str("room is full")])
         );
     }
 
@@ -5265,5 +5273,776 @@ mod tests {
     fn equal_p_deep_comparison() {
         assert_eq!(run("(equal? '(1 2 3) '(1 2 3))"), Value::Bool(true));
         assert_eq!(run("(equal? '(1 2 3) '(1 2 4))"), Value::Bool(false));
+    }
+
+    // ── put/take protocol ──────────────────────────────────────────────────
+
+    #[test]
+    fn thing_put_by_parent_sends_put_request_to_root() {
+        let env = thing_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#lamp".to_string());
+        config.insert("root".to_string(), "did:ma:runtime#root".to_string());
+        crate::state::set_config(config);
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:avatar",
+                "did:ma:runtime#lamp",
+                Value::list(vec![
+                    Value::symbol(":put"),
+                    Value::str("did:ma:runtime#bag"),
+                ]),
+            )),
+        );
+
+        eval_all(
+            r#"
+            (define (ma-random n) 42)
+            (set-prop! "parent" "did:ma:avatar")
+            (set-prop! "name" "lamp")
+            (set-prop! "nick" "lamp")
+            (set-prop! "description" "A lamp.")
+            ((find-method :put) (list "did:ma:runtime#bag") msg)
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        // Sent :put-request to root.
+        assert_eq!(eval_str("(get-prop \"sent-target:1\")", &env), "did:ma:runtime#root");
+        assert_eq!(
+            eval_all("(car (get-prop \"sent-term:1\"))", &env).unwrap(),
+            Value::symbol(":put-request")
+        );
+        let put_ctx_term =
+            eval_all("(car (cdr (get-prop \"sent-term:1\")))", &env).unwrap();
+        assert!(matches!(put_ctx_term, Value::Map(_)));
+        assert_eq!(
+            eval_all("(map-ref (car (cdr (get-prop \"sent-term:1\"))) \"requestor\" \"\")", &env).unwrap(),
+            Value::str("did:ma:avatar")
+        );
+        assert_eq!(
+            eval_all("(map-ref (car (cdr (get-prop \"sent-term:1\"))) \"container\" \"\")", &env).unwrap(),
+            Value::str("did:ma:runtime#bag")
+        );
+        assert_eq!(
+            eval_all("(map-ref (car (cdr (get-prop \"sent-term:1\"))) \"item\" \"\")", &env).unwrap(),
+            Value::str("did:ma:runtime#lamp")
+        );
+        assert_eq!(
+            eval_all("(car (get-prop \"reply-term:1\"))", &env).unwrap(),
+            Value::symbol(":ok")
+        );
+    }
+
+    #[test]
+    fn thing_put_by_stranger_is_rejected() {
+        let env = thing_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#lamp".to_string());
+        crate::state::set_config(config);
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:stranger",
+                "did:ma:runtime#lamp",
+                Value::list(vec![
+                    Value::symbol(":put"),
+                    Value::str("did:ma:runtime#bag"),
+                ]),
+            )),
+        );
+
+        eval_all(
+            r#"
+            (define (ma-random n) 42)
+            (set-prop! "owner" "did:ma:owner")
+            (set-prop! "parent" "did:ma:avatar")
+            ((find-method :put) (list "did:ma:runtime#bag") msg)
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        // No sends to root; error reply.
+        assert!(eval_bool("(not (has-prop? \"sent-count\"))", &env));
+        assert_eq!(
+            eval_all("(car (get-prop \"reply-term:1\"))", &env).unwrap(),
+            Value::symbol(":error")
+        );
+    }
+
+    #[test]
+    fn thing_put_from_root_drives_propose_parent_to_container() {
+        let env = thing_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#lamp".to_string());
+        config.insert("root".to_string(), "did:ma:runtime#root".to_string());
+        crate::state::set_config(config);
+        env.define(
+            Rc::from("root_msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:runtime#root",
+                "did:ma:runtime#lamp",
+                Value::symbol(":put"),
+            )),
+        );
+
+        eval_all(
+            r#"
+            (set-prop! "parent" "did:ma:avatar")
+            (set-prop! "name" "lamp")
+            (set-prop! "nick" "lamp")
+            (set-prop! "description" "A lamp.")
+            (define put-ctx (make-map "action" "put" "id" "test-id-1"
+                                       "requestor" "did:ma:avatar"
+                                       "item" "did:ma:runtime#lamp"
+                                       "container" "did:ma:runtime#bag"))
+            ((find-method :put) (list put-ctx) root_msg)
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        // propose-node-parent! sends :parent to container.
+        assert_eq!(eval_str("(get-prop \"sent-target:1\")", &env), "did:ma:runtime#bag");
+        assert_eq!(
+            eval_all("(car (get-prop \"sent-term:1\"))", &env).unwrap(),
+            Value::symbol(":parent")
+        );
+    }
+
+    #[test]
+    fn thing_take_from_root_drives_propose_hold_to_requestor() {
+        let env = thing_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#lamp".to_string());
+        config.insert("root".to_string(), "did:ma:runtime#root".to_string());
+        crate::state::set_config(config);
+        env.define(
+            Rc::from("root_msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:runtime#root",
+                "did:ma:runtime#lamp",
+                Value::symbol(":take"),
+            )),
+        );
+
+        eval_all(
+            r#"
+            (set-prop! "parent" "did:ma:runtime#bag")
+            (set-prop! "name" "lamp")
+            (set-prop! "nick" "lamp")
+            (set-prop! "description" "A lamp.")
+            (define take-ctx (make-map "action" "take" "id" "test-id-2"
+                                        "requestor" "did:ma:avatar"
+                                        "item" "did:ma:runtime#lamp"
+                                        "container" "did:ma:runtime#bag"))
+            ((find-method :take) (list take-ctx) root_msg)
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        // propose-node-hold! sends :parent to bare DID requestor.
+        assert_eq!(eval_str("(get-prop \"sent-target:1\")", &env), "did:ma:avatar");
+        assert_eq!(
+            eval_all("(car (get-prop \"sent-term:1\"))", &env).unwrap(),
+            Value::symbol(":parent")
+        );
+    }
+
+    #[test]
+    fn thing_take_from_non_root_is_ignored() {
+        let env = thing_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#lamp".to_string());
+        crate::state::set_config(config);
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:stranger",
+                "did:ma:runtime#lamp",
+                Value::symbol(":take"),
+            )),
+        );
+
+        eval_all(
+            r#"
+            (define take-ctx (make-map "action" "take" "id" "t1"
+                                        "requestor" "did:ma:stranger"
+                                        "item" "did:ma:runtime#lamp"
+                                        "container" "did:ma:runtime#bag"))
+            ((find-method :take) (list take-ctx) msg)
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        assert!(eval_bool("(not (has-prop? \"sent-count\"))", &env));
+        assert!(eval_bool("(not (has-prop? \"reply-count\"))", &env));
+    }
+
+    #[test]
+    fn container_put_from_root_refuses_and_notifies_if_locked() {
+        let env = container_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#bag".to_string());
+        config.insert("root".to_string(), "did:ma:runtime#root".to_string());
+        crate::state::set_config(config);
+        env.define(
+            Rc::from("root_msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:runtime#root",
+                "did:ma:runtime#bag",
+                Value::symbol(":put"),
+            )),
+        );
+
+        eval_all(
+            r#"
+            (set-prop! "locked" "true")
+            (set-prop! "locked-message" "The bag is locked.")
+            (define put-ctx (make-map "action" "put" "id" "p1"
+                                       "requestor" "did:ma:avatar"
+                                       "item" "did:ma:runtime#lamp"
+                                       "container" "did:ma:runtime#bag"))
+            ((find-method :put) (list put-ctx) root_msg)
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        // Sends :put-event failed to requestor.
+        assert_eq!(eval_str("(get-prop \"sent-target:1\")", &env), "did:ma:avatar");
+        assert_eq!(
+            eval_all("(car (get-prop \"sent-term:1\"))", &env).unwrap(),
+            Value::symbol(":put-event")
+        );
+        assert_eq!(
+            eval_all("(map-ref (car (cdr (get-prop \"sent-term:1\"))) \"status\" \"\")", &env).unwrap(),
+            Value::str("failed")
+        );
+    }
+
+    #[test]
+    fn container_put_from_root_refuses_and_notifies_if_full() {
+        let env = container_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#bag".to_string());
+        config.insert("root".to_string(), "did:ma:runtime#root".to_string());
+        crate::state::set_config(config);
+        env.define(
+            Rc::from("root_msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:runtime#root",
+                "did:ma:runtime#bag",
+                Value::symbol(":put"),
+            )),
+        );
+
+        eval_all(
+            r#"
+            (set-prop! "max-children" "0")
+            (define put-ctx (make-map "action" "put" "id" "p2"
+                                       "requestor" "did:ma:avatar"
+                                       "item" "did:ma:runtime#lamp"
+                                       "container" "did:ma:runtime#bag"))
+            ((find-method :put) (list put-ctx) root_msg)
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        assert_eq!(eval_str("(get-prop \"sent-target:1\")", &env), "did:ma:avatar");
+        assert_eq!(
+            eval_all("(map-ref (car (cdr (get-prop \"sent-term:1\"))) \"status\" \"\")", &env).unwrap(),
+            Value::str("failed")
+        );
+        assert_eq!(
+            eval_all("(map-ref (car (cdr (get-prop \"sent-term:1\"))) \"reason\" \"\")", &env).unwrap(),
+            Value::str("container is full")
+        );
+    }
+
+    #[test]
+    fn container_put_from_root_silent_when_open_and_not_full() {
+        let env = container_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#bag".to_string());
+        config.insert("root".to_string(), "did:ma:runtime#root".to_string());
+        crate::state::set_config(config);
+        env.define(
+            Rc::from("root_msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:runtime#root",
+                "did:ma:runtime#bag",
+                Value::symbol(":put"),
+            )),
+        );
+
+        eval_all(
+            r#"
+            (define put-ctx (make-map "action" "put" "id" "p3"
+                                       "requestor" "did:ma:avatar"
+                                       "item" "did:ma:runtime#lamp"
+                                       "container" "did:ma:runtime#bag"))
+            ((find-method :put) (list put-ctx) root_msg)
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        // Does nothing — item's :parent will arrive when item calls propose-node-parent!
+        assert!(eval_bool("(not (has-prop? \"sent-count\"))", &env));
+    }
+
+    #[test]
+    fn container_take_forwards_take_request_to_root_when_item_present() {
+        let env = container_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#bag".to_string());
+        config.insert("root".to_string(), "did:ma:runtime#root".to_string());
+        crate::state::set_config(config);
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:avatar",
+                "did:ma:runtime#bag",
+                Value::list(vec![
+                    Value::symbol(":take"),
+                    Value::str("did:ma:runtime#lamp"),
+                ]),
+            )),
+        );
+
+        eval_all(
+            r#"
+            (define (ma-random n) 42)
+            (remember-child! (make-map "actor" "did:ma:runtime#lamp"
+                                        "kind" "thing"
+                                        "protocol" "/ma/thing/0.0.1"
+                                        "parent" "did:ma:runtime#bag"
+                                        "name" "lamp"
+                                        "nick" "lamp"
+                                        "description" "A lamp."))
+            ((find-method :take) (list "did:ma:runtime#lamp") msg)
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        assert_eq!(eval_str("(get-prop \"sent-target:1\")", &env), "did:ma:runtime#root");
+        assert_eq!(
+            eval_all("(car (get-prop \"sent-term:1\"))", &env).unwrap(),
+            Value::symbol(":take-request")
+        );
+        assert_eq!(
+            eval_all("(map-ref (car (cdr (get-prop \"sent-term:1\"))) \"requestor\" \"\")", &env).unwrap(),
+            Value::str("did:ma:avatar")
+        );
+        assert_eq!(
+            eval_all("(map-ref (car (cdr (get-prop \"sent-term:1\"))) \"item\" \"\")", &env).unwrap(),
+            Value::str("did:ma:runtime#lamp")
+        );
+        assert_eq!(
+            eval_all("(car (get-prop \"reply-term:1\"))", &env).unwrap(),
+            Value::symbol(":ok")
+        );
+    }
+
+    #[test]
+    fn container_take_refuses_if_locked() {
+        let env = container_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#bag".to_string());
+        crate::state::set_config(config);
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:avatar",
+                "did:ma:runtime#bag",
+                Value::list(vec![
+                    Value::symbol(":take"),
+                    Value::str("did:ma:runtime#lamp"),
+                ]),
+            )),
+        );
+
+        eval_all(
+            r#"
+            (set-prop! "locked" "true")
+            ((find-method :take) (list "did:ma:runtime#lamp") msg)
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        assert!(eval_bool("(not (has-prop? \"sent-count\"))", &env));
+        assert_eq!(
+            eval_all("(car (get-prop \"reply-term:1\"))", &env).unwrap(),
+            Value::symbol(":error")
+        );
+    }
+
+    #[test]
+    fn container_take_refuses_if_item_not_in_children() {
+        let env = container_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#bag".to_string());
+        crate::state::set_config(config);
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:avatar",
+                "did:ma:runtime#bag",
+                Value::list(vec![
+                    Value::symbol(":take"),
+                    Value::str("did:ma:runtime#lamp"),
+                ]),
+            )),
+        );
+
+        eval_all("((find-method :take) (list \"did:ma:runtime#lamp\") msg)", &env).unwrap();
+
+        assert!(eval_bool("(not (has-prop? \"sent-count\"))", &env));
+        assert_eq!(
+            eval_all("(car (get-prop \"reply-term:1\"))", &env).unwrap(),
+            Value::symbol(":error")
+        );
+    }
+
+    #[test]
+    fn root_put_request_dispatches_when_co_located() {
+        let env = root_actor_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#root".to_string());
+        crate::state::set_config(config);
+        eval_all(
+            r#"
+            (define (ma-entity-exists? actor) #t)
+            (registry-put! "did:ma:runtime#room"
+              (make-map "kind" "room" "parent" "did:ma:runtime#root"
+                         "actor" "did:ma:runtime#room" "name" "r" "nick" "r" "description" "r"))
+            (registry-put! "did:ma:avatar"
+              (make-map "kind" "agent" "parent" "did:ma:runtime#room"
+                         "actor" "did:ma:avatar" "name" "av" "nick" "av" "description" "av"))
+            (registry-put! "did:ma:runtime#lamp"
+              (make-map "kind" "thing" "parent" "did:ma:avatar"
+                         "actor" "did:ma:runtime#lamp" "name" "lamp" "nick" "lamp" "description" "lamp"))
+            (registry-put! "did:ma:runtime#bag"
+              (make-map "kind" "container" "parent" "did:ma:runtime#room"
+                         "actor" "did:ma:runtime#bag" "name" "bag" "nick" "bag" "description" "bag"))
+            (define put-ctx (make-map "action" "put" "id" "put-1"
+                                       "requestor" "did:ma:avatar"
+                                       "item" "did:ma:runtime#lamp"
+                                       "container" "did:ma:runtime#bag"))
+            "#,
+            &env,
+        )
+        .unwrap();
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:runtime#lamp",
+                "did:ma:runtime#root",
+                Value::symbol(":put-request"),
+            )),
+        );
+
+        eval_all("((find-method :put-request) (list put-ctx) msg)", &env).unwrap();
+
+        // send 1: :put-event ok to requestor
+        assert_eq!(eval_str("(get-prop \"sent-target:1\")", &env), "did:ma:avatar");
+        assert_eq!(
+            eval_all("(car (get-prop \"sent-term:1\"))", &env).unwrap(),
+            Value::symbol(":put-event")
+        );
+        assert_eq!(
+            eval_all("(map-ref (car (cdr (get-prop \"sent-term:1\"))) \"status\" \"\")", &env).unwrap(),
+            Value::str("ok")
+        );
+        // send 2: :put to container
+        assert_eq!(eval_str("(get-prop \"sent-target:2\")", &env), "did:ma:runtime#bag");
+        assert_eq!(
+            eval_all("(car (get-prop \"sent-term:2\"))", &env).unwrap(),
+            Value::symbol(":put")
+        );
+        // send 3: :put to item
+        assert_eq!(eval_str("(get-prop \"sent-target:3\")", &env), "did:ma:runtime#lamp");
+        assert_eq!(
+            eval_all("(car (get-prop \"sent-term:3\"))", &env).unwrap(),
+            Value::symbol(":put")
+        );
+        // reply with id
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
+            Value::list(vec![Value::symbol(":ok"), Value::str("put-1")])
+        );
+    }
+
+    #[test]
+    fn root_put_request_fails_when_not_co_located() {
+        let env = root_actor_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#root".to_string());
+        crate::state::set_config(config);
+        eval_all(
+            r#"
+            (define (ma-entity-exists? actor) #t)
+            (registry-put! "did:ma:runtime#room-a"
+              (make-map "kind" "room" "parent" "did:ma:runtime#root"
+                         "actor" "did:ma:runtime#room-a" "name" "a" "nick" "a" "description" "a"))
+            (registry-put! "did:ma:runtime#room-b"
+              (make-map "kind" "room" "parent" "did:ma:runtime#root"
+                         "actor" "did:ma:runtime#room-b" "name" "b" "nick" "b" "description" "b"))
+            (registry-put! "did:ma:avatar"
+              (make-map "kind" "agent" "parent" "did:ma:runtime#room-a"
+                         "actor" "did:ma:avatar" "name" "av" "nick" "av" "description" "av"))
+            (registry-put! "did:ma:runtime#lamp"
+              (make-map "kind" "thing" "parent" "did:ma:avatar"
+                         "actor" "did:ma:runtime#lamp" "name" "lamp" "nick" "lamp" "description" "lamp"))
+            (registry-put! "did:ma:runtime#bag"
+              (make-map "kind" "container" "parent" "did:ma:runtime#room-b"
+                         "actor" "did:ma:runtime#bag" "name" "bag" "nick" "bag" "description" "bag"))
+            (define put-ctx (make-map "action" "put" "id" "put-fail"
+                                       "requestor" "did:ma:avatar"
+                                       "item" "did:ma:runtime#lamp"
+                                       "container" "did:ma:runtime#bag"))
+            "#,
+            &env,
+        )
+        .unwrap();
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:runtime#lamp",
+                "did:ma:runtime#root",
+                Value::symbol(":put-request"),
+            )),
+        );
+
+        eval_all("((find-method :put-request) (list put-ctx) msg)", &env).unwrap();
+
+        // Only one send: failure event to requestor.
+        assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 1);
+        assert_eq!(eval_str("(get-prop \"sent-target:1\")", &env), "did:ma:avatar");
+        assert_eq!(
+            eval_all("(map-ref (car (cdr (get-prop \"sent-term:1\"))) \"status\" \"\")", &env).unwrap(),
+            Value::str("failed")
+        );
+        assert_eq!(
+            eval_all("(car (get-prop \"reply-term:1\"))", &env).unwrap(),
+            Value::symbol(":error")
+        );
+    }
+
+    #[test]
+    fn root_take_request_dispatches_to_item_when_co_located() {
+        let env = root_actor_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#root".to_string());
+        crate::state::set_config(config);
+        eval_all(
+            r#"
+            (define (ma-entity-exists? actor) #t)
+            (registry-put! "did:ma:runtime#room"
+              (make-map "kind" "room" "parent" "did:ma:runtime#root"
+                         "actor" "did:ma:runtime#room" "name" "r" "nick" "r" "description" "r"))
+            (registry-put! "did:ma:avatar"
+              (make-map "kind" "agent" "parent" "did:ma:runtime#room"
+                         "actor" "did:ma:avatar" "name" "av" "nick" "av" "description" "av"))
+            (registry-put! "did:ma:runtime#bag"
+              (make-map "kind" "container" "parent" "did:ma:runtime#room"
+                         "actor" "did:ma:runtime#bag" "name" "bag" "nick" "bag" "description" "bag"))
+            (registry-put! "did:ma:runtime#lamp"
+              (make-map "kind" "thing" "parent" "did:ma:runtime#bag"
+                         "actor" "did:ma:runtime#lamp" "name" "lamp" "nick" "lamp" "description" "lamp"))
+            (define take-ctx (make-map "action" "take" "id" "take-1"
+                                        "requestor" "did:ma:avatar"
+                                        "item" "did:ma:runtime#lamp"
+                                        "container" "did:ma:runtime#bag"))
+            "#,
+            &env,
+        )
+        .unwrap();
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:runtime#bag",
+                "did:ma:runtime#root",
+                Value::symbol(":take-request"),
+            )),
+        );
+
+        eval_all("((find-method :take-request) (list take-ctx) msg)", &env).unwrap();
+
+        // send 1: :take-event ok to requestor
+        assert_eq!(eval_str("(get-prop \"sent-target:1\")", &env), "did:ma:avatar");
+        assert_eq!(
+            eval_all("(car (get-prop \"sent-term:1\"))", &env).unwrap(),
+            Value::symbol(":take-event")
+        );
+        assert_eq!(
+            eval_all("(map-ref (car (cdr (get-prop \"sent-term:1\"))) \"status\" \"\")", &env).unwrap(),
+            Value::str("ok")
+        );
+        // send 2: :take to item
+        assert_eq!(eval_str("(get-prop \"sent-target:2\")", &env), "did:ma:runtime#lamp");
+        assert_eq!(
+            eval_all("(car (get-prop \"sent-term:2\"))", &env).unwrap(),
+            Value::symbol(":take")
+        );
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
+            Value::list(vec![Value::symbol(":ok"), Value::str("take-1")])
+        );
+    }
+
+    #[test]
+    fn root_take_request_fails_when_not_co_located() {
+        let env = root_actor_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#root".to_string());
+        crate::state::set_config(config);
+        eval_all(
+            r#"
+            (define (ma-entity-exists? actor) #t)
+            (registry-put! "did:ma:runtime#room-a"
+              (make-map "kind" "room" "parent" "did:ma:runtime#root"
+                         "actor" "did:ma:runtime#room-a" "name" "a" "nick" "a" "description" "a"))
+            (registry-put! "did:ma:runtime#room-b"
+              (make-map "kind" "room" "parent" "did:ma:runtime#root"
+                         "actor" "did:ma:runtime#room-b" "name" "b" "nick" "b" "description" "b"))
+            (registry-put! "did:ma:avatar"
+              (make-map "kind" "agent" "parent" "did:ma:runtime#room-b"
+                         "actor" "did:ma:avatar" "name" "av" "nick" "av" "description" "av"))
+            (registry-put! "did:ma:runtime#bag"
+              (make-map "kind" "container" "parent" "did:ma:runtime#room-a"
+                         "actor" "did:ma:runtime#bag" "name" "bag" "nick" "bag" "description" "bag"))
+            (registry-put! "did:ma:runtime#lamp"
+              (make-map "kind" "thing" "parent" "did:ma:runtime#bag"
+                         "actor" "did:ma:runtime#lamp" "name" "lamp" "nick" "lamp" "description" "lamp"))
+            (define take-ctx (make-map "action" "take" "id" "take-fail"
+                                        "requestor" "did:ma:avatar"
+                                        "item" "did:ma:runtime#lamp"
+                                        "container" "did:ma:runtime#bag"))
+            "#,
+            &env,
+        )
+        .unwrap();
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:runtime#bag",
+                "did:ma:runtime#root",
+                Value::symbol(":take-request"),
+            )),
+        );
+
+        eval_all("((find-method :take-request) (list take-ctx) msg)", &env).unwrap();
+
+        assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 1);
+        assert_eq!(eval_str("(get-prop \"sent-target:1\")", &env), "did:ma:avatar");
+        assert_eq!(
+            eval_all("(map-ref (car (cdr (get-prop \"sent-term:1\"))) \"status\" \"\")", &env).unwrap(),
+            Value::str("failed")
+        );
+        assert_eq!(
+            eval_all("(car (get-prop \"reply-term:1\"))", &env).unwrap(),
+            Value::symbol(":error")
+        );
+    }
+
+    #[test]
+    fn container_forgets_child_when_child_announces_bare_did_parent() {
+        // Regression: when a thing is taken into an avatar inventory its new parent
+        // is a bare DID. The old container must still forget it.
+        let env = container_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#bag".to_string());
+        config.insert("root".to_string(), "did:ma:runtime#root".to_string());
+        crate::state::set_config(config);
+
+        eval_all(
+            r#"
+            (remember-child! (make-map "actor" "did:ma:runtime#lamp"
+                                        "kind" "thing"
+                                        "protocol" "/ma/thing/0.0.1"
+                                        "parent" "did:ma:runtime#bag"
+                                        "name" "lamp"
+                                        "nick" "lamp"
+                                        "description" "A lamp."))
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        // Item now reports its parent is a bare avatar DID (held in inventory).
+        env.define(
+            Rc::from("departure_msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:runtime#lamp",
+                "did:ma:runtime#bag",
+                Value::list(vec![
+                    Value::symbol(":parent"),
+                    Value::list(vec![]),
+                ]),
+            )),
+        );
+
+        eval_all(
+            r#"
+            (define departure-ctx (make-map "actor" "did:ma:runtime#lamp"
+                                             "kind" "thing"
+                                             "protocol" "/ma/thing/0.0.1"
+                                             "parent" "did:ma:avatar"
+                                             "name" "lamp"
+                                             "nick" "lamp"
+                                             "description" "A lamp."))
+            ((find-method :parent) (list departure-ctx) departure_msg)
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        // Container has forgotten the item.
+        assert_eq!(
+            eval_all("(child-ctx \"did:ma:runtime#lamp\")", &env).unwrap(),
+            Value::Bool(false)
+        );
     }
 }

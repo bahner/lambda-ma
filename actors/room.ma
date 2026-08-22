@@ -1345,15 +1345,15 @@
             (else
              (reply-command-error msg mediated (string-append "Unknown agent, thing, or container: " token)))))))
 
-; :drop is a capacity pre-check only, sent by the avatar to the room before
-; the held item's own (unchanged) :set-parent - it never itself relocates
-; anything or changes room state.
+; Pre-check: caller must be present and room must have capacity before avatar sends :set-parent.
 (set-rpc-method! :drop
   (lambda (args msg)
-    (cond ((not (null? args))
-           (reply-error msg "usage: :drop"))
+    (cond ((null? args)
+           (reply-error msg "usage: :drop <item-did-url>"))
+          ((not (child-ctx (canonical-actor (msg-from msg))))
+           (reply-error msg "not in room"))
           ((>= (node-children-count) (node-max-children))
-           (reply-error msg "drop refused: room is full"))
+           (reply-error msg "room is full"))
           (else
            (reply-ok msg)))))
 
