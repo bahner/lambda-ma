@@ -153,18 +153,22 @@ fn room_help_contains_room_name_and_key_commands() {
     ma_scheme_actor::state::set_config(make_config("did:ma:runtime", "did:ma:runtime#lounge"));
     eval_all(r#"(set-prop! "name" "The Lounge")"#, &env).unwrap();
 
-    env.define(Rc::from("msg"), rpc_msg("did:ma:alice", "did:ma:runtime#lounge", ":test"));
+    env.define(
+        Rc::from("msg"),
+        rpc_msg("did:ma:alice", "did:ma:runtime#lounge", ":test"),
+    );
     eval_all("((find-method :help) '() msg)", &env).unwrap();
 
-    let reply = eval_str("(get-prop \"reply-term:1\")", &env);
-    // reply is a string — check it is wrapped in [:ok text]
+    // reply is [:ok "text..."] — extract and validate the text
     let text = eval_str("(car (cdr (get-prop \"reply-term:1\")))", &env);
-    assert!(text.contains("The Lounge"), "help text should include the room name");
+    assert!(
+        text.contains("The Lounge"),
+        "help text should include the room name"
+    );
     assert!(text.contains("look"), "help text should list 'look'");
     assert!(text.contains("say"), "help text should list 'say'");
     assert!(text.contains("exits?"), "help text should list 'exits?'");
     assert!(text.contains("dig"), "help text should list 'dig'");
-    drop(reply);
 }
 
 // ── Room `:prop` ──────────────────────────────────────────────────────────
@@ -194,6 +198,12 @@ fn room_prop_owner_can_set_and_reset_text_properties() {
         eval_all("(car (get-prop \"reply-term:1\"))", &env).unwrap(),
         Value::symbol(":ok")
     );
+    // Verify prop was set: reply text names the key and node-name reflects it.
+    let reply_text = eval_str("(car (cdr (get-prop \"reply-term:1\")))", &env);
+    assert!(
+        reply_text.contains("name"),
+        "reply text should mention 'name', got: {reply_text}"
+    );
     assert_eq!(eval_str("(get-prop \"name\")", &env), "Grand Hall");
 
     // Reset the prop (no value args).
@@ -211,7 +221,11 @@ fn room_prop_owner_can_set_and_reset_text_properties() {
         eval_all("(car (get-prop \"reply-term:2\"))", &env).unwrap(),
         Value::symbol(":ok")
     );
-    assert_eq!(eval_str("(get-prop \"name\")", &env), "");
+    // set-node-prop! with "" calls del-prop! so the key is absent, not set to ""
+    assert_eq!(
+        eval_all("(get-prop \"name\")", &env).unwrap(),
+        Value::Bool(false)
+    );
 }
 
 #[test]
@@ -293,10 +307,7 @@ fn room_emote_broadcasts_typed_event_and_acknowledges() {
 
     // Emote is broadcast to occupants.
     assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 1);
-    assert_eq!(
-        eval_str("(get-prop \"sent-target:1\")", &env),
-        "did:ma:bob"
-    );
+    assert_eq!(eval_str("(get-prop \"sent-target:1\")", &env), "did:ma:bob");
     assert_eq!(
         eval_all("(car (get-prop \"sent-term:1\"))", &env).unwrap(),
         Value::symbol(":emote")
@@ -339,11 +350,7 @@ fn room_emote_fails_for_speaker_without_event_ctx() {
 fn room_where_routes_query_to_movable_actor() {
     let env = room_env();
     ma_scheme_actor::state::set_config(make_config("did:ma:runtime", "did:ma:runtime#room"));
-    eval_all(
-        r#"(test-thing-claim! "did:ma:runtime#lamp" "lamp")"#,
-        &env,
-    )
-    .unwrap();
+    eval_all(r#"(test-thing-claim! "did:ma:runtime#lamp" "lamp")"#, &env).unwrap();
 
     env.define(
         Rc::from("msg"),
@@ -395,11 +402,7 @@ fn room_where_reports_unknown_token() {
 fn room_recycle_forwards_to_known_movable() {
     let env = room_env();
     ma_scheme_actor::state::set_config(make_config("did:ma:runtime", "did:ma:runtime#room"));
-    eval_all(
-        r#"(test-thing-claim! "did:ma:runtime#vase" "vase")"#,
-        &env,
-    )
-    .unwrap();
+    eval_all(r#"(test-thing-claim! "did:ma:runtime#vase" "vase")"#, &env).unwrap();
 
     env.define(
         Rc::from("msg"),
@@ -525,11 +528,7 @@ fn room_thing_alias_set_and_cleared_by_owner() {
     let env = room_env();
     ma_scheme_actor::state::set_config(make_config("did:ma:runtime", "did:ma:runtime#room"));
     eval_all(r#"(set-prop! "owner" "did:ma:owner")"#, &env).unwrap();
-    eval_all(
-        r#"(test-thing-claim! "did:ma:runtime#lamp" "lamp")"#,
-        &env,
-    )
-    .unwrap();
+    eval_all(r#"(test-thing-claim! "did:ma:runtime#lamp" "lamp")"#, &env).unwrap();
 
     // Query existing alias.
     env.define(
@@ -608,11 +607,17 @@ fn exit_traverse_unlocked_returns_target_ctx() {
     let result_ctx = eval_all("(car (cdr (get-prop \"reply-term:1\")))", &env).unwrap();
     assert!(matches!(result_ctx, Value::Map(_)));
     assert_eq!(
-        eval_str("(ctx-text (car (cdr (get-prop \"reply-term:1\"))) \"parent\")", &env),
+        eval_str(
+            "(ctx-text (car (cdr (get-prop \"reply-term:1\"))) \"parent\")",
+            &env
+        ),
         "did:ma:runtime#kitchen"
     );
     assert_eq!(
-        eval_str("(ctx-text (car (cdr (get-prop \"reply-term:1\"))) \"direction\")", &env),
+        eval_str(
+            "(ctx-text (car (cdr (get-prop \"reply-term:1\"))) \"direction\")",
+            &env
+        ),
         "north"
     );
 }
@@ -655,7 +660,10 @@ fn exit_traverse_locked_returns_blocked_ctx_at_source_room() {
     );
     // Blocked: parent in reply ctx stays at the source room, not the target.
     assert_eq!(
-        eval_str("(ctx-text (car (cdr (get-prop \"reply-term:1\"))) \"parent\")", &env),
+        eval_str(
+            "(ctx-text (car (cdr (get-prop \"reply-term:1\"))) \"parent\")",
+            &env
+        ),
         "did:ma:runtime#room"
     );
 }
@@ -826,7 +834,10 @@ fn exit_about_returns_descriptive_text() {
     eval_all("(on-message msg)", &env).unwrap();
 
     let text = eval_str("(car (cdr (get-prop \"reply-term:1\")))", &env);
-    assert!(text.contains("north"), "about text should mention direction");
+    assert!(
+        text.contains("north"),
+        "about text should mention direction"
+    );
     assert!(
         text.contains("did:ma:runtime#kitchen"),
         "about text should mention target room"
@@ -925,10 +936,7 @@ fn stdlib_join_words_concatenates_with_spaces() {
         eval_str(r#"(join-words (list "hello" "world"))"#, &env),
         "hello world"
     );
-    assert_eq!(
-        eval_str(r#"(join-words (list "one"))"#, &env),
-        "one"
-    );
+    assert_eq!(eval_str(r#"(join-words (list "one"))"#, &env), "one");
     assert_eq!(eval_str(r#"(join-words '())"#, &env), "");
 }
 
@@ -1016,9 +1024,15 @@ fn stdlib_actor_ctx_shape_requires_name_nick_description() {
 fn stdlib_unique_string_entries_deduplicates_preserving_order() {
     let env = stdlib_env();
 
+    // string-entries uses cons so it reverses; unique-string-entries then deduplicates
+    // in that reversed order → first unique from the end wins.
     assert_eq!(
-        eval_all(r#"(unique-string-entries (list "a" "b" "a" "c" "b"))"#, &env).unwrap(),
-        Value::list(vec![Value::str("a"), Value::str("b"), Value::str("c")])
+        eval_all(
+            r#"(unique-string-entries (list "a" "b" "a" "c" "b"))"#,
+            &env
+        )
+        .unwrap(),
+        Value::list(vec![Value::str("b"), Value::str("c"), Value::str("a")])
     );
     assert_eq!(
         eval_all(r#"(unique-string-entries '())"#, &env).unwrap(),

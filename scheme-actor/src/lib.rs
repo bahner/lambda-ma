@@ -610,11 +610,8 @@ mod tests {
             first_reply_count + 1
         );
 
-        let refreshed_ctx = eval_all(
-            "(map-set (node-ctx) \"description\" \"refreshed\")",
-            &env,
-        )
-        .unwrap();
+        let refreshed_ctx =
+            eval_all("(map-set (node-ctx) \"description\" \"refreshed\")", &env).unwrap();
         env.define(
             Rc::from("refreshed_parent_msg"),
             Value::Msg(sample_term_msg(
@@ -1493,8 +1490,8 @@ mod tests {
 
         assert!(eval_bool("(null? (map-ref (room-ctx) \"exits\"))", &env));
 
-                eval_all(
-                        r#"
+        eval_all(
+            r#"
                         (remember-child!
                             (make-map "actor" "did:ma:runtime#north-exit"
                                                 "kind" "exit"
@@ -1506,9 +1503,9 @@ mod tests {
                                                 "direction" "north"
                                                 "target-room" "did:ma:runtime#kitchen"))
                         "#,
-                        &env,
-                )
-                .unwrap();
+            &env,
+        )
+        .unwrap();
 
         assert_eq!(
             eval_str(
@@ -3309,10 +3306,7 @@ mod tests {
         );
         assert_eq!(
             eval_all("(get-prop \"reply-term:7\")", &env).unwrap(),
-            Value::list(vec![
-                Value::symbol(":ok"),
-                Value::str("locked")
-            ])
+            Value::list(vec![Value::symbol(":ok"), Value::str("locked")])
         );
         assert_eq!(
             eval_all("(get-prop \"reply-term:8\")", &env).unwrap(),
@@ -4383,10 +4377,7 @@ mod tests {
             &env
         ));
         assert_eq!(
-            eval_str(
-                "(ctx-text (car (cdr (fill-event-term 1))) \"did\")",
-                &env
-            ),
+            eval_str("(ctx-text (car (cdr (fill-event-term 1))) \"did\")", &env),
             "did:ma:owner"
         );
         assert_eq!(
@@ -4476,20 +4467,14 @@ mod tests {
         let env = room_env();
 
         assert_eq!(
-            eval_str(
-                r#"(existing-room-target "did:ma:runtime#kitchen")"#,
-                &env
-            ),
+            eval_str(r#"(existing-room-target "did:ma:runtime#kitchen")"#, &env),
             "did:ma:runtime#kitchen"
         );
         assert!(eval_bool(
             r#"(not (existing-room-target "did:ma:runtime"))"#,
             &env
         ));
-        assert!(eval_bool(
-            r#"(not (existing-room-target "bar"))"#,
-            &env
-        ));
+        assert!(eval_bool(r#"(not (existing-room-target "bar"))"#, &env));
     }
 
     #[test]
