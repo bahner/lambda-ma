@@ -11,7 +11,7 @@ runtime:
       "*": ["*"]
     scheduler:
       "*": [":help"]
-      "#": [":cron", ":interval", ":at", ":random", ":delay"]
+      "#": [":cron", ":interval", ":at", ":random", ":in"]
 
   acl:
     "*":

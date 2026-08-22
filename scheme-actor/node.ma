@@ -324,7 +324,7 @@
         (ma-send! current (list :parent (node-ctx))))))
 
 (define (announce-ctx-to-root!)
-  (ma-send! (root) (list :ctx-update (node-ctx))))
+  (ma-send! (root) (list :ctx (node-ctx))))
 
 ; A room repair asks a child with the short existing :report-parent form to
 ; reannounce through the normal parent handshake. The scheduler's older
@@ -377,12 +377,14 @@
 
 ; A terminating child (e.g. recycle) has no real new parent to report, so its
 ; announcement carries an explicitly empty "parent" rather than a DID-URL.
+; A child held by a bare avatar DID also departs from DID-URL containers.
 ; This is distinct from child-ctx-valid?, which requires a real target parent
 ; and is used for admission/reparenting.
 (define (child-departure-ctx? ctx)
   (and (map? ctx)
        (valid-did-url? (ctx-text ctx "actor"))
-       (equal? (ctx-text ctx "parent") "")
+       ; Empty parent = recycled; bare DID parent = now held by an avatar.
+       (not (valid-did-url? (ctx-text ctx "parent")))
        (non-empty-string? (ctx-text ctx "name"))
        (non-empty-string? (ctx-text ctx "nick"))
        (non-empty-string? (ctx-text ctx "description"))))
@@ -523,7 +525,7 @@
 
 (define (roll-call-schedule-end! seconds)
   (ma-send! (entity-url "scheduler")
-            (list "roll-call-end" :delay seconds (list :roll-call "end"))))
+            (list "roll-call-end" :in (string-append (number->string seconds) "s") (list :roll-call "end"))))
 
 (define (roll-call-end! msg)
   (if (not (roll-call-active?))
