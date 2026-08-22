@@ -130,3 +130,168 @@
     (if (null? args)
         (reply-ok-with msg (root-orphan-ctxs))
         (reply-error msg "usage: :orphans?"))))
+
+; ── Actor spatial registry ─────────────────────────────────────────────────
+; Flat ephemeral map of canonical-did-url → ctx rebuilt from :ctx-update
+; pushes. Pending-actions tracks in-flight moves until item ctx confirms.
+
+(define ACTOR_REGISTRY_KEY "actor-registry")
+(define PENDING_ACTIONS_KEY "pending-actions")
+(define PENDING_BY_CHILD_KEY "pending-by-child")
+
+(define (actor-registry)
+  (let ((v (get-prop ACTOR_REGISTRY_KEY)))
+    (if (map? v) v (make-map))))
+
+(define (registry-put! did-url ctx)
+  (set-prop! ACTOR_REGISTRY_KEY
+             (map-set (actor-registry) (canonical-actor did-url) ctx)))
+
+(define (registry-lookup did-url)
+  (map-ref (actor-registry) (canonical-actor did-url) #f))
+
+(define (pending-actions)
+  (let ((v (get-prop PENDING_ACTIONS_KEY)))
+    (if (map? v) v (make-map))))
+
+(define (pending-by-child)
+  (let ((v (get-prop PENDING_BY_CHILD_KEY)))
+    (if (map? v) v (make-map))))
+
+(define (add-pending-action! action-ctx)
+  (let ((id (map-ref action-ctx "id" #f))
+        (child (map-ref action-ctx "child" #f)))
+    (if (and id child)
+        (begin
+          (set-prop! PENDING_ACTIONS_KEY
+                     (map-set (pending-actions) id action-ctx))
+          (set-prop! PENDING_BY_CHILD_KEY
+                     (map-set (pending-by-child) (canonical-actor child) id)))
+        #f)))
+
+(define (remove-pending-action! id child)
+  (set-prop! PENDING_ACTIONS_KEY (map-delete (pending-actions) id))
+  (set-prop! PENDING_BY_CHILD_KEY (map-delete (pending-by-child) (canonical-actor child))))
+
+; Walk registry parent chain until a room-kind node is found.
+(define (find-effective-room did-url)
+  (let loop ((current (canonical-actor did-url)) (depth 0))
+    (if (> depth 10)
+        #f
+        (let ((ctx (registry-lookup current)))
+          (cond ((not ctx) #f)
+                ((equal? (ctx-text ctx "kind") "room")
+                 (if (entity-live? current) current #f))
+                (else (loop (canonical-actor (ctx-text ctx "parent")) (+ depth 1))))))))
+
+(define (action-event-verb action)
+  (cond ((equal? action "put") :put-event)
+        ((equal? action "take") :take-event)
+        ((equal? action "drop") :drop-event)
+        (else :move-event)))
+
+(define (send-action-event! subject action-ctx status reason)
+  (let ((full-ctx (if reason
+                      (map-set (map-set action-ctx "status" status) "reason" reason)
+                      (map-set action-ctx "status" status))))
+    (ma-send! (canonical-actor subject)
+              (list (action-event-verb (map-ref action-ctx "action" "")) full-ctx))))
+
+(define (action-ctx-valid? ctx)
+  (and (map? ctx)
+       (non-empty-string? (map-ref ctx "action" ""))
+       (non-empty-string? (map-ref ctx "id" ""))
+       (valid-did? (map-ref ctx "subject" ""))
+       (valid-did-url? (map-ref ctx "child" ""))
+       (non-empty-string? (map-ref ctx "parent" ""))))
+
+(define (action-co-located? subject child-did container-did)
+  (let ((subject-room (find-effective-room subject))
+        (child-room (find-effective-room child-did))
+        (container-room (find-effective-room container-did)))
+    (and subject-room child-room container-room
+         (equal? subject-room container-room)
+         (equal? subject-room child-room))))
+
+; Walk parent chain, skipping containers, to check if subject is the holder.
+(define (actor-effectively-held-by? did subject)
+  (let loop ((current did) (depth 0))
+    (if (> depth 10)
+        #f
+        (let ((ctx (registry-lookup current)))
+          (if (not ctx)
+              #f
+              (let ((kind (ctx-text ctx "kind"))
+                    (parent (canonical-actor (ctx-text ctx "parent" ""))))
+                (cond ((equal? kind "room") #f)
+                      ((same-actor? parent subject) #t)
+                      (else (loop parent (+ depth 1))))))))))
+
+(define (action-subject-can-move? action subject child-did container-did)
+  (let ((child-ctx (registry-lookup child-did)))
+    (if (not child-ctx)
+        #f
+        (let ((child-parent (canonical-actor (map-ref child-ctx "parent" ""))))
+          (cond ((equal? action "put")
+                 (or (actor-effectively-held-by? child-did subject)
+                     (equal? child-parent (find-effective-room container-did))))
+                ((equal? action "take")
+                 (same-actor? child-parent container-did))
+                ((equal? action "drop")
+                 (actor-effectively-held-by? child-did subject))
+                (else #f))))))
+
+(define (check-completed-action! new-ctx)
+  (let ((child-did (canonical-actor (ctx-text new-ctx "actor")))
+        (new-parent (canonical-actor (map-ref new-ctx "parent" ""))))
+    (let ((pending-id (map-ref (pending-by-child) child-did #f)))
+      (if pending-id
+          (let ((action-ctx (map-ref (pending-actions) pending-id #f)))
+            (if (and action-ctx
+                     (same-actor? new-parent (map-ref action-ctx "parent" "")))
+                (let ((subject (map-ref action-ctx "subject" "")))
+                  (remove-pending-action! pending-id child-did)
+                  (send-action-event! subject action-ctx "ok" #f))
+                #f))
+          #f))))
+
+(set-internal-rpc-method! :ctx-update
+  (lambda (args msg)
+    (cond ((null? args)
+           (reply-error msg "usage: :ctx-update <ctx>"))
+          ((not (map? (car args)))
+           (reply-error msg "ctx-update requires a ctx map"))
+          ((not (same-actor? (msg-from msg) (ctx-text (car args) "actor")))
+           (reply-error msg "ctx-update must be self-reported"))
+          (else
+           (let ((ctx (car args)))
+             (registry-put! (ctx-text ctx "actor") ctx)
+             (check-completed-action! ctx)
+             (reply-ok msg))))))
+
+(set-internal-rpc-method! :action
+  (lambda (args msg)
+    (cond ((null? args)
+           (reply-error msg "usage: :action <action-ctx>"))
+          ((not (action-ctx-valid? (car args)))
+           (reply-error msg "invalid action-ctx"))
+          (else
+           (let* ((action-ctx (car args))
+                  (action (map-ref action-ctx "action" ""))
+                  (subject (map-ref action-ctx "subject" ""))
+                  (child (map-ref action-ctx "child" ""))
+                  (parent (map-ref action-ctx "parent" ""))
+                  (id (map-ref action-ctx "id" "")))
+             (cond ((not (action-co-located? subject child parent))
+                    (begin
+                      (send-action-event! subject action-ctx "failed" "not in same room")
+                      (reply-error msg "not in same room")))
+                   ((not (action-subject-can-move? action subject child parent))
+                    (begin
+                      (send-action-event! subject action-ctx "failed" "not authorised to move item")
+                      (reply-error msg "not authorised to move item")))
+                   (else
+                    (begin
+                      (add-pending-action! action-ctx)
+                      (ma-send! (canonical-actor child) (list :set-parent (canonical-actor parent)))
+                      (reply-ok-with msg id)))))))))

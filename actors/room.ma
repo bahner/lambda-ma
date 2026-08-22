@@ -895,34 +895,6 @@
   (if (go-delegated-call? args msg) (cdr args) args))
 
 
-(define (put-args-valid? args)
-  (and (not (null? args))
-       (not (null? (cdr args)))
-       (equal? (car (cdr args)) "in")
-       (not (null? (cdr (cdr args))))
-       (or (null? (cdr (cdr (cdr args))))
-           (and (map? (car (cdr (cdr (cdr args)))))
-                (null? (cdr (cdr (cdr (cdr args)))))))))
-
-(define (put-item-token args)
-  (if (null? args) #f (car args)))
-
-(define (put-container-token args)
-  (if (or (null? args) (null? (cdr args)) (null? (cdr (cdr args))))
-      #f
-      (car (cdr (cdr args)))))
-
-(define (put-supplied-ctx args)
-  (if (or (null? args)
-          (null? (cdr args))
-          (null? (cdr (cdr args)))
-          (null? (cdr (cdr (cdr args)))))
-      #f
-      (car (cdr (cdr (cdr args))))))
-
-(define (put-visible-error msg token)
-  (reply-to-sender msg (string-append "You cannot see " token ".")))
-
 (define (reject-foreign-delegated-go? args msg)
   (and (delegated-did-arg? args)
        (not (go-delegated-call? args msg))))
@@ -1373,33 +1345,6 @@
             (else
              (reply-command-error msg mediated (string-append "Unknown agent, thing, or container: " token)))))))
 
-(set-cmd-method! :put
-  (lambda (args msg)
-    (let* ((did (caller-did args msg))
-           (put-args (command-args args msg))
-           (item-token (put-item-token put-args))
-           (container-token (put-container-token put-args))
-           (supplied-ctx (put-supplied-ctx put-args))
-           (item-actor (if supplied-ctx
-                           (ctx-text supplied-ctx "actor")
-                           (if item-token (movable-ref item-token) #f)))
-           (container-actor (if container-token (movable-ref container-token) #f))
-           (item-ctx (if supplied-ctx supplied-ctx (if item-actor (claim-ctx item-actor) #f))))
-      (cond ((not (put-args-valid? put-args))
-             (reply-to-sender msg "Usage: put <agent-or-thing> in <container>"))
-            ((not item-actor)
-              (put-visible-error msg item-token))
-            ((not container-actor)
-              (put-visible-error msg container-token))
-            ((same-actor? item-actor container-actor)
-             (reply-to-sender msg "You cannot put something inside itself."))
-            ((not (child-ctx-valid? item-ctx))
-             (reply-to-sender msg (string-append "Missing details for agent or thing: " item-token)))
-            (else
-             (begin
-               (ma-send! (canonical-actor item-actor) (list :set-parent did (canonical-actor container-actor) item-ctx))
-               (reply-to-sender msg (string-append "You try to put " item-token " in " container-token "."))))))))
-
 ; :drop is a capacity pre-check only, sent by the avatar to the room before
 ; the held item's own (unchanged) :set-parent - it never itself relocates
 ; anything or changes room state.
@@ -1714,6 +1659,7 @@
          (begin
            (migrate-legacy-exits!)
            (ma-save-state!)
+           (announce-ctx-to-root!)
            (propose-node-parent! (room-ctx-parent))))
         ((equal? (verb-of term) :shutdown)
          (ma-save-state!))

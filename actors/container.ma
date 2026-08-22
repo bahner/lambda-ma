@@ -44,6 +44,13 @@
       #f)
   (ma-save-state!))
 
+(define (closed?)
+  (equal? (get-prop "closed") "true"))
+
+(define (set-closed! value)
+  (set-prop! "closed" (if value "true" "false"))
+  (ma-save-state!))
+
 (define (content-lines entries)
   (cond ((null? entries) '())
         (else (cons (child-line (car entries)) (content-lines (cdr entries))))))
@@ -57,6 +64,16 @@
 (define (container-ctx-rev)
   (let ((value (get-prop "ctx:rev")))
     (if (number? value) value 0)))
+
+(define (prune-dead-local-children!)
+  (let loop ((ctxs (child-ctxs)) (live '()))
+    (cond ((null? ctxs) (reverse live))
+          ((dead-local-actor? (ctx-text (car ctxs) "actor"))
+           (begin
+             (forget-child! (ctx-text (car ctxs) "actor"))
+             (loop (cdr ctxs) live)))
+          (else
+           (loop (cdr ctxs) (cons (car ctxs) live))))))
 
 (define (extend-node-ctx ctx)
   (map-set ctx "rev" (container-ctx-rev)))
@@ -88,7 +105,9 @@
     (if (and (member-string? "ctx:rev" keys)
              (null? (cdr keys)))
         (announce-node-parent!)
-        (send-container-ctx!)))
+        (begin
+          (announce-ctx-to-root!)
+          (send-container-ctx!))))
 
   (define (node-child-admission-error ctx msg)
     (if (locked?) (locked-message) #f))
@@ -106,7 +125,9 @@
            (< confirmed-rev (container-ctx-rev)))))
 
   (define (node-children-query-error msg)
-    (if (locked?) (locked-message) #f))
+    (cond ((locked?) (locked-message))
+          ((closed?) (locked-message))
+          (else #f)))
 
   (define (node-children-query-authorised? msg) #t)
   (define (node-children-query-text) (contents-text))
@@ -145,11 +166,17 @@
 (define (reply-locked msg)
   (reply-error msg (locked-message)))
 
+(define (generate-action-id)
+  (string-append
+    (number->string (ma-random 9223372036854775807))
+    "-"
+    (number->string (ma-random 9223372036854775807))))
+
 (define (container-look-text)
   (string-append
     (name) "\n"
     (description) "\n"
-    (if (locked?) (locked-message) (contents-text))))
+    (if (or (locked?) (closed?)) (locked-message) (contents-text))))
 
 ; Public methods.
 (set-rpc-method! :about
@@ -189,6 +216,49 @@
         (reply-locked msg)
         (reply-ok-with msg (prune-dead-local-children!)))))
 
+(set-rpc-method! :put
+  (lambda (args msg)
+    (cond ((locked?)
+           (reply-locked msg))
+          ((null? args)
+           (reply-error msg "usage: :put <item-did-url>"))
+          ((not (valid-did-url? (car args)))
+           (reply-error msg ":put requires a DID-URL"))
+          ((same-actor? (car args) (self))
+           (reply-error msg "cannot put something inside itself"))
+          (else
+           (let* ((id (generate-action-id))
+                  (action-ctx (make-map
+                                 "action" "put"
+                                 "id" id
+                                 "subject" (msg-from msg)
+                                 "child" (canonical-actor (car args))
+                                 "parent" (canonical-actor (self)))))
+             (ma-send! (root) (list :action action-ctx))
+             (reply-ok-with msg id))))))
+
+(set-rpc-method! :take
+  (lambda (args msg)
+    (cond ((locked?)
+           (reply-locked msg))
+          ((null? args)
+           (reply-error msg "usage: :take <item-did-url>"))
+          ((not (valid-did-url? (car args)))
+           (reply-error msg ":take requires a DID-URL"))
+          ((not (child-ctx (canonical-actor (car args))))
+           (reply-error msg "item not in this container"))
+          (else
+           (let* ((id (generate-action-id))
+                  (subject (msg-from msg))
+                  (action-ctx (make-map
+                                 "action" "take"
+                                 "id" id
+                                 "subject" subject
+                                 "child" (canonical-actor (car args))
+                                 "parent" subject)))
+             (ma-send! (root) (list :action action-ctx))
+             (reply-ok-with msg id))))))
+
 (set-rpc-method! :lock
   (lambda (args msg)
         (let ((did (node-effective-did args msg))
@@ -217,6 +287,24 @@
              (begin
                (set-locked! #f)
                (reply-ok-with msg "unlocked")))))))
+
+(set-rpc-method! :open
+  (lambda (args msg)
+    (cond ((not (owner-caller? msg))
+           (reply-error msg "only owner may open this container"))
+          (else
+           (begin
+             (set-closed! #f)
+             (reply-ok-with msg "open"))))))
+
+(set-rpc-method! :close
+  (lambda (args msg)
+    (cond ((not (owner-caller? msg))
+           (reply-error msg "only owner may close this container"))
+          (else
+           (begin
+             (set-closed! #t)
+             (reply-ok-with msg "closed"))))))
 
 (set-rpc-method! :set-recovery-secret handle-node-set-recovery-secret!)
 
@@ -250,7 +338,9 @@
 
 (define (on-signal term)
   (cond ((equal? (verb-of term) :start)
-         (send-container-ctx!))
+         (begin
+           (announce-ctx-to-root!)
+           (send-container-ctx!)))
         ((equal? (verb-of term) :shutdown)
          (ma-save-state!))
         (else #f)))

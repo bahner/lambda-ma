@@ -273,11 +273,15 @@
 ; lying-around thing without first requiring :claim or a parent proxy.
 ; Claiming ownership on a real "take" is avatar.zscheme's job (it calls
 ; :claim before proposing itself as parent), not a side effect of this gate.
+(define (node-caller-is-local-root? msg)
+  (same-actor? (msg-from msg) (root)))
+
 (define (node-transfer-caller-authorised? did msg)
   (or (node-caller-is-parent? msg)
       (node-orphan-owner-recovery? did)
       (node-owner-delegation? did msg)
-      (not (node-owner))))
+      (not (node-owner))
+      (node-caller-is-local-root? msg)))
 
 (define (node-recycle-caller-authorised? did msg)
   (and (node-owner-did? did)
@@ -318,6 +322,9 @@
     (if (equal? current "")
         #f
         (ma-send! current (list :parent (node-ctx))))))
+
+(define (announce-ctx-to-root!)
+  (ma-send! (root) (list :ctx-update (node-ctx))))
 
 ; A room repair asks a child with the short existing :report-parent form to
 ; reannounce through the normal parent handshake. The scheduler's older
@@ -548,23 +555,6 @@
 
 (define (child-ctxs)
   (map-values (children-map)))
-
-(define (prune-dead-local-children!)
-  (let loop ((ctxs (child-ctxs)) (changed #f))
-    (if (null? ctxs)
-        (begin
-          (if changed
-              (begin
-                (ma-save-state!)
-                (node-children-changed!))
-              #f)
-          (child-ctxs))
-        (let ((actor (ctx-text (car ctxs) "actor")))
-          (if (dead-local-actor? actor)
-              (begin
-                (forget-child! actor)
-                (loop (cdr ctxs) #t))
-              (loop (cdr ctxs) changed))))))
 
 (define (child-ctxs-by-kind kind)
   (let loop ((ctxs (child-ctxs)) (acc '()))
@@ -834,7 +824,9 @@
       (if (and (non-empty-string? old-parent)
                (not (same-actor? old-parent new-parent)))
           (ma-send! old-parent (list :parent (node-ctx)))
-          #f))))
+          #f)
+      ; Inform root of new location so it can update its spatial registry.
+      (announce-ctx-to-root!))))
 
 (define (handle-node-child args msg)
   (cond ((null? args)
