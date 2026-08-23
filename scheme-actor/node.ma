@@ -463,7 +463,6 @@
     (define (node-child-admission-error ctx msg) #f)
     (define (node-children-changed!) #f)
     (define (node-child-departed! ctx) #f)
-    (define (node-child-orphaned! ctx) #f)
     (define (node-parent-committed!) #f)
     (define (node-confirmation-stale? ctx) #f)
     (define (node-children-query-error msg) #f)
@@ -761,7 +760,6 @@
                  (else
                   (begin
                     (forget-child! (ctx-text (car args) "actor"))
-                      (node-child-orphaned! existing)
                     (node-children-changed!)
                     (reply-ok msg))))))
                   ((not (child-ctx-valid? (car args)))
@@ -801,25 +799,31 @@
         (else
          (reply-ok-with msg (children-map)))))
 
-(define (handle-node-orphan! args msg)
+(define (orphan-node-child! args msg)
   (cond ((or (null? args) (not (null? (cdr args))))
-         (reply-error msg "usage: :orphan <actor>"))
+         "usage: :orphan <actor>")
         ((not (valid-did-url? (car args)))
-         (reply-error msg "orphan actor must be a DID-URL"))
+         "orphan actor must be a DID-URL")
         ((not (owner-authorised? msg))
-         (reply-error msg "only owner may orphan a child"))
+         "only owner may orphan a child")
         (else
          (let ((existing (child-ctx (car args))))
            (cond ((not existing)
-                  (reply-ok msg))
+                  :missing)
                  ((not (node-orphanable-child-ctx? existing))
-                  (reply-error msg "only thing, agent, or container children may be orphaned"))
+                  "only thing, agent, or container children may be orphaned")
                  (else
                   (begin
                     (forget-child! (car args))
-                      (node-child-orphaned! existing)
                     (node-children-changed!)
-                    (reply-ok msg))))))))
+                    :orphaned)))))))
+
+(define (handle-node-orphan! args msg)
+  (let ((result (orphan-node-child! args msg)))
+    (if (or (equal? result :missing)
+            (equal? result :orphaned))
+        (reply-ok msg)
+        (reply-error msg result))))
 
 (define (handle-node-root-orphan! args msg)
   (cond ((or (null? args)

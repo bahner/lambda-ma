@@ -211,18 +211,6 @@
                       ((same-actor? parent subject) #t)
                       (else (loop parent (+ depth 1))))))))))
 
-(set-internal-rpc-method! :ctx
-  (lambda (args msg)
-    (when (and (not (null? args)) (map? (car args)))
-      (registry-put! (msg-from msg) (car args)))))
-
-; External RPC variant of :ctx — called from avatar via actor-call; replies :ok.
-(set-rpc-method! :ctx-update
-  (lambda (args msg)
-    (when (and (not (null? args)) (map? (car args)))
-      (registry-put! (msg-from msg) (car args)))
-    (reply-ok msg)))
-
 ; item initiates put: validates caller, root validates spatial, then gates container and drives item
 (set-internal-rpc-method! :put-request
   (lambda (args msg)

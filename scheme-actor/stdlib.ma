@@ -95,8 +95,7 @@
       (ctx-optional-text-valid? ctx "inv")
        (ctx-optional-text-valid? ctx "root")
       (ctx-optional-text-valid? ctx "parent")
-       (ctx-optional-text-valid? ctx "protocol")
-       (ctx-optional-text-valid? ctx "room")
+      (ctx-optional-text-valid? ctx "protocol")
        (ctx-optional-text-valid? ctx "name")
        (ctx-optional-text-valid? ctx "nick")
        (ctx-optional-text-valid? ctx "description")
@@ -131,10 +130,6 @@
 (define (container-ctx? ctx msg)
   (and (actor-ctx? ctx msg)
        (equal? (ctx-text ctx "kind") "container")))
-
-(define (room-ctx? ctx msg)
-  (and (valid-ctx? ctx msg)
-       (non-empty-string? (ctx-text ctx "room"))))
 
 (define (string-entries xs)
   (let loop ((rest xs) (acc '()))

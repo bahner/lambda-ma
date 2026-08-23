@@ -57,22 +57,6 @@
          (car (cdr (car ctx))))
         (else (ctx-alist-ref (cdr ctx) key))))
 
-(define (valid-move-ctx? ctx)
-  (and (map? ctx)
-       (same-actor? (ctx-text ctx "actor") (self))
-       (equal? (ctx-text ctx "kind") "agent")
-      (node-valid-parent-ref? (ctx-text ctx "room"))))
-
-      ; Transfer validation keeps take/drop strict at the room boundary.
-(define (valid-room-ctx? ctx)
-  (and (pair? ctx)
-       (equal? (ctx-alist-ref ctx :kind) "agent")
-       (non-empty-string? (ctx-alist-ref ctx :room))))
-
-(define (authorised-room-ctx? room)
-  (or (same-actor? room (pending-room))
-      (same-actor? room (node-parent))))
-
 (define (recycle! msg)
   (let ((old-parent (node-parent)))
     (begin
@@ -102,13 +86,6 @@
         (begin
           (ma-send! (canonical-actor p) term)
           (reply-ok msg)))))
-
-(define (move-to-room! target-room source-room)
-  (if (and (not (movement-pending?))
-           (same-actor? source-room (node-parent)))
-      (begin
-        (enter (canonical-actor target-room)))
-      #f))
 
 ; Public methods.
 (set-rpc-method! :about
@@ -153,47 +130,6 @@
            (send-parent-room! msg (list :move)))
           (else
            (reply-error msg "only a free agent or owner may move this agent")))))
-
-(set-internal-rpc-method! :enter-room
-  (lambda (args msg)
-    (if (or (null? args) (null? (cdr args)))
-        #f
-        (move-to-room! (car args) (car (cdr args))))))
-
-(set-internal-rpc-method! :ctx
-  (lambda (args msg)
-    (if (null? args)
-        (if (or (owner-caller? msg) (node-caller-is-parent? msg))
-          (ma-reply! msg (list :ok (node-ctx)))
-            #f)
-           (let ((ctx (car args)))
-          (cond
-            ((and (valid-room-ctx? ctx)
-               (same-actor? (msg-from msg) (ctx-alist-ref ctx :room))
-               (authorised-room-ctx? (ctx-alist-ref ctx :room)))
-             (let ((old-parent (node-parent))
-                   (target-parent (ctx-alist-ref ctx :room)))
-               (begin
-               (set-node-parent! target-parent)
-               (node-parent-committed!)
-                 (ma-save-state!)
-                 (if (and (non-empty-string? old-parent)
-                          (not (same-actor? old-parent target-parent)))
-                   (ma-send! (canonical-actor old-parent) (list :parent (node-ctx)))
-                             #f)
-                 (if (not (same-actor? old-parent target-parent))
-                   (announce-node-parent!)
-                   #f))))
-            ((and (valid-move-ctx? ctx)
-                  (or (node-caller-is-parent? msg) (owner-caller? msg)))
-             (begin
-               (if (non-empty-string? (ctx-text ctx "text"))
-                 (set-last-message! (ctx-text ctx "text"))
-                 #f)
-               (if (same-actor? (ctx-text ctx "room") (node-parent))
-                 #f
-                 (move-to-room! (ctx-text ctx "room") (msg-from msg)))))
-            (else #f))))))
 
 (set-rpc-method! :set-recovery-secret handle-node-set-recovery-secret!)
 

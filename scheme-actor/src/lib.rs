@@ -1488,7 +1488,7 @@ mod tests {
         config.insert("self".to_string(), "did:ma:runtime#room".to_string());
         crate::state::set_config(config);
 
-        assert!(eval_bool("(null? (map-ref (room-ctx) \"exits\"))", &env));
+        assert!(eval_bool("(null? (map-ref (room-ctx) \"children\" '()))", &env));
 
         eval_all(
             r#"
@@ -1509,7 +1509,7 @@ mod tests {
 
         assert_eq!(
             eval_str(
-                "(ctx-text (car (map-ref (room-ctx) \"exits\")) \"direction\")",
+                "(ctx-text (car (map-ref (room-ctx) \"children\" '())) \"direction\")",
                 &env
             ),
             "north"
@@ -1528,6 +1528,20 @@ mod tests {
             Rc::from("msg"),
             Value::Msg(sample_msg("did:ma:alice", "did:ma:runtime#room")),
         );
+        eval_all(
+            r#"
+            (set-did-ctx! "did:ma:alice"
+                          (make-map "actor" "did:ma:alice"
+                                    "parent" "did:ma:runtime#room"
+                                    "kind" "agent"
+                                    "protocol" "/ma/agent/0.0.1"
+                                    "name" "Alice"
+                                    "nick" "Alice"
+                                    "description" "A visitor."))
+            "#,
+            &env,
+        )
+        .unwrap();
 
         eval_all("((find-method :look) '() msg)", &env).unwrap();
 
@@ -1541,7 +1555,7 @@ mod tests {
             &env
         ));
         assert!(eval_bool(
-            "(map-has-key? (car (cdr (get-prop \"reply-term:1\"))) \"exits\")",
+            "(equal? (ctx-text (car (map-ref (car (cdr (get-prop \"reply-term:1\"))) \"children\" '())) \"actor\") \"did:ma:alice\")",
             &env
         ));
         assert!(eval_bool("(not (has-prop? \"sent-count\"))", &env));
@@ -1784,20 +1798,28 @@ mod tests {
             "did:ma:runtime#root"
         );
         assert_eq!(eval_int("(map-ref (room-ctx) \"rev\" #f)", &env), 7);
-        assert_eq!(
-            eval_str(
-                "(ctx-text (car (map-ref (room-ctx) \"things\" '())) \"actor\")",
-                &env
-            ),
-            "did:ma:runtime#lamp"
-        );
-        assert_eq!(
-            eval_str(
-                "(ctx-text (car (map-ref (room-ctx) \"exits\" '())) \"direction\")",
-                &env
-            ),
-            "north"
-        );
+        assert!(eval_bool(
+            "(not (map-has-key? (room-ctx) \"things\"))",
+            &env
+        ));
+        assert!(eval_bool(
+            "(not (map-has-key? (room-ctx) \"exits\"))",
+            &env
+        ));
+        assert!(eval_bool(
+            r#"(let loop ((ctxs (map-ref (room-ctx) "children" '())))
+                 (cond ((null? ctxs) #f)
+                       ((equal? (ctx-text (car ctxs) "actor") "did:ma:runtime#lamp") #t)
+                       (else (loop (cdr ctxs)))))"#,
+            &env
+        ));
+        assert!(eval_bool(
+            r#"(let loop ((ctxs (map-ref (room-ctx) "children" '())))
+                 (cond ((null? ctxs) #f)
+                       ((equal? (ctx-text (car ctxs) "direction") "north") #t)
+                       (else (loop (cdr ctxs)))))"#,
+            &env
+        ));
     }
 
     #[test]
@@ -2421,75 +2443,6 @@ mod tests {
                 Value::str("nonce-1"),
                 Value::str("dør"),
             ])
-        );
-    }
-
-    #[test]
-    fn agent_commits_parent_from_pending_room_ctx() {
-        let env = agent_env();
-        install_send_reply_recorders(&env);
-        let mut config = std::collections::HashMap::new();
-        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
-        config.insert("self".to_string(), "did:ma:runtime#rms".to_string());
-        crate::state::set_config(config);
-
-        eval_all(
-            r#"
-            (set-prop! "parent" "did:ma:runtime#room-b")
-            (enter "did:ma:runtime#room-a")
-            "#,
-            &env,
-        )
-        .unwrap();
-        assert_eq!(eval_str("(pending-room)", &env), "did:ma:runtime#room-a");
-
-        env.define(
-            Rc::from("msg"),
-            Value::Msg(sample_msg("did:ma:runtime#room-a", "did:ma:runtime#rms")),
-        );
-        eval_all(
-            r#"
-            ((find-method :ctx)
-                            (list (list (list :kind "agent")
-                          (list :room "did:ma:runtime#room-a")))
-              msg)
-            "#,
-            &env,
-        )
-        .unwrap();
-
-        assert_eq!(eval_str("(node-parent)", &env), "did:ma:runtime#room-a");
-        assert_eq!(eval_str("(pending-room)", &env), "");
-        assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 3);
-        assert_eq!(
-            eval_str("(get-prop \"sent-target:2\")", &env),
-            "did:ma:runtime#room-b"
-        );
-        assert_eq!(
-            eval_all("(car (get-prop \"sent-term:2\"))", &env).unwrap(),
-            Value::symbol(":parent")
-        );
-        assert_eq!(
-            eval_str(
-                "(ctx-text (car (cdr (get-prop \"sent-term:2\"))) \"parent\")",
-                &env
-            ),
-            "did:ma:runtime#room-a"
-        );
-        assert_eq!(
-            eval_str("(get-prop \"sent-target:3\")", &env),
-            "did:ma:runtime#room-a"
-        );
-        assert_eq!(
-            eval_all("(car (get-prop \"sent-term:3\"))", &env).unwrap(),
-            Value::symbol(":parent")
-        );
-        assert_eq!(
-            eval_str(
-                "(ctx-text (car (cdr (get-prop \"sent-term:3\"))) \"parent\")",
-                &env
-            ),
-            "did:ma:runtime#room-a"
         );
     }
 
@@ -4109,39 +4062,6 @@ mod tests {
     }
 
     #[test]
-    fn room_start_migrates_legacy_exit_properties() {
-        let env = room_env();
-        let mut config = std::collections::HashMap::new();
-        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
-        config.insert("self".to_string(), "did:ma:runtime#room".to_string());
-        crate::state::set_config(config);
-
-        eval_all(
-            r#"
-            (set-prop! "exits" (make-map "north" "did:ma:runtime#north-exit"))
-            (set-prop! "exit-target:north" "did:ma:runtime#kitchen")
-            (set-prop! "exit-target-name:north" "Kitchen")
-            (on-signal :start)
-            "#,
-            &env,
-        )
-        .unwrap();
-
-        assert_eq!(
-            eval_str("(exit-target \"north\")", &env),
-            "did:ma:runtime#north-exit"
-        );
-        assert_eq!(
-            eval_str("(exit-room-target \"north\")", &env),
-            "did:ma:runtime#kitchen"
-        );
-        assert_eq!(
-            eval_str("(ctx-text (exit-ctx \"north\") \"target-name\")", &env),
-            "Kitchen"
-        );
-    }
-
-    #[test]
     fn room_exit_init_persists_exit_state() {
         let env = room_env();
         let mut config = std::collections::HashMap::new();
@@ -4374,62 +4294,6 @@ mod tests {
             eval_str("(car (cdr (cdr (fill-event-term 1))))", &env),
             "north"
         );
-    }
-
-    #[test]
-    fn agent_ctx_enters_target_room_itself() {
-        let env = agent_env();
-        let mut config = std::collections::HashMap::new();
-        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
-        config.insert("self".to_string(), "did:ma:runtime#rms".to_string());
-        crate::state::set_config(config);
-
-        eval_all(
-            r#"
-            (set-prop! "parent" "did:ma:runtime#room")
-            (define (ma-send! target term)
-              (inc-prop! "sent-count" 1)
-              (set-prop! (string-append "sent-target:" (number->string (get-prop "sent-count"))) target)
-              (set-prop! (string-append "sent-term:" (number->string (get-prop "sent-count"))) term))
-            "#,
-            &env,
-        )
-        .unwrap();
-
-        env.define(
-            Rc::from("msg"),
-            Value::Msg(sample_msg("did:ma:runtime#room", "did:ma:runtime#rms")),
-        );
-        eval_all(
-            r#"
-                        ((find-method :ctx)
-                            (list (map-set
-                                      (map-set
-                                            (map-set
-                                                (map-set (make-map) "actor" (self))
-                                                "kind" "agent")
-                                            "room" "did:ma:runtime#kitchen")
-                                      "text" "You go north."))
-              msg)
-            "#,
-            &env,
-        )
-        .unwrap();
-
-        assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 1);
-        assert_eq!(
-            eval_str("(get-prop \"sent-target:1\")", &env),
-            "did:ma:runtime#kitchen"
-        );
-        assert!(eval_bool(
-            "(equal? (car (get-prop \"sent-term:1\")) :enter)",
-            &env
-        ));
-        assert_eq!(
-            eval_str("(get-prop \"last-message\")", &env),
-            "You go north."
-        );
-        assert_eq!(eval_str("(pending-room)", &env), "did:ma:runtime#kitchen");
     }
 
     #[test]
