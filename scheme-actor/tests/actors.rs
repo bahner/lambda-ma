@@ -417,13 +417,19 @@ fn room_enriches_child_speech_for_did_occupants() {
     );
     eval_all("(on-message say_msg)", &env).unwrap();
 
-    assert_eq!(eval_str("(get-prop \"sent-target:1\")", &env), "did:ma:alice");
+    assert_eq!(
+        eval_str("(get-prop \"sent-target:1\")", &env),
+        "did:ma:alice"
+    );
     assert_eq!(
         eval_all("(car (get-prop \"sent-term:1\"))", &env).unwrap(),
         Value::symbol(":say")
     );
     assert_eq!(
-        eval_str("(ctx-text (car (cdr (get-prop \"sent-term:1\"))) \"actor\")", &env),
+        eval_str(
+            "(ctx-text (car (cdr (get-prop \"sent-term:1\"))) \"actor\")",
+            &env
+        ),
         "did:ma:runtime#duckie"
     );
     assert_eq!(
@@ -441,13 +447,19 @@ fn room_enriches_child_speech_for_did_occupants() {
     );
     eval_all("(on-message emote_msg)", &env).unwrap();
 
-    assert_eq!(eval_str("(get-prop \"sent-target:2\")", &env), "did:ma:alice");
+    assert_eq!(
+        eval_str("(get-prop \"sent-target:2\")", &env),
+        "did:ma:alice"
+    );
     assert_eq!(
         eval_all("(car (get-prop \"sent-term:2\"))", &env).unwrap(),
         Value::symbol(":emote")
     );
     assert_eq!(
-        eval_str("(ctx-text (car (cdr (get-prop \"sent-term:2\"))) \"actor\")", &env),
+        eval_str(
+            "(ctx-text (car (cdr (get-prop \"sent-term:2\"))) \"actor\")",
+            &env
+        ),
         "did:ma:runtime#duckie"
     );
     assert_eq!(
@@ -609,6 +621,39 @@ fn room_remove_owner_evicts_child_by_nick() {
     eval_all("(on-message msg)", &env).unwrap();
 
     assert!(eval_bool("(not (child-ctx \"did:ma:runtime#bot\"))", &env));
+    assert_eq!(
+        eval_all("(car (get-prop \"reply-term:1\"))", &env).unwrap(),
+        Value::symbol(":ok")
+    );
+}
+
+#[test]
+fn room_remove_owner_evicts_child_by_lowercase_nick_when_visible_label_is_mixed_case() {
+    let env = room_env();
+    ma_scheme_actor::state::set_config(make_config("did:ma:runtime", "did:ma:runtime#room"));
+    eval_all(
+        r#"
+        (set-prop! "owner" "did:ma:owner")
+        (test-agent-claim! "did:ma:runtime#duckie" "Duckie")
+        "#,
+        &env,
+    )
+    .unwrap();
+
+    env.define(
+        Rc::from("msg"),
+        sample_msg(
+            "did:ma:owner",
+            "did:ma:runtime#room",
+            Value::list(vec![Value::symbol(":remove"), Value::str("duckie")]),
+        ),
+    );
+    eval_all("(on-message msg)", &env).unwrap();
+
+    assert!(eval_bool(
+        "(not (child-ctx \"did:ma:runtime#duckie\"))",
+        &env
+    ));
     assert_eq!(
         eval_all("(car (get-prop \"reply-term:1\"))", &env).unwrap(),
         Value::symbol(":ok")

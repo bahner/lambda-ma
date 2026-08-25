@@ -1488,7 +1488,10 @@ mod tests {
         config.insert("self".to_string(), "did:ma:runtime#room".to_string());
         crate::state::set_config(config);
 
-        assert!(eval_bool("(null? (map-ref (room-ctx) \"children\" '()))", &env));
+        assert!(eval_bool(
+            "(null? (map-ref (room-ctx) \"children\" '()))",
+            &env
+        ));
 
         eval_all(
             r#"
@@ -1802,10 +1805,7 @@ mod tests {
             "(not (map-has-key? (room-ctx) \"things\"))",
             &env
         ));
-        assert!(eval_bool(
-            "(not (map-has-key? (room-ctx) \"exits\"))",
-            &env
-        ));
+        assert!(eval_bool("(not (map-has-key? (room-ctx) \"exits\"))", &env));
         assert!(eval_bool(
             r#"(let loop ((ctxs (map-ref (room-ctx) "children" '())))
                  (cond ((null? ctxs) #f)
@@ -2053,7 +2053,11 @@ mod tests {
             first_sent_count + 1
         );
         assert_eq!(
-            eval_all(&format!("(car (get-prop \"sent-term:{}\"))", first_sent_count + 1), &env).unwrap(),
+            eval_all(
+                &format!("(car (get-prop \"sent-term:{}\"))", first_sent_count + 1),
+                &env
+            )
+            .unwrap(),
             Value::symbol(":child")
         );
     }
@@ -2211,7 +2215,11 @@ mod tests {
             first_sent_count + 1
         );
         assert_eq!(
-            eval_all(&format!("(car (get-prop \"sent-term:{}\"))", first_sent_count + 1), &env).unwrap(),
+            eval_all(
+                &format!("(car (get-prop \"sent-term:{}\"))", first_sent_count + 1),
+                &env
+            )
+            .unwrap(),
             Value::symbol(":child")
         );
         assert_eq!(
@@ -3168,11 +3176,18 @@ mod tests {
         eval_all("((find-method :drop) '() msg)", &env).unwrap();
         assert_eq!(
             eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
-            Value::list(vec![Value::symbol(":error"), Value::str("usage: :drop <item-did-url>")])
+            Value::list(vec![
+                Value::symbol(":error"),
+                Value::str("usage: :drop <item-did-url>")
+            ])
         );
 
         // caller not in room children
-        eval_all("((find-method :drop) (list \"did:ma:item#lamp\") msg)", &env).unwrap();
+        eval_all(
+            "((find-method :drop) (list \"did:ma:item#lamp\") msg)",
+            &env,
+        )
+        .unwrap();
         assert_eq!(
             eval_all("(get-prop \"reply-term:2\")", &env).unwrap(),
             Value::list(vec![Value::symbol(":error"), Value::str("not in room")])
@@ -3183,7 +3198,11 @@ mod tests {
             r#"(remember-child! (make-map "actor" "did:ma:avatar" "parent" "did:ma:runtime#room" "kind" "agent"))"#,
             &env,
         ).unwrap();
-        eval_all("((find-method :drop) (list \"did:ma:item#lamp\") msg)", &env).unwrap();
+        eval_all(
+            "((find-method :drop) (list \"did:ma:item#lamp\") msg)",
+            &env,
+        )
+        .unwrap();
         assert_eq!(
             eval_all("(get-prop \"reply-term:3\")", &env).unwrap(),
             Value::symbol(":ok")
@@ -3191,7 +3210,11 @@ mod tests {
 
         // room full
         eval_all(r#"(set-prop! "max-children" "0")"#, &env).unwrap();
-        eval_all("((find-method :drop) (list \"did:ma:item#lamp\") msg)", &env).unwrap();
+        eval_all(
+            "((find-method :drop) (list \"did:ma:item#lamp\") msg)",
+            &env,
+        )
+        .unwrap();
         assert_eq!(
             eval_all("(get-prop \"reply-term:4\")", &env).unwrap(),
             Value::list(vec![Value::symbol(":error"), Value::str("room is full")])
@@ -5169,24 +5192,38 @@ mod tests {
         .unwrap();
 
         // Sent :put-request to root.
-        assert_eq!(eval_str("(get-prop \"sent-target:1\")", &env), "did:ma:runtime#root");
+        assert_eq!(
+            eval_str("(get-prop \"sent-target:1\")", &env),
+            "did:ma:runtime#root"
+        );
         assert_eq!(
             eval_all("(car (get-prop \"sent-term:1\"))", &env).unwrap(),
             Value::symbol(":put-request")
         );
-        let put_ctx_term =
-            eval_all("(car (cdr (get-prop \"sent-term:1\")))", &env).unwrap();
+        let put_ctx_term = eval_all("(car (cdr (get-prop \"sent-term:1\")))", &env).unwrap();
         assert!(matches!(put_ctx_term, Value::Map(_)));
         assert_eq!(
-            eval_all("(map-ref (car (cdr (get-prop \"sent-term:1\"))) \"requestor\" \"\")", &env).unwrap(),
+            eval_all(
+                "(map-ref (car (cdr (get-prop \"sent-term:1\"))) \"requestor\" \"\")",
+                &env
+            )
+            .unwrap(),
             Value::str("did:ma:avatar")
         );
         assert_eq!(
-            eval_all("(map-ref (car (cdr (get-prop \"sent-term:1\"))) \"container\" \"\")", &env).unwrap(),
+            eval_all(
+                "(map-ref (car (cdr (get-prop \"sent-term:1\"))) \"container\" \"\")",
+                &env
+            )
+            .unwrap(),
             Value::str("did:ma:runtime#bag")
         );
         assert_eq!(
-            eval_all("(map-ref (car (cdr (get-prop \"sent-term:1\"))) \"item\" \"\")", &env).unwrap(),
+            eval_all(
+                "(map-ref (car (cdr (get-prop \"sent-term:1\"))) \"item\" \"\")",
+                &env
+            )
+            .unwrap(),
             Value::str("did:ma:runtime#lamp")
         );
         assert_eq!(
@@ -5269,7 +5306,10 @@ mod tests {
         .unwrap();
 
         // propose-node-parent! sends :parent to container.
-        assert_eq!(eval_str("(get-prop \"sent-target:1\")", &env), "did:ma:runtime#bag");
+        assert_eq!(
+            eval_str("(get-prop \"sent-target:1\")", &env),
+            "did:ma:runtime#bag"
+        );
         assert_eq!(
             eval_all("(car (get-prop \"sent-term:1\"))", &env).unwrap(),
             Value::symbol(":parent")
@@ -5311,7 +5351,10 @@ mod tests {
         .unwrap();
 
         // propose-node-hold! sends :parent to bare DID requestor.
-        assert_eq!(eval_str("(get-prop \"sent-target:1\")", &env), "did:ma:avatar");
+        assert_eq!(
+            eval_str("(get-prop \"sent-target:1\")", &env),
+            "did:ma:avatar"
+        );
         assert_eq!(
             eval_all("(car (get-prop \"sent-term:1\"))", &env).unwrap(),
             Value::symbol(":parent")
@@ -5384,13 +5427,20 @@ mod tests {
         .unwrap();
 
         // Sends :put-event failed to requestor.
-        assert_eq!(eval_str("(get-prop \"sent-target:1\")", &env), "did:ma:avatar");
+        assert_eq!(
+            eval_str("(get-prop \"sent-target:1\")", &env),
+            "did:ma:avatar"
+        );
         assert_eq!(
             eval_all("(car (get-prop \"sent-term:1\"))", &env).unwrap(),
             Value::symbol(":put-event")
         );
         assert_eq!(
-            eval_all("(map-ref (car (cdr (get-prop \"sent-term:1\"))) \"status\" \"\")", &env).unwrap(),
+            eval_all(
+                "(map-ref (car (cdr (get-prop \"sent-term:1\"))) \"status\" \"\")",
+                &env
+            )
+            .unwrap(),
             Value::str("failed")
         );
     }
@@ -5426,13 +5476,24 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(eval_str("(get-prop \"sent-target:1\")", &env), "did:ma:avatar");
         assert_eq!(
-            eval_all("(map-ref (car (cdr (get-prop \"sent-term:1\"))) \"status\" \"\")", &env).unwrap(),
+            eval_str("(get-prop \"sent-target:1\")", &env),
+            "did:ma:avatar"
+        );
+        assert_eq!(
+            eval_all(
+                "(map-ref (car (cdr (get-prop \"sent-term:1\"))) \"status\" \"\")",
+                &env
+            )
+            .unwrap(),
             Value::str("failed")
         );
         assert_eq!(
-            eval_all("(map-ref (car (cdr (get-prop \"sent-term:1\"))) \"reason\" \"\")", &env).unwrap(),
+            eval_all(
+                "(map-ref (car (cdr (get-prop \"sent-term:1\"))) \"reason\" \"\")",
+                &env
+            )
+            .unwrap(),
             Value::str("container is full")
         );
     }
@@ -5506,7 +5567,10 @@ mod tests {
         .unwrap();
 
         // Sends :put-request to root.
-        assert_eq!(eval_str("(get-prop \"sent-target:1\")", &env), "did:ma:runtime#root");
+        assert_eq!(
+            eval_str("(get-prop \"sent-target:1\")", &env),
+            "did:ma:runtime#root"
+        );
         assert_eq!(
             eval_all("(car (get-prop \"sent-term:1\"))", &env).unwrap(),
             Value::symbol(":put-request")
@@ -5514,15 +5578,27 @@ mod tests {
         let put_ctx = eval_all("(car (cdr (get-prop \"sent-term:1\")))", &env).unwrap();
         assert!(matches!(put_ctx, Value::Map(_)));
         assert_eq!(
-            eval_all("(map-ref (car (cdr (get-prop \"sent-term:1\"))) \"requestor\" \"\")", &env).unwrap(),
+            eval_all(
+                "(map-ref (car (cdr (get-prop \"sent-term:1\"))) \"requestor\" \"\")",
+                &env
+            )
+            .unwrap(),
             Value::str("did:ma:avatar")
         );
         assert_eq!(
-            eval_all("(map-ref (car (cdr (get-prop \"sent-term:1\"))) \"container\" \"\")", &env).unwrap(),
+            eval_all(
+                "(map-ref (car (cdr (get-prop \"sent-term:1\"))) \"container\" \"\")",
+                &env
+            )
+            .unwrap(),
             Value::str("did:ma:runtime#vault")
         );
         assert_eq!(
-            eval_all("(map-ref (car (cdr (get-prop \"sent-term:1\"))) \"item\" \"\")", &env).unwrap(),
+            eval_all(
+                "(map-ref (car (cdr (get-prop \"sent-term:1\"))) \"item\" \"\")",
+                &env
+            )
+            .unwrap(),
             Value::str("did:ma:runtime#bag")
         );
         assert_eq!(
@@ -5604,7 +5680,10 @@ mod tests {
         .unwrap();
 
         // propose-node-parent! sends :parent to target container.
-        assert_eq!(eval_str("(get-prop \"sent-target:1\")", &env), "did:ma:runtime#vault");
+        assert_eq!(
+            eval_str("(get-prop \"sent-target:1\")", &env),
+            "did:ma:runtime#vault"
+        );
         assert_eq!(
             eval_all("(car (get-prop \"sent-term:1\"))", &env).unwrap(),
             Value::symbol(":parent")
@@ -5653,17 +5732,28 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(eval_str("(get-prop \"sent-target:1\")", &env), "did:ma:runtime#root");
+        assert_eq!(
+            eval_str("(get-prop \"sent-target:1\")", &env),
+            "did:ma:runtime#root"
+        );
         assert_eq!(
             eval_all("(car (get-prop \"sent-term:1\"))", &env).unwrap(),
             Value::symbol(":take-request")
         );
         assert_eq!(
-            eval_all("(map-ref (car (cdr (get-prop \"sent-term:1\"))) \"requestor\" \"\")", &env).unwrap(),
+            eval_all(
+                "(map-ref (car (cdr (get-prop \"sent-term:1\"))) \"requestor\" \"\")",
+                &env
+            )
+            .unwrap(),
             Value::str("did:ma:avatar")
         );
         assert_eq!(
-            eval_all("(map-ref (car (cdr (get-prop \"sent-term:1\"))) \"item\" \"\")", &env).unwrap(),
+            eval_all(
+                "(map-ref (car (cdr (get-prop \"sent-term:1\"))) \"item\" \"\")",
+                &env
+            )
+            .unwrap(),
             Value::str("did:ma:runtime#lamp")
         );
         assert_eq!(
@@ -5728,7 +5818,11 @@ mod tests {
             )),
         );
 
-        eval_all("((find-method :take) (list \"did:ma:runtime#lamp\") msg)", &env).unwrap();
+        eval_all(
+            "((find-method :take) (list \"did:ma:runtime#lamp\") msg)",
+            &env,
+        )
+        .unwrap();
 
         assert!(eval_bool("(not (has-prop? \"sent-count\"))", &env));
         assert_eq!(
@@ -5780,23 +5874,36 @@ mod tests {
         eval_all("((find-method :put-request) (list put-ctx) msg)", &env).unwrap();
 
         // send 1: :put-event ok to requestor
-        assert_eq!(eval_str("(get-prop \"sent-target:1\")", &env), "did:ma:avatar");
+        assert_eq!(
+            eval_str("(get-prop \"sent-target:1\")", &env),
+            "did:ma:avatar"
+        );
         assert_eq!(
             eval_all("(car (get-prop \"sent-term:1\"))", &env).unwrap(),
             Value::symbol(":put-event")
         );
         assert_eq!(
-            eval_all("(map-ref (car (cdr (get-prop \"sent-term:1\"))) \"status\" \"\")", &env).unwrap(),
+            eval_all(
+                "(map-ref (car (cdr (get-prop \"sent-term:1\"))) \"status\" \"\")",
+                &env
+            )
+            .unwrap(),
             Value::str("ok")
         );
         // send 2: :put to container
-        assert_eq!(eval_str("(get-prop \"sent-target:2\")", &env), "did:ma:runtime#bag");
+        assert_eq!(
+            eval_str("(get-prop \"sent-target:2\")", &env),
+            "did:ma:runtime#bag"
+        );
         assert_eq!(
             eval_all("(car (get-prop \"sent-term:2\"))", &env).unwrap(),
             Value::symbol(":put")
         );
         // send 3: :put to item
-        assert_eq!(eval_str("(get-prop \"sent-target:3\")", &env), "did:ma:runtime#lamp");
+        assert_eq!(
+            eval_str("(get-prop \"sent-target:3\")", &env),
+            "did:ma:runtime#lamp"
+        );
         assert_eq!(
             eval_all("(car (get-prop \"sent-term:3\"))", &env).unwrap(),
             Value::symbol(":put")
@@ -5855,9 +5962,16 @@ mod tests {
 
         // Only one send: failure event to requestor.
         assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 1);
-        assert_eq!(eval_str("(get-prop \"sent-target:1\")", &env), "did:ma:avatar");
         assert_eq!(
-            eval_all("(map-ref (car (cdr (get-prop \"sent-term:1\"))) \"status\" \"\")", &env).unwrap(),
+            eval_str("(get-prop \"sent-target:1\")", &env),
+            "did:ma:avatar"
+        );
+        assert_eq!(
+            eval_all(
+                "(map-ref (car (cdr (get-prop \"sent-term:1\"))) \"status\" \"\")",
+                &env
+            )
+            .unwrap(),
             Value::str("failed")
         );
         assert_eq!(
@@ -5909,17 +6023,27 @@ mod tests {
         eval_all("((find-method :take-request) (list take-ctx) msg)", &env).unwrap();
 
         // send 1: :take-event ok to requestor
-        assert_eq!(eval_str("(get-prop \"sent-target:1\")", &env), "did:ma:avatar");
+        assert_eq!(
+            eval_str("(get-prop \"sent-target:1\")", &env),
+            "did:ma:avatar"
+        );
         assert_eq!(
             eval_all("(car (get-prop \"sent-term:1\"))", &env).unwrap(),
             Value::symbol(":take-event")
         );
         assert_eq!(
-            eval_all("(map-ref (car (cdr (get-prop \"sent-term:1\"))) \"status\" \"\")", &env).unwrap(),
+            eval_all(
+                "(map-ref (car (cdr (get-prop \"sent-term:1\"))) \"status\" \"\")",
+                &env
+            )
+            .unwrap(),
             Value::str("ok")
         );
         // send 2: :take to item
-        assert_eq!(eval_str("(get-prop \"sent-target:2\")", &env), "did:ma:runtime#lamp");
+        assert_eq!(
+            eval_str("(get-prop \"sent-target:2\")", &env),
+            "did:ma:runtime#lamp"
+        );
         assert_eq!(
             eval_all("(car (get-prop \"sent-term:2\"))", &env).unwrap(),
             Value::symbol(":take")
@@ -5976,9 +6100,16 @@ mod tests {
         eval_all("((find-method :take-request) (list take-ctx) msg)", &env).unwrap();
 
         assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 1);
-        assert_eq!(eval_str("(get-prop \"sent-target:1\")", &env), "did:ma:avatar");
         assert_eq!(
-            eval_all("(map-ref (car (cdr (get-prop \"sent-term:1\"))) \"status\" \"\")", &env).unwrap(),
+            eval_str("(get-prop \"sent-target:1\")", &env),
+            "did:ma:avatar"
+        );
+        assert_eq!(
+            eval_all(
+                "(map-ref (car (cdr (get-prop \"sent-term:1\"))) \"status\" \"\")",
+                &env
+            )
+            .unwrap(),
             Value::str("failed")
         );
         assert_eq!(
@@ -6019,10 +6150,7 @@ mod tests {
             Value::Msg(sample_term_msg(
                 "did:ma:runtime#lamp",
                 "did:ma:runtime#bag",
-                Value::list(vec![
-                    Value::symbol(":parent"),
-                    Value::list(vec![]),
-                ]),
+                Value::list(vec![Value::symbol(":parent"), Value::list(vec![])]),
             )),
         );
 
