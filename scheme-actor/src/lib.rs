@@ -1489,7 +1489,7 @@ mod tests {
         crate::state::set_config(config);
 
         assert!(eval_bool(
-            "(null? (map-ref (room-ctx) \"children\" '()))",
+            "(map-empty? (map-ref (room-ctx) \"children\" (make-map)))",
             &env
         ));
 
@@ -1512,7 +1512,7 @@ mod tests {
 
         assert_eq!(
             eval_str(
-                "(ctx-text (car (map-ref (room-ctx) \"children\" '())) \"direction\")",
+                "(ctx-text (map-ref (map-ref (room-ctx) \"children\" (make-map)) \"did:ma:runtime#north-exit\" (make-map)) \"direction\")",
                 &env
             ),
             "north"
@@ -1558,7 +1558,7 @@ mod tests {
             &env
         ));
         assert!(eval_bool(
-            "(equal? (ctx-text (car (map-ref (car (cdr (get-prop \"reply-term:1\"))) \"children\" '())) \"actor\") \"did:ma:alice\")",
+            "(equal? (ctx-text (map-ref (map-ref (car (cdr (get-prop \"reply-term:1\"))) \"children\" (make-map)) \"did:ma:alice\" (make-map)) \"actor\") \"did:ma:alice\")",
             &env
         ));
         assert!(eval_bool("(not (has-prop? \"sent-count\"))", &env));
@@ -1807,14 +1807,14 @@ mod tests {
         ));
         assert!(eval_bool("(not (map-has-key? (room-ctx) \"exits\"))", &env));
         assert!(eval_bool(
-            r#"(let loop ((ctxs (map-ref (room-ctx) "children" '())))
+            r#"(let loop ((ctxs (map-values (map-ref (room-ctx) "children" (make-map)))))
                  (cond ((null? ctxs) #f)
                        ((equal? (ctx-text (car ctxs) "actor") "did:ma:runtime#lamp") #t)
                        (else (loop (cdr ctxs)))))"#,
             &env
         ));
         assert!(eval_bool(
-            r#"(let loop ((ctxs (map-ref (room-ctx) "children" '())))
+            r#"(let loop ((ctxs (map-values (map-ref (room-ctx) "children" (make-map)))))
                  (cond ((null? ctxs) #f)
                        ((equal? (ctx-text (car ctxs) "direction") "north") #t)
                        (else (loop (cdr ctxs)))))"#,
@@ -3527,6 +3527,69 @@ mod tests {
             r#"(not (child-ctx "did:ma:runtime#lamp"))"#,
             &env
         ));
+    }
+
+    #[test]
+    fn container_admits_child_when_neither_side_has_here_yet() {
+        // Neither the container nor the proposing child has been cascaded a
+        // "here" yet (e.g. still being assembled) — both default to "", so
+        // admission is not blocked by the same-room check.
+        let env = container_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#bag".to_string());
+        crate::state::set_config(config);
+        let child_ctx = eval_all(
+            r#"
+            (make-map "actor" "did:ma:runtime#lamp"
+                      "kind" "thing"
+                      "protocol" "/ma/thing/0.0.1"
+                      "parent" "did:ma:runtime#bag"
+                      "name" "lamp"
+                      "nick" "brass lamp"
+                      "description" "A warm brass lamp.")
+            "#,
+            &env,
+        )
+        .unwrap();
+        env.define(
+            Rc::from("parent_msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:runtime#lamp",
+                "did:ma:runtime#bag",
+                Value::list(vec![Value::symbol(":parent"), child_ctx]),
+            )),
+        );
+
+        eval_all("(on-message parent_msg)", &env).unwrap();
+
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
+            Value::symbol(":ok")
+        );
+        assert!(eval_bool(r#"(map? (child-ctx "did:ma:runtime#lamp"))"#, &env));
+    }
+
+    #[test]
+    fn node_ctx_for_parent_carries_current_here() {
+        let env = thing_env();
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#lamp".to_string());
+        crate::state::set_config(config);
+
+        assert_eq!(
+            eval_str(r#"(ctx-text (node-ctx-for-parent "did:ma:runtime#bag") "here")"#, &env),
+            ""
+        );
+
+        eval_all(r#"(set-prop! "here" "did:ma:runtime#room")"#, &env).unwrap();
+
+        assert_eq!(
+            eval_str(r#"(ctx-text (node-ctx-for-parent "did:ma:runtime#bag") "here")"#, &env),
+            "did:ma:runtime#room"
+        );
     }
 
     #[test]
