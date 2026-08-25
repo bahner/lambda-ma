@@ -324,6 +324,139 @@ fn room_emote_broadcasts_typed_event_and_acknowledges() {
 }
 
 #[test]
+fn room_direct_did_entry_enables_say_and_emote() {
+    let env = room_env();
+    ma_scheme_actor::state::set_config(make_config("did:ma:runtime", "did:ma:runtime#room"));
+
+    env.define(
+        Rc::from("enter_msg"),
+        rpc_msg("did:ma:alice", "did:ma:runtime#room", ":enter"),
+    );
+    eval_all("(on-message enter_msg)", &env).unwrap();
+
+    assert_eq!(
+        eval_str("(ctx-text (child-ctx \"did:ma:alice\") \"actor\")", &env),
+        "did:ma:alice"
+    );
+    assert_eq!(
+        eval_all("(car (get-prop \"reply-term:1\"))", &env).unwrap(),
+        Value::symbol(":ok")
+    );
+
+    env.define(
+        Rc::from("say_msg"),
+        sample_msg(
+            "did:ma:alice",
+            "did:ma:runtime#room",
+            Value::list(vec![Value::symbol(":say"), Value::str("hello")]),
+        ),
+    );
+    eval_all("(on-message say_msg)", &env).unwrap();
+
+    assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 3);
+    assert_eq!(
+        eval_all("(car (get-prop \"sent-term:3\"))", &env).unwrap(),
+        Value::symbol(":say")
+    );
+    assert_eq!(
+        eval_str("(car (cdr (cdr (get-prop \"sent-term:3\"))))", &env),
+        "hello"
+    );
+
+    env.define(
+        Rc::from("emote_msg"),
+        sample_msg(
+            "did:ma:alice",
+            "did:ma:runtime#room",
+            Value::list(vec![Value::symbol(":emote"), Value::str("dances")]),
+        ),
+    );
+    eval_all("(on-message emote_msg)", &env).unwrap();
+
+    assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 4);
+    assert_eq!(
+        eval_all("(car (get-prop \"sent-term:4\"))", &env).unwrap(),
+        Value::symbol(":emote")
+    );
+    assert_eq!(
+        eval_str("(car (cdr (cdr (get-prop \"sent-term:4\"))))", &env),
+        "dances"
+    );
+    assert_eq!(
+        eval_all("(get-prop \"reply-term:3\")", &env).unwrap(),
+        Value::symbol(":ok")
+    );
+}
+
+#[test]
+fn room_enriches_child_speech_for_did_occupants() {
+    let env = room_env();
+    ma_scheme_actor::state::set_config(make_config("did:ma:runtime", "did:ma:runtime#room"));
+    eval_all(
+        r#"
+        (set-did-ctx! "did:ma:alice"
+          (make-map "did" "did:ma:alice"
+                    "parent" "did:ma:runtime#room"
+                    "name" "Alice"
+                    "nick" "Alice"
+                    "description" "A visitor."
+                    "rev" 1))
+        (test-agent-claim! "did:ma:runtime#duckie" "Duckie")
+        "#,
+        &env,
+    )
+    .unwrap();
+
+    env.define(
+        Rc::from("say_msg"),
+        sample_msg(
+            "did:ma:runtime#duckie",
+            "did:ma:runtime#room",
+            Value::list(vec![Value::symbol(":say"), Value::str("quack")]),
+        ),
+    );
+    eval_all("(on-message say_msg)", &env).unwrap();
+
+    assert_eq!(eval_str("(get-prop \"sent-target:1\")", &env), "did:ma:alice");
+    assert_eq!(
+        eval_all("(car (get-prop \"sent-term:1\"))", &env).unwrap(),
+        Value::symbol(":say")
+    );
+    assert_eq!(
+        eval_str("(ctx-text (car (cdr (get-prop \"sent-term:1\"))) \"actor\")", &env),
+        "did:ma:runtime#duckie"
+    );
+    assert_eq!(
+        eval_str("(car (cdr (cdr (get-prop \"sent-term:1\"))))", &env),
+        "quack"
+    );
+
+    env.define(
+        Rc::from("emote_msg"),
+        sample_msg(
+            "did:ma:runtime#duckie",
+            "did:ma:runtime#room",
+            Value::list(vec![Value::symbol(":emote"), Value::str("dances")]),
+        ),
+    );
+    eval_all("(on-message emote_msg)", &env).unwrap();
+
+    assert_eq!(eval_str("(get-prop \"sent-target:2\")", &env), "did:ma:alice");
+    assert_eq!(
+        eval_all("(car (get-prop \"sent-term:2\"))", &env).unwrap(),
+        Value::symbol(":emote")
+    );
+    assert_eq!(
+        eval_str("(ctx-text (car (cdr (get-prop \"sent-term:2\"))) \"actor\")", &env),
+        "did:ma:runtime#duckie"
+    );
+    assert_eq!(
+        eval_str("(car (cdr (cdr (get-prop \"sent-term:2\"))))", &env),
+        "dances"
+    );
+}
+
+#[test]
 fn room_emote_fails_for_speaker_without_event_ctx() {
     let env = room_env();
     ma_scheme_actor::state::set_config(make_config("did:ma:runtime", "did:ma:runtime#room"));

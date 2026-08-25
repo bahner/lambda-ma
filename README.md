@@ -21,9 +21,8 @@ Makefile                publishes sources and generates dist/lambda-ma.yaml
 ```
 
 The zscheme repository owns the Zion-side `stdlib.zscheme`, `runtime.zscheme`,
-`avatar.zscheme`, and `events.zscheme` libraries. Its combined `.my.z.scheme`
-source provides the ordinary client vocabulary for this profile. Lambda-ma
-owns the actor behaviours and wire contract, not duplicate client-library
+`avatar.zscheme`, and `events.zscheme` libraries.
+Lambda-ma owns the actor behaviours and wire contract, not duplicate client-library
 sources.
 
 The bootstrap creates `#root`, `#house`, `#scheduler`, and `#construct`.

@@ -254,9 +254,9 @@
         entries
         (loop (cdr xs) (map-set entries (car xs) (did-ctx (car xs)))))))
 
-; Public visible children are passed through from the authoritative child ctxs.
+; Public visible children are the authoritative KV map, keyed by actor DID.
 (define (visible-ctx)
-  (child-ctxs))
+  (children-map))
 
 (define (room-ctx)
   (make-map
