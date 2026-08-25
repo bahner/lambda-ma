@@ -1302,3 +1302,233 @@ fn stdlib_ctx_text_returns_string_or_false() {
         Value::Bool(false)
     );
 }
+
+// ── Roll-call ─────────────────────────────────────────────────────────────
+//
+// `begin` opens an empty shadow map, every reporting child lands in it, and
+// `end` swaps it in wholesale. A child that never reports is simply one that
+// never reappeared in the new tree.
+
+/// Room owned by `did:ma:owner`, holding Alice and Bob, with a `test-child-ctx`
+/// helper for building the ctx a child sends back with `:parent`.
+fn roll_call_env() -> Rc<ma_scheme_actor::env::Env> {
+    let env = room_env();
+    ma_scheme_actor::state::set_config(make_config("did:ma:runtime", "did:ma:runtime#room"));
+    eval_all(
+        r#"
+        (set-prop! "owner" "did:ma:owner")
+        (test-agent-claim! "did:ma:alice" "Alice")
+        (test-agent-claim! "did:ma:bob" "Bob")
+        (define (test-child-ctx actor nick)
+          (make-map "actor" actor
+                    "did" actor
+                    "kind" "agent"
+                    "protocol" "/ma/agent/0.0.1"
+                    "parent" (canonical-actor (self))
+                    "name" nick
+                    "nick" nick
+                    "description" "A test agent."))
+        "#,
+        &env,
+    )
+    .unwrap();
+    env.define(
+        Rc::from("owner_msg"),
+        rpc_msg("did:ma:owner", "did:ma:runtime#room", ":roll-call"),
+    );
+    env.define(
+        Rc::from("alice_msg"),
+        rpc_msg("did:ma:alice", "did:ma:runtime#room", ":parent"),
+    );
+    env
+}
+
+fn has_child(env: &Rc<ma_scheme_actor::env::Env>, actor: &str) -> bool {
+    eval_bool(&format!("(map-has-key? (children-map) \"{actor}\")"), env)
+}
+
+fn begin_roll_call(env: &Rc<ma_scheme_actor::env::Env>) {
+    eval_all("((find-method :roll-call) (list \"begin\") owner_msg)", env).unwrap();
+}
+
+fn end_roll_call(env: &Rc<ma_scheme_actor::env::Env>) {
+    eval_all("((find-method :roll-call) (list \"end\") owner_msg)", env).unwrap();
+}
+
+/// Alice reports, Bob stays silent, so only Alice survives the swap.
+#[test]
+fn roll_call_end_keeps_reporting_children_and_drops_silent_ones() {
+    let env = roll_call_env();
+
+    begin_roll_call(&env);
+    assert!(eval_bool("(roll-call-active?)", &env));
+    // Nothing is pruned until end.
+    assert!(has_child(&env, "did:ma:alice"));
+    assert!(has_child(&env, "did:ma:bob"));
+
+    eval_all(
+        r#"((find-method :parent) (list (test-child-ctx "did:ma:alice" "Alice")) alice_msg)"#,
+        &env,
+    )
+    .unwrap();
+
+    end_roll_call(&env);
+
+    assert!(!eval_bool("(roll-call-active?)", &env));
+    assert!(has_child(&env, "did:ma:alice"), "Alice reported in");
+    assert!(!has_child(&env, "did:ma:bob"), "Bob never reported in");
+}
+
+/// The swap installs the ctx the child just sent, not the one already stored.
+#[test]
+fn roll_call_end_installs_freshly_reported_ctx() {
+    let env = roll_call_env();
+    assert_eq!(
+        eval_str(r#"(ctx-text (child-ctx "did:ma:alice") "nick")"#, &env),
+        "Alice"
+    );
+
+    begin_roll_call(&env);
+    eval_all(
+        r#"((find-method :parent) (list (test-child-ctx "did:ma:alice" "Trinity")) alice_msg)"#,
+        &env,
+    )
+    .unwrap();
+    end_roll_call(&env);
+
+    assert_eq!(
+        eval_str(r#"(ctx-text (child-ctx "did:ma:alice") "nick")"#, &env),
+        "Trinity",
+        "survivors carry the ctx reported during the roll-call, not stale state"
+    );
+}
+
+/// Someone who arrives mid-window is captured by remember-child! and survives.
+#[test]
+fn roll_call_end_keeps_child_that_arrived_during_the_window() {
+    let env = roll_call_env();
+
+    begin_roll_call(&env);
+    eval_all(r#"(test-agent-claim! "did:ma:carol" "Carol")"#, &env).unwrap();
+    end_roll_call(&env);
+
+    assert!(
+        has_child(&env, "did:ma:carol"),
+        "an arrival during the window must not be evicted by the swap"
+    );
+}
+
+/// A child that reports and then leaves must not be resurrected by the swap.
+#[test]
+fn roll_call_end_does_not_resurrect_child_that_left_during_the_window() {
+    let env = roll_call_env();
+
+    begin_roll_call(&env);
+    eval_all(
+        r#"((find-method :parent) (list (test-child-ctx "did:ma:alice" "Alice")) alice_msg)"#,
+        &env,
+    )
+    .unwrap();
+    eval_all(r#"(forget-child! "did:ma:alice")"#, &env).unwrap();
+    end_roll_call(&env);
+
+    assert!(
+        !has_child(&env, "did:ma:alice"),
+        "a departure during the window must survive the swap"
+    );
+}
+
+/// Nobody answering is a transport failure, not an empty room.
+#[test]
+fn roll_call_end_without_any_answers_keeps_the_live_children() {
+    let env = roll_call_env();
+
+    begin_roll_call(&env);
+    end_roll_call(&env);
+
+    assert!(has_child(&env, "did:ma:alice"));
+    assert!(has_child(&env, "did:ma:bob"));
+    assert!(!eval_bool("(roll-call-active?)", &env));
+    let reply = eval_str("(car (cdr (get-prop \"reply-term:2\")))", &env);
+    assert!(
+        reply.contains("no answers"),
+        "the caller should be told the swap was skipped, got {reply:?}"
+    );
+}
+
+/// The runtime scheduler dispatches the timed end under its own fragment.
+#[test]
+fn roll_call_end_accepts_the_runtime_scheduler_as_caller() {
+    let env = roll_call_env();
+    begin_roll_call(&env);
+    eval_all(
+        r#"((find-method :parent) (list (test-child-ctx "did:ma:alice" "Alice")) alice_msg)"#,
+        &env,
+    )
+    .unwrap();
+
+    env.define(
+        Rc::from("scheduler_msg"),
+        rpc_msg(
+            "did:ma:runtime#scheduler",
+            "did:ma:runtime#room",
+            ":roll-call",
+        ),
+    );
+    eval_all(
+        "((find-method :roll-call) (list \"end\") scheduler_msg)",
+        &env,
+    )
+    .unwrap();
+
+    assert!(!eval_bool("(roll-call-active?)", &env));
+    assert!(has_child(&env, "did:ma:alice"));
+    assert!(!has_child(&env, "did:ma:bob"));
+}
+
+/// A stranger may neither start nor end a roll-call.
+#[test]
+fn roll_call_rejects_unauthorised_caller() {
+    let env = roll_call_env();
+    env.define(
+        Rc::from("stranger_msg"),
+        rpc_msg("did:ma:mallory", "did:ma:runtime#room", ":roll-call"),
+    );
+
+    eval_all(
+        "((find-method :roll-call) (list \"begin\") stranger_msg)",
+        &env,
+    )
+    .unwrap();
+
+    assert!(!eval_bool("(roll-call-active?)", &env));
+    assert_eq!(
+        eval_all("(car (get-prop \"reply-term:1\"))", &env).unwrap(),
+        Value::symbol(":error")
+    );
+}
+
+/// `begin 10` arrives from CBOR as an integer, and schedules a "10s" end.
+#[test]
+fn roll_call_begin_accepts_integer_seconds_and_schedules_the_end() {
+    let env = roll_call_env();
+
+    eval_all(
+        "((find-method :roll-call) (list \"begin\" 10) owner_msg)",
+        &env,
+    )
+    .unwrap();
+
+    assert!(eval_bool("(roll-call-active?)", &env));
+    // Children are pinged first; the scheduler request is the final send.
+    let last = eval_str(
+        "(get-prop (string-append \"sent-target:\" (number->string (get-prop \"sent-count\"))))",
+        &env,
+    );
+    assert_eq!(last, "did:ma:runtime#scheduler");
+    let spec = eval_str(
+        "(car (cdr (cdr (get-prop (string-append \"sent-term:\" (number->string (get-prop \"sent-count\")))))))",
+        &env,
+    );
+    assert_eq!(spec, "10s");
+}
