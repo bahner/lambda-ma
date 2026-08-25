@@ -188,7 +188,7 @@
     (room-name) "\n"
     (room-description) "\n"
     (occupants-text) "\n"
-    (things-text) "\n"
+    (token-list-text "Things" (thing-token-names)) "\n"
     (exits-text)))
 
 (define (arrival-text) (room-name))
@@ -521,8 +521,8 @@
   (let ((actor (thing-ref token)))
     (if actor (forget-child! actor) #f)))
 
-(define (things-text)
-  (token-list-text "Things" (thing-token-names)))
+(define (things-list)
+  (thing-entry-list (thing-token-names)))
 
 ; DID listing is owner-only because it exposes every visible actor address.
 (define (dids-text)
@@ -1232,7 +1232,7 @@
   (lambda (args msg)
     (let ((thing-args args))
       (cond ((null? thing-args)
-           (reply-ok-with msg (things-text)))
+           (reply-ok-with msg (things-list)))
             ((null? (cdr thing-args))
              (let ((token (car thing-args))
                    (did (thing-ref (car thing-args))))

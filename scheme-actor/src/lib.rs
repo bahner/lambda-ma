@@ -1994,7 +1994,10 @@ mod tests {
             ),
             "did:ma:runtime#room"
         );
-        assert_eq!(eval_str("(things-text)", &env), "Things: The Lamp");
+        assert_eq!(
+            eval_str("(map-ref (car (things-list)) \"nick\")", &env),
+            "The Lamp"
+        );
     }
 
     #[test]
@@ -2047,7 +2050,10 @@ mod tests {
             eval_str("(thing-ref \"Vadsekk\")", &env),
             "did:ma:runtime#bag"
         );
-        assert_eq!(eval_str("(things-text)", &env), "Things: Vadsekk");
+        assert_eq!(
+            eval_str("(map-ref (car (things-list)) \"nick\")", &env),
+            "Vadsekk"
+        );
         assert_eq!(
             eval_int("(get-prop \"sent-count\")", &env),
             first_sent_count + 1
@@ -2107,7 +2113,7 @@ mod tests {
 
         assert!(eval_bool("(not (thing-ref \"Aladdins lampe\"))", &env));
         assert!(eval_bool("(not (claim-ctx \"did:ma:runtime#lamp\"))", &env));
-        assert_eq!(eval_str("(things-text)", &env), "Things: none.");
+        assert_eq!(eval_all("(things-list)", &env).unwrap(), Value::Nil);
     }
 
     #[test]
@@ -2163,7 +2169,7 @@ mod tests {
 
         assert!(eval_bool("(not (thing-ref \"Aladdins lampe\"))", &env));
         assert!(eval_bool("(not (claim-ctx \"did:ma:runtime#lamp\"))", &env));
-        assert_eq!(eval_str("(things-text)", &env), "Things: none.");
+        assert_eq!(eval_all("(things-list)", &env).unwrap(), Value::Nil);
     }
 
     #[test]
