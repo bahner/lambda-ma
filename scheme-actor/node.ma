@@ -33,6 +33,12 @@
   (let ((value (get-prop "description")))
     (if (non-empty-string? value) value "A node.")))
 
+; Cascaded down from the room via handle-node-here! below; carried in our own
+; ctx so peers can check same-room co-location without asking root.
+(define (node-here)
+  (let ((value (get-prop "here")))
+    (if (non-empty-string? value) value "")))
+
   (define (extend-node-ctx ctx) ctx)
 
 (define (node-ctx-for-parent target-parent)
@@ -44,7 +50,8 @@
       "parent" (canonical-actor target-parent)
       "name" (node-name)
       "nick" (node-nick)
-      "description" (node-description))))
+      "description" (node-description)
+      "here" (node-here))))
 
 (define (node-ctx)
   (node-ctx-for-parent (node-parent)))
@@ -498,92 +505,98 @@
 (define (roll-call-authorised? msg)
   (or (owner-caller? msg) (node-caller-is-parent? msg)))
 
-(define (roll-call-status)
-  (get-prop "roll-call-status"))
+; Shadow children map, filled only while a roll-call is active. `end` swaps it
+; in wholesale, so an absent child is simply one that never reappeared.
+(define (roll-call-children)
+  (prop-map "roll-call-children"))
+
+(define (set-roll-call-children! children)
+  (set-prop-map! "roll-call-children" children))
+
+(define (map-empty? m)
+  (null? (map-keys m)))
+
+(define (roll-call-answered? actor)
+  (map-has-key? (roll-call-children) (canonical-actor actor)))
 
 (define (roll-call-status-text)
   (let loop ((entries (map->alist (children-map))) (lines ""))
     (if (null? entries)
         lines
-        (let ((ctx (cdr (car entries))))
-          (let ((actor (ctx-text ctx "actor")))
-            (let ((label (if (non-empty-string? (ctx-text ctx "name"))
-                             (ctx-text ctx "name")
-                             actor)))
-              (let ((ready (if (map? (roll-call-status))
-                               (map-ref (roll-call-status)
-                                        (canonical-actor actor)
-                                        #f)
-                               #f)))
-                (loop (cdr entries)
-                      (string-append lines
-                                     (if (equal? lines "") "" "\n")
-                                     label ": "
-                                     (if ready "#t" "#f"))))))))))
+        (let* ((ctx (cdr (car entries)))
+               (actor (ctx-text ctx "actor"))
+               (label (if (non-empty-string? (ctx-text ctx "name"))
+                          (ctx-text ctx "name")
+                          actor)))
+          (loop (cdr entries)
+                (string-append lines
+                               (if (equal? lines "") "" "\n")
+                               label ": "
+                               (if (roll-call-answered? actor) "#t" "#f")))))))
 
 (define (roll-call-note-child! ctx)
-  (let ((status (roll-call-status))
-        (actor (ctx-text ctx "actor")))
-    (if (and (roll-call-active?) (map? status) (non-empty-string? actor))
-        (begin
-          (set-prop! "roll-call-status"
-                     (map-set status (canonical-actor actor) #t))
-          (ma-save-state!))
+  (let ((actor (ctx-text ctx "actor")))
+    (if (and (roll-call-active?) (non-empty-string? actor))
+        (set-roll-call-children!
+          (map-set (roll-call-children) (canonical-actor actor) ctx))
         #f)))
+
+(define (roll-call-forget-child! actor)
+  (if (roll-call-active?)
+      (set-roll-call-children!
+        (map-delete (roll-call-children) (canonical-actor actor)))
+      #f))
+
+(define (roll-call-clear!)
+  (begin
+    (set-prop! "roll-call-children" (make-map))
+    (set-prop! "roll-call-active" "")
+    (ma-save-state!)))
 
 (define (roll-call-begin! msg seconds)
   (if (roll-call-active?)
       (reply-error msg "roll-call already active")
-      (let loop ((entries (map->alist (children-map))) (status (make-map)))
-        (if (null? entries)
-            (begin
-              (set-prop! "roll-call-status" status)
-              (set-prop! "roll-call-active" "true")
-              (ma-save-state!)
-              (let send ((children (map-values (children-map))))
-                (if (null? children)
-                  (begin
-                    (if (and (number? seconds) (> seconds 0))
-                      (roll-call-schedule-end! seconds)
-                      #f)
-                    (reply-ok-with msg "roll-call begun"))
-                    (begin
-                      (ma-send! (canonical-actor (ctx-text (car children) "actor"))
-                                (list :roll-call-child))
-                      (send (cdr children))))))
-            (loop (cdr entries)
-                  (map-set status
-                           (canonical-actor (ctx-text (cdr (car entries)) "actor"))
-                           #f))))))
+      (begin
+        (set-roll-call-children! (make-map))
+        (set-prop! "roll-call-active" "true")
+        (ma-save-state!)
+        (let send ((children (map-values (children-map))))
+          (if (null? children)
+              (begin
+                (if (and (number? seconds) (> seconds 0))
+                    (roll-call-schedule-end! seconds)
+                    #f)
+                (reply-ok-with msg "roll-call begun"))
+              (begin
+                (ma-send! (canonical-actor (ctx-text (car children) "actor"))
+                          (list :roll-call-child))
+                (send (cdr children))))))))
 
 (define (roll-call-schedule-end! seconds)
   (ma-send! (entity-url "scheduler")
             (list "roll-call-end" :in (string-append (number->string seconds) "s") (list :roll-call "end"))))
 
 (define (roll-call-end! msg)
-  (if (not (roll-call-active?))
-      (reply-error msg "no roll-call active")
-      (let ((status (roll-call-status)))
-        (let loop ((entries (map->alist (children-map))) (kept (make-map)))
-          (if (null? entries)
-              (begin
-                (set-children-map! kept)
-                (set-prop! "roll-call-status" "")
-                (set-prop! "roll-call-active" "")
-                (ma-save-state!)
-                (node-children-changed!)
-                (reply-ok-with msg "roll-call ended"))
-              (let* ((entry (car entries))
-                     (actor (canonical-actor (car entry)))
-                     (ctx (cdr entry)))
-                (loop (cdr entries)
-                      (if (and (map? status) (map-ref status actor #f))
-                          (map-set kept actor ctx)
-                          kept))))))))
+  (cond ((not (roll-call-active?))
+         (reply-error msg "no roll-call active"))
+        ; Nobody answered at all: a transport failure, not an empty node.
+        ; Keep the live tree rather than swap in an empty one.
+        ((and (map-empty? (roll-call-children))
+              (not (map-empty? (children-map))))
+         (begin
+           (roll-call-clear!)
+           (reply-ok-with msg "roll-call ended: no answers, children kept")))
+        (else
+         (begin
+           (set-children-map! (roll-call-children))
+           (roll-call-clear!)
+           (node-children-changed!)
+           (reply-ok-with msg "roll-call ended")))))
 
 (define (forget-child! actor)
   (set-children-map!
-    (map-delete (children-map) (canonical-actor actor))))
+    (map-delete (children-map) (canonical-actor actor)))
+  (roll-call-forget-child! actor))
 
 (define (child-ctx actor)
   (map-ref (children-map) (canonical-actor actor) #f))
@@ -907,11 +920,17 @@
 (set-meta-method! :child handle-node-child)
 (set-internal-rpc-method! :roll-call-child handle-node-roll-call-child!)
 (set-internal-rpc-method! :orphan-root handle-node-root-orphan!)
+; The timed end arrives from the runtime scheduler, which dispatches as
+; <runtime>#scheduler rather than as this node, so it needs its own clause.
+(define (roll-call-end-caller-authorised? msg)
+  (or (same-actor? (msg-from msg) (self))
+      (same-actor? (msg-from msg) (entity-url "scheduler"))))
+
 (define (handle-node-roll-call! args msg)
   (cond ((not (or (roll-call-authorised? msg)
                   (and (not (null? args))
                        (equal? (car args) "end")
-                       (same-actor? (msg-from msg) (self)))))
+                       (roll-call-end-caller-authorised? msg))))
          (reply-error msg "only owner or current parent may roll-call"))
         ((not (or (null? args)
                   (and (equal? (car args) "end")
@@ -920,7 +939,8 @@
                        (or (null? (cdr args))
                            (and (null? (cdr (cdr args)))
                                 (let ((n (car (cdr args))))
-                                  (or (number? n) (string->number n))))))))
+                                  (or (number? n)
+                                      (and (string? n) (string->number n)))))))))
          (reply-error msg "usage: :roll-call [begin [seconds]|end]"))
         ((and (null? args) (not (roll-call-active?)))
          (reply-error msg "no roll-call active"))

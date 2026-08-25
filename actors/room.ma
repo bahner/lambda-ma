@@ -72,17 +72,22 @@
   (let ((ctx (child-ctx actor)))
     (if (map? ctx) (child-label ctx) actor)))
 
+(define (casefold-text-match? a b)
+  (and (string? a)
+       (string? b)
+       (equal? (string-downcase a) (string-downcase b))))
+
 (define (visible-occupant-matches token)
   (let loop ((xs (occupants)))
     (cond ((null? xs) '())
-          ((equal? (speaker-name (car xs)) token)
+          ((casefold-text-match? (speaker-name (car xs)) token)
            (cons (car xs) (loop (cdr xs))))
           (else (loop (cdr xs))))))
 
 (define (visible-child-matches token)
   (let loop ((ctxs (child-ctxs)) (matches '()))
     (cond ((null? ctxs) (reverse matches))
-          ((equal? (child-label (car ctxs)) token)
+          ((casefold-text-match? (child-label (car ctxs)) token)
            (loop (cdr ctxs) (cons (ctx-text (car ctxs) "actor") matches)))
           (else (loop (cdr ctxs) matches)))))
 
@@ -386,6 +391,8 @@
          (same-label (equal? (speaker-name actor) nick)))
     (if (and was-known same-claim same-label)
         (begin
+          ; Unchanged re-entry skips remember-child!, so note the report here.
+          (roll-call-note-child! ctx)
           (send-fresh-child-ctx! actor)
           (reply-ok msg))
         (begin
@@ -415,6 +422,8 @@
            (reply-error msg "nick token is already bound to another actor"))
           ((and (same-actor? bound actor) same-claim same-label)
            (begin
+             ; Unchanged re-entry skips remember-child!, so note the report here.
+             (roll-call-note-child! ctx)
              (send-fresh-child-ctx! actor)
              (reply-ok msg)))
           (else
