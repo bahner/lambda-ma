@@ -2413,6 +2413,40 @@ mod tests {
     }
 
     #[test]
+    fn phone_home_is_open_and_announces_current_parent() {
+        let env = agent_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#duckie".to_string());
+        crate::state::set_config(config);
+
+        eval_all(
+            r#"
+            (set-prop! "parent" "did:ma:runtime#room")
+            (set-prop! "name" "duckie")
+            (set-prop! "nick" "Goldie")
+            (set-prop! "description" "A duckie.")
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_msg("did:ma:stranger", "did:ma:runtime#duckie")),
+        );
+
+        eval_all("((find-method :phone-home) '() msg)", &env).unwrap();
+
+        assert_eq!(eval_str("(get-prop \"sent-target:1\")", &env), "did:ma:runtime#room");
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
+            Value::symbol(":ok")
+        );
+    }
+
+    #[test]
     fn room_child_alive_init_notifies_parent() {
         let env = room_env();
         let mut config = std::collections::HashMap::new();
@@ -3405,6 +3439,94 @@ mod tests {
             eval_all("(get-prop \"reply-term:4\")", &env).unwrap(),
             Value::list(vec![Value::symbol(":ok"), Value::list(vec![])])
         );
+    }
+
+    #[test]
+    fn container_admits_child_proposing_the_same_here() {
+        let env = container_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#bag".to_string());
+        crate::state::set_config(config);
+        eval_all(r#"(set-prop! "here" "did:ma:runtime#room")"#, &env).unwrap();
+        let child_ctx = eval_all(
+            r#"
+            (make-map "actor" "did:ma:runtime#lamp"
+                      "kind" "thing"
+                      "protocol" "/ma/thing/0.0.1"
+                      "parent" "did:ma:runtime#bag"
+                      "name" "lamp"
+                      "nick" "brass lamp"
+                      "description" "A warm brass lamp."
+                      "here" "did:ma:runtime#room")
+            "#,
+            &env,
+        )
+        .unwrap();
+        env.define(
+            Rc::from("parent_msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:runtime#lamp",
+                "did:ma:runtime#bag",
+                Value::list(vec![Value::symbol(":parent"), child_ctx]),
+            )),
+        );
+
+        eval_all("(on-message parent_msg)", &env).unwrap();
+
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
+            Value::symbol(":ok")
+        );
+        assert!(eval_bool(r#"(map? (child-ctx "did:ma:runtime#lamp"))"#, &env));
+    }
+
+    #[test]
+    fn container_refuses_child_proposing_a_different_here() {
+        let env = container_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#bag".to_string());
+        crate::state::set_config(config);
+        eval_all(r#"(set-prop! "here" "did:ma:runtime#room-a")"#, &env).unwrap();
+        let child_ctx = eval_all(
+            r#"
+            (make-map "actor" "did:ma:runtime#lamp"
+                      "kind" "thing"
+                      "protocol" "/ma/thing/0.0.1"
+                      "parent" "did:ma:runtime#bag"
+                      "name" "lamp"
+                      "nick" "brass lamp"
+                      "description" "A warm brass lamp."
+                      "here" "did:ma:runtime#room-b")
+            "#,
+            &env,
+        )
+        .unwrap();
+        env.define(
+            Rc::from("parent_msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:runtime#lamp",
+                "did:ma:runtime#bag",
+                Value::list(vec![Value::symbol(":parent"), child_ctx]),
+            )),
+        );
+
+        eval_all("(on-message parent_msg)", &env).unwrap();
+
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
+            Value::list(vec![
+                Value::symbol(":error"),
+                Value::str("not in the same room")
+            ])
+        );
+        assert!(eval_bool(
+            r#"(not (child-ctx "did:ma:runtime#lamp"))"#,
+            &env
+        ));
     }
 
     #[test]
@@ -5832,7 +5954,10 @@ mod tests {
     }
 
     #[test]
-    fn root_put_request_dispatches_when_co_located() {
+    fn root_put_request_relays_without_spatial_check() {
+        // Root no longer keeps an actor registry or checks co-location itself
+        // (removed — replaced by container.ma's own "here"-based admission
+        // check via the ordinary ctx-passing protocol). Root is a pure relay.
         let env = root_actor_env();
         install_send_reply_recorders(&env);
         let mut config = std::collections::HashMap::new();
@@ -5841,19 +5966,6 @@ mod tests {
         crate::state::set_config(config);
         eval_all(
             r#"
-            (define (ma-entity-exists? actor) #t)
-            (registry-put! "did:ma:runtime#room"
-              (make-map "kind" "room" "parent" "did:ma:runtime#root"
-                         "actor" "did:ma:runtime#room" "name" "r" "nick" "r" "description" "r"))
-            (registry-put! "did:ma:avatar"
-              (make-map "kind" "agent" "parent" "did:ma:runtime#room"
-                         "actor" "did:ma:avatar" "name" "av" "nick" "av" "description" "av"))
-            (registry-put! "did:ma:runtime#lamp"
-              (make-map "kind" "thing" "parent" "did:ma:avatar"
-                         "actor" "did:ma:runtime#lamp" "name" "lamp" "nick" "lamp" "description" "lamp"))
-            (registry-put! "did:ma:runtime#bag"
-              (make-map "kind" "container" "parent" "did:ma:runtime#room"
-                         "actor" "did:ma:runtime#bag" "name" "bag" "nick" "bag" "description" "bag"))
             (define put-ctx (make-map "action" "put" "id" "put-1"
                                        "requestor" "did:ma:avatar"
                                        "item" "did:ma:runtime#lamp"
@@ -5916,7 +6028,8 @@ mod tests {
     }
 
     #[test]
-    fn root_put_request_fails_when_not_co_located() {
+    fn root_take_request_relays_without_spatial_check() {
+        // Same simplification as put-request: root just relays.
         let env = root_actor_env();
         install_send_reply_recorders(&env);
         let mut config = std::collections::HashMap::new();
@@ -5925,84 +6038,6 @@ mod tests {
         crate::state::set_config(config);
         eval_all(
             r#"
-            (define (ma-entity-exists? actor) #t)
-            (registry-put! "did:ma:runtime#room-a"
-              (make-map "kind" "room" "parent" "did:ma:runtime#root"
-                         "actor" "did:ma:runtime#room-a" "name" "a" "nick" "a" "description" "a"))
-            (registry-put! "did:ma:runtime#room-b"
-              (make-map "kind" "room" "parent" "did:ma:runtime#root"
-                         "actor" "did:ma:runtime#room-b" "name" "b" "nick" "b" "description" "b"))
-            (registry-put! "did:ma:avatar"
-              (make-map "kind" "agent" "parent" "did:ma:runtime#room-a"
-                         "actor" "did:ma:avatar" "name" "av" "nick" "av" "description" "av"))
-            (registry-put! "did:ma:runtime#lamp"
-              (make-map "kind" "thing" "parent" "did:ma:avatar"
-                         "actor" "did:ma:runtime#lamp" "name" "lamp" "nick" "lamp" "description" "lamp"))
-            (registry-put! "did:ma:runtime#bag"
-              (make-map "kind" "container" "parent" "did:ma:runtime#room-b"
-                         "actor" "did:ma:runtime#bag" "name" "bag" "nick" "bag" "description" "bag"))
-            (define put-ctx (make-map "action" "put" "id" "put-fail"
-                                       "requestor" "did:ma:avatar"
-                                       "item" "did:ma:runtime#lamp"
-                                       "container" "did:ma:runtime#bag"))
-            "#,
-            &env,
-        )
-        .unwrap();
-        env.define(
-            Rc::from("msg"),
-            Value::Msg(sample_term_msg(
-                "did:ma:runtime#lamp",
-                "did:ma:runtime#root",
-                Value::symbol(":put-request"),
-            )),
-        );
-
-        eval_all("((find-method :put-request) (list put-ctx) msg)", &env).unwrap();
-
-        // Only one send: failure event to requestor.
-        assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 1);
-        assert_eq!(
-            eval_str("(get-prop \"sent-target:1\")", &env),
-            "did:ma:avatar"
-        );
-        assert_eq!(
-            eval_all(
-                "(map-ref (car (cdr (get-prop \"sent-term:1\"))) \"status\" \"\")",
-                &env
-            )
-            .unwrap(),
-            Value::str("failed")
-        );
-        assert_eq!(
-            eval_all("(car (get-prop \"reply-term:1\"))", &env).unwrap(),
-            Value::symbol(":error")
-        );
-    }
-
-    #[test]
-    fn root_take_request_dispatches_to_item_when_co_located() {
-        let env = root_actor_env();
-        install_send_reply_recorders(&env);
-        let mut config = std::collections::HashMap::new();
-        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
-        config.insert("self".to_string(), "did:ma:runtime#root".to_string());
-        crate::state::set_config(config);
-        eval_all(
-            r#"
-            (define (ma-entity-exists? actor) #t)
-            (registry-put! "did:ma:runtime#room"
-              (make-map "kind" "room" "parent" "did:ma:runtime#root"
-                         "actor" "did:ma:runtime#room" "name" "r" "nick" "r" "description" "r"))
-            (registry-put! "did:ma:avatar"
-              (make-map "kind" "agent" "parent" "did:ma:runtime#room"
-                         "actor" "did:ma:avatar" "name" "av" "nick" "av" "description" "av"))
-            (registry-put! "did:ma:runtime#bag"
-              (make-map "kind" "container" "parent" "did:ma:runtime#room"
-                         "actor" "did:ma:runtime#bag" "name" "bag" "nick" "bag" "description" "bag"))
-            (registry-put! "did:ma:runtime#lamp"
-              (make-map "kind" "thing" "parent" "did:ma:runtime#bag"
-                         "actor" "did:ma:runtime#lamp" "name" "lamp" "nick" "lamp" "description" "lamp"))
             (define take-ctx (make-map "action" "take" "id" "take-1"
                                         "requestor" "did:ma:avatar"
                                         "item" "did:ma:runtime#lamp"
@@ -6051,70 +6086,6 @@ mod tests {
         assert_eq!(
             eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
             Value::list(vec![Value::symbol(":ok"), Value::str("take-1")])
-        );
-    }
-
-    #[test]
-    fn root_take_request_fails_when_not_co_located() {
-        let env = root_actor_env();
-        install_send_reply_recorders(&env);
-        let mut config = std::collections::HashMap::new();
-        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
-        config.insert("self".to_string(), "did:ma:runtime#root".to_string());
-        crate::state::set_config(config);
-        eval_all(
-            r#"
-            (define (ma-entity-exists? actor) #t)
-            (registry-put! "did:ma:runtime#room-a"
-              (make-map "kind" "room" "parent" "did:ma:runtime#root"
-                         "actor" "did:ma:runtime#room-a" "name" "a" "nick" "a" "description" "a"))
-            (registry-put! "did:ma:runtime#room-b"
-              (make-map "kind" "room" "parent" "did:ma:runtime#root"
-                         "actor" "did:ma:runtime#room-b" "name" "b" "nick" "b" "description" "b"))
-            (registry-put! "did:ma:avatar"
-              (make-map "kind" "agent" "parent" "did:ma:runtime#room-b"
-                         "actor" "did:ma:avatar" "name" "av" "nick" "av" "description" "av"))
-            (registry-put! "did:ma:runtime#bag"
-              (make-map "kind" "container" "parent" "did:ma:runtime#room-a"
-                         "actor" "did:ma:runtime#bag" "name" "bag" "nick" "bag" "description" "bag"))
-            (registry-put! "did:ma:runtime#lamp"
-              (make-map "kind" "thing" "parent" "did:ma:runtime#bag"
-                         "actor" "did:ma:runtime#lamp" "name" "lamp" "nick" "lamp" "description" "lamp"))
-            (define take-ctx (make-map "action" "take" "id" "take-fail"
-                                        "requestor" "did:ma:avatar"
-                                        "item" "did:ma:runtime#lamp"
-                                        "container" "did:ma:runtime#bag"))
-            "#,
-            &env,
-        )
-        .unwrap();
-        env.define(
-            Rc::from("msg"),
-            Value::Msg(sample_term_msg(
-                "did:ma:runtime#bag",
-                "did:ma:runtime#root",
-                Value::symbol(":take-request"),
-            )),
-        );
-
-        eval_all("((find-method :take-request) (list take-ctx) msg)", &env).unwrap();
-
-        assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 1);
-        assert_eq!(
-            eval_str("(get-prop \"sent-target:1\")", &env),
-            "did:ma:avatar"
-        );
-        assert_eq!(
-            eval_all(
-                "(map-ref (car (cdr (get-prop \"sent-term:1\"))) \"status\" \"\")",
-                &env
-            )
-            .unwrap(),
-            Value::str("failed")
-        );
-        assert_eq!(
-            eval_all("(car (get-prop \"reply-term:1\"))", &env).unwrap(),
-            Value::symbol(":error")
         );
     }
 

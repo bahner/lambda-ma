@@ -131,33 +131,6 @@
         (reply-ok-with msg (root-orphan-ctxs))
         (reply-error msg "usage: :orphans?"))))
 
-; ── Actor spatial registry ─────────────────────────────────────────────────
-; Flat ephemeral map keyed by canonical msg.from. Last write wins; no side effects.
-
-(define ACTOR_REGISTRY_KEY "actor-registry")
-
-(define (actor-registry)
-  (let ((v (get-prop ACTOR_REGISTRY_KEY)))
-    (if (map? v) v (make-map))))
-
-(define (registry-put! did-url ctx)
-  (set-prop! ACTOR_REGISTRY_KEY
-             (map-set (actor-registry) (canonical-actor did-url) ctx)))
-
-(define (registry-lookup did-url)
-  (map-ref (actor-registry) (canonical-actor did-url) #f))
-
-; Walk registry parent chain until a room-kind node is found.
-(define (find-effective-room did-url)
-  (let loop ((current (canonical-actor did-url)) (depth 0))
-    (if (> depth 10)
-        #f
-        (let ((ctx (registry-lookup current)))
-          (cond ((not ctx) #f)
-                ((equal? (ctx-text ctx "kind") "room")
-                 (if (entity-live? current) current #f))
-                (else (loop (canonical-actor (ctx-text ctx "parent")) (+ depth 1))))))))
-
 (define (put-ctx-valid? ctx)
   (and (map? ctx)
        (non-empty-string? (map-ref ctx "id" ""))
@@ -186,32 +159,9 @@
     (ma-send! (canonical-actor (map-ref take-ctx "requestor" ""))
               (list :take-event full-ctx))))
 
-; Bare-DID requestors (remote users) have no registry entry, so only child and
-; container co-location is required. Requestor authorisation is already gated
-; on the item before the :put-request / :take-request reaches root.
-(define (action-co-located? subject child-did container-did)
-  (let ((subject-room (find-effective-room subject))
-        (child-room (find-effective-room child-did))
-        (container-room (find-effective-room container-did)))
-    (and child-room container-room
-         (equal? child-room container-room)
-         (or (not subject-room) (equal? subject-room child-room)))))
-
-; Walk parent chain, skipping containers, to check if subject is the holder.
-(define (actor-effectively-held-by? did subject)
-  (let loop ((current did) (depth 0))
-    (if (> depth 10)
-        #f
-        (let ((ctx (registry-lookup current)))
-          (if (not ctx)
-              #f
-              (let ((kind (ctx-text ctx "kind"))
-                    (parent (canonical-actor (ctx-text ctx "parent" ""))))
-                (cond ((equal? kind "room") #f)
-                      ((same-actor? parent subject) #t)
-                      (else (loop parent (+ depth 1))))))))))
-
-; item initiates put: validates caller, root validates spatial, then gates container and drives item
+; item initiates put: root is a pure relay — spatial ("here") admission is
+; enforced peer-to-peer by the container itself via the ctx-passing protocol,
+; never by root (see container.ma's node-child-admission-error).
 (set-internal-rpc-method! :put-request
   (lambda (args msg)
     (cond ((null? args)
@@ -220,23 +170,18 @@
            (reply-error msg "invalid put-ctx"))
           (else
            (let* ((put-ctx (car args))
-                  (requestor (map-ref put-ctx "requestor" ""))
                   (item (map-ref put-ctx "item" ""))
                   (container (map-ref put-ctx "container" "")))
-             (cond ((not (action-co-located? requestor item container))
-                    (begin
-                      (send-put-event! put-ctx "failed" "not in same room")
-                      (reply-error msg "not in same room")))
-                   (else
-                    (begin
-                      (send-put-event! put-ctx "ok" #f)
-                      ; Container gate: validates locked/full and notifies requestor on refusal.
-                      (ma-send! (canonical-actor container) (list :put put-ctx))
-                      ; Item executes: drives propose-node-parent! to container.
-                      (ma-send! (canonical-actor item) (list :put put-ctx))
-                      (reply-ok-with msg (map-ref put-ctx "id" ""))))))))))
+             (begin
+               (send-put-event! put-ctx "ok" #f)
+               ; Container gate: validates locked/full/here and notifies requestor on refusal.
+               (ma-send! (canonical-actor container) (list :put put-ctx))
+               ; Item executes: drives propose-node-parent! to container.
+               (ma-send! (canonical-actor item) (list :put put-ctx))
+               (reply-ok-with msg (map-ref put-ctx "id" ""))))))))
 
-; container initiates take: validates locally, root validates spatial, then drives item
+; container initiates take: root is a pure relay — spatial ("here") admission
+; is enforced peer-to-peer by the container itself, never by root.
 (set-internal-rpc-method! :take-request
   (lambda (args msg)
     (cond ((null? args)
@@ -245,16 +190,9 @@
            (reply-error msg "invalid take-ctx"))
           (else
            (let* ((take-ctx (car args))
-                  (requestor (map-ref take-ctx "requestor" ""))
-                  (item (map-ref take-ctx "item" ""))
-                  (container (map-ref take-ctx "container" "")))
-             (cond ((not (action-co-located? requestor item container))
-                    (begin
-                      (send-take-event! take-ctx "failed" "not in same room")
-                      (reply-error msg "not in same room")))
-                   (else
-                    (begin
-                      (send-take-event! take-ctx "ok" #f)
-                      ; Item decides if requestor may hold it (overridable :take handler).
-                      (ma-send! (canonical-actor item) (list :take take-ctx))
-                      (reply-ok-with msg (map-ref take-ctx "id" ""))))))))))
+                  (item (map-ref take-ctx "item" "")))
+             (begin
+               (send-take-event! take-ctx "ok" #f)
+               ; Item decides if requestor may hold it (overridable :take handler).
+               (ma-send! (canonical-actor item) (list :take take-ctx))
+               (reply-ok-with msg (map-ref take-ctx "id" ""))))))))

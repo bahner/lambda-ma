@@ -400,6 +400,17 @@
            (announce-node-parent!)
            (reply-ok msg)))))
 
+; Open repair / check-in verb: a node re-announces its current parent ctx to
+; its parent. This is intentionally idempotent and side-effect-light: no owner
+; or transfer state changes, only a self-healing parent handshake.
+(define (handle-node-phone-home! args msg)
+  (cond ((not (null? args))
+         (reply-error msg "usage: :phone-home"))
+        (else
+         (begin
+           (announce-node-parent!)
+           (reply-ok msg)))))
+
 (define (children-map)
   (prop-map "children"))
 
@@ -919,6 +930,7 @@
 (set-rpc-method! :children? handle-node-children?)
 (set-meta-method! :child handle-node-child)
 (set-internal-rpc-method! :roll-call-child handle-node-roll-call-child!)
+(set-internal-rpc-method! :phone-home handle-node-phone-home!)
 (set-internal-rpc-method! :orphan-root handle-node-root-orphan!)
 ; The timed end arrives from the runtime scheduler, which dispatches as
 ; <runtime>#scheduler rather than as this node, so it needs its own clause.

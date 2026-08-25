@@ -51,6 +51,13 @@
   (set-prop! "closed" (if value "true" "false"))
   (ma-save-state!))
 
+; Normalises a proposing child's "here" the same way node-here normalises our
+; own, so a ctx that omits the field (e.g. a not-yet-cascaded actor) reads as
+; "" rather than #f and compares equal to our own unset "here".
+(define (ctx-here ctx)
+  (let ((value (ctx-text ctx "here")))
+    (if (non-empty-string? value) value "")))
+
 (define (content-lines entries)
   (cond ((null? entries) '())
         (else (cons (child-line (car entries)) (content-lines (cdr entries))))))
@@ -110,6 +117,7 @@
   (define (node-child-admission-error ctx msg)
     (cond ((or (locked?) (closed?)) (locked-message))
           ((>= (node-children-count) (node-max-children)) "container is full")
+          ((not (equal? (ctx-here ctx) (node-here))) "not in the same room")
           (else #f)))
 
   (define (node-children-changed!) (send-container-ctx!))
