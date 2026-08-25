@@ -67,6 +67,32 @@ secret replaces the old one immediately.
 @runtime#bag:unlock supersecret
 ```
 
+## Clear out disconnected players
+
+A browser tab that simply closes never announces a departure, so its bare DID
+lingers in the room as a tombstone. A roll-call rebuilds the room's children
+from whoever actually answers:
+
+```text
+@runtime#construct:roll-call begin 10
+```
+
+Every child is asked to re-announce, and ten seconds later the runtime
+scheduler ends the roll-call automatically: whoever reported is kept with the
+context they just sent, and whoever stayed silent is gone. Omit the seconds to
+end it yourself instead:
+
+```text
+@runtime#construct:roll-call begin
+@runtime#construct:roll-call
+@runtime#construct:roll-call end
+```
+
+Bare `:roll-call` reports who has answered so far. Only the room's owner or its
+current parent may start one. If nobody answers at all the swap is skipped and
+the existing children are kept, since that is far more likely to be a transport
+failure than a genuinely empty room.
+
 ## Profile references
 
 - Normative contract: [ma-lambda-ma-v1.md](../ma-spec/runtime/ma-lambda-ma-v1.md)

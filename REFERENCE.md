@@ -80,6 +80,43 @@ such as `give <object> to <person>` may distribute that full claim command in
 an ordinary text message, but no runtime actor changes ownership merely because
 an offer was sent.
 
+## Roll-call
+
+`:roll-call [begin [seconds]|end]` rebuilds a node's `children` map from the
+children that actually answer. It exists because a disconnected client leaves
+a tombstone that nothing else removes: an avatar is a bare DID with no
+identity entity, so it cannot be probed and never announces its own departure
+when a browser tab simply closes.
+
+Only the node's owner or its current parent may start a roll-call. Bare `:roll-call`
+reports the state of one in progress.
+
+The algorithm is a shadow-map swap:
+
+1. `begin` opens an **empty** shadow map, marks the roll-call active, and sends
+   `:roll-call-child` to every current child. The live `children` map is left
+   untouched, so a node under roll-call keeps serving its current tree.
+1. Children need no roll-call-specific logic. `:roll-call-child` makes a node
+   re-announce to its own cached parent with the ordinary `:parent <ctx>`, so
+   the pinger's identity is irrelevant and the answer is a plain RPC with no
+   parenting side effects.
+1. While the roll-call is active, every `remember-child!` writes into both the
+   live map and the shadow map, and every `forget-child!` deletes from both.
+   Because that is the single choke point for admission, a node that *arrives*
+   mid-window is captured too, and one that leaves is not resurrected.
+1. `end` replaces `children` with the shadow map wholesale. An absent child is
+   simply one that never reappeared, and every survivor carries the ctx it
+   reported during the window rather than stale stored state.
+
+`begin <seconds>` registers a one-shot `:in` schedule with the runtime
+scheduler, which dispatches the end under its own `<runtime>#scheduler`
+fragment; that fragment is therefore accepted as a caller for the `end` phase.
+Without `seconds`, the roll-call stays open until its initiator ends it.
+
+An empty shadow map at `end` while the live map is non-empty is treated as a
+transport failure rather than an empty node: the swap is skipped and the
+children are kept.
+
 ## Random values
 
 Scheme actors expose two sibling bounded-integer functions. `(random n)` uses
