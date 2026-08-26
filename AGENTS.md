@@ -38,6 +38,17 @@ exists.
   second source of truth invites divergence in parentage, ctx updates,
   persistence, and removal and is an interoperability risk.
 
+  Query functions such as `who?`, `occupants?`, `things?`, and `exits?` are
+  presentation views, not stored collections. They must derive their results
+  lazily by filtering or iterating over `children`.
+
+  `roll-call-children` is the deliberate transient exception. While a
+  roll-call is active it is a temporary working map containing children that
+  have answered. It is used to reconstruct a replacement `children` map when
+  the current map is stale or dead; it is not a permanent child collection,
+  an occupancy list, or an alternative source of truth. Do not remove it or
+  replace it with `who`, `occupants`, `things`, or another kind-specific list.
+
 ## Props and ctx
 
 Props are the authoritative stored state: `get-prop`/`set-prop!`/`del-prop!`.
@@ -56,6 +67,20 @@ Consequences:
   `get-prop` internally; it is always fresh.
 - `register-ctx-props!` is not about categorising props; it is about knowing
   when to push a fresh ctx to clients after a message is handled.
+
+`parent-ctx` is only a cached snapshot received in a parent acknowledgement;
+it is not a second local child collection. In particular, a node must not
+derive or persist `who`, `occupants`, `things`, or `exits` from separate props.
+When a parent snapshot contains `children`, consumers may inspect that nested
+map as a snapshot for protocol checks, but authoritative child state remains
+the parent's own `children` map.
+
+Ownership claim is separate from parentage. `:claim` and the recovery-secret
+flow are real ownership functionality. The old node-side `claim:<actor>`
+property is not authoritative child state and must not be used for presence,
+parentage, inventory, or ownership decisions. Room-level `claim-ctx` and
+`set-claim!` are children-map operations used while admitting room children;
+they are not a second claim store.
 
 ## RPC and events
 
@@ -141,11 +166,11 @@ assigns or changes ownership as a side effect. For an existing movable node,
 only the explicit `:claim` verb may change ownership; `:forge` creates a new
 node with `msg.from` as its initial owner. Its sole gate is a same-room check (`node-same-room-as-
 parent?`) when the object's cached parent is a room: it looks up the caller
-in that room's cached occupant list (`parent-ctx`'s `"who"` map) and, on a
-mismatch, re-announces to the current parent to refresh the cache and
-refuses so the caller can simply retry. That cache is not cryptographically
-authoritative — `parent-ctx` is unauthenticated data the parent chose to
-hand over (see "Parent-ctx caching" below) — but it is the whole requirement
+in that room's cached `children` map and, on a mismatch, re-announces to the
+current parent to refresh the snapshot and refuses so the caller can simply
+retry. That cache is not cryptographically authoritative — `parent-ctx` is
+unauthenticated data the parent chose to hand over (see "Parent-ctx caching"
+below) — but it is the whole requirement
 for `:hold`, unlike `:set-parent`, which gates on
 `node-transfer-caller-authorised?` alone.
 
@@ -185,8 +210,8 @@ queued follow-up.
 Every `:child <ctx>` message embeds the sender's own self-description as a
 nested `"parent-ctx"` field (`child-ack-ctx` in `node.ma`) alongside the
 ordinary child-naming fields the handshake already requires — the nested
-field is the only place a richer parent ctx (e.g. a room's `who`/`agents`/
-`things`) can travel, since the outer ctx's `actor`/`parent` fields must
+field is the only place a richer parent ctx (including its `children` map)
+can travel, since the outer ctx's `actor`/`parent` fields must
 always name the child and the ctx-issuing parent, never the parent's own
 kind/contents. The receiving child caches only the nested map (`parent-ctx`,
 `set-parent-ctx!`, `parent-kind` in `node.ma`), cleared (not left stale)
@@ -207,7 +232,7 @@ hand-rolled `(list :child ctx)` send alongside a `broadcast-room-ctx!`/
 thing the DRY rule above exists to catch.
 
 Ownership/claim state (`owner`, `set-owner!`, `recovery-secret`,
-`set-recovery-secret!`, `claim-key`, `set-claim!`, `owner-caller?`) and the
+`set-recovery-secret!`, `owner-caller?`) and the
 `:owner`/`:owner?`/`:set-recovery-secret`/`:claim` handler bodies
 (`handle-node-owner`, `handle-node-owner?`, `handle-node-set-recovery-secret!`,
 `handle-node-claim!`) live once in `node.ma` too — thing.ma/container.ma/

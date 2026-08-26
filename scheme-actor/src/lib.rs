@@ -1747,6 +1747,49 @@ mod tests {
     }
 
     #[test]
+    fn room_here_bypasses_parent_gate_for_manual_room_kascade() {
+        let env = room_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#room".to_string());
+        crate::state::set_config(config);
+        eval_all(
+            r#"
+            (remember-child! (make-map "actor" "did:ma:runtime#lamp"
+                                      "kind" "thing"
+                                      "protocol" "/ma/thing/0.0.1"
+                                      "parent" "did:ma:runtime#room"
+                                      "name" "lamp"
+                                      "nick" "brass lamp"
+                                      "description" "A warm brass lamp."))
+            "#,
+            &env,
+        )
+        .unwrap();
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_msg("did:ma:guest", "did:ma:runtime#room")),
+        );
+
+        eval_all(
+            r#"((find-method :here) (list "did:ma:runtime#room") msg)"#,
+            &env,
+        )
+        .unwrap();
+
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
+            Value::symbol(":ok")
+        );
+        assert_eq!(eval_str("(get-prop \"here\")", &env), "did:ma:runtime#room");
+        assert!(eval_bool(
+            "(equal? (car (get-prop \"sent-term:1\")) :here)",
+            &env
+        ));
+    }
+
+    #[test]
     fn room_ctx_contains_protocol_rev_root_parent_and_visible_entries() {
         let env = room_env();
         let mut config = std::collections::HashMap::new();
@@ -3108,7 +3151,7 @@ mod tests {
     }
 
     #[test]
-    fn thing_hold_refuses_and_resyncs_when_caller_not_in_cached_room() {
+    fn thing_hold_refuses_and_resyncs_when_caller_not_in_room_children() {
         let env = thing_env();
         install_send_reply_recorders(&env);
         let mut config = std::collections::HashMap::new();
@@ -3134,7 +3177,8 @@ mod tests {
               (make-map "actor" "did:ma:runtime#lamp"
                         "parent" "did:ma:runtime#room"
                         "parent-ctx" (make-map "kind" "room"
-                                               "who" (make-map "did:ma:other" #t))))
+                                               "children" (make-map "did:ma:other"
+                                                                     (make-map "actor" "did:ma:other")))))
             ((find-method :hold) '() stranger_msg)
             "#,
             &env,
@@ -3159,7 +3203,7 @@ mod tests {
     }
 
     #[test]
-    fn thing_hold_succeeds_when_caller_is_in_cached_room() {
+    fn thing_hold_succeeds_when_caller_is_in_room_children() {
         let env = thing_env();
         install_send_reply_recorders(&env);
         let mut config = std::collections::HashMap::new();
@@ -3185,7 +3229,8 @@ mod tests {
               (make-map "actor" "did:ma:runtime#lamp"
                         "parent" "did:ma:runtime#room"
                         "parent-ctx" (make-map "kind" "room"
-                                               "who" (make-map "did:ma:stranger" #t))))
+                                               "children" (make-map "did:ma:stranger"
+                                                                     (make-map "actor" "did:ma:stranger")))))
             ((find-method :hold) '() stranger_msg)
             "#,
             &env,

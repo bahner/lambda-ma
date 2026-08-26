@@ -4,7 +4,7 @@
 
 (define CONTAINER_PROTOCOL "/ma/container/0.0.1")
 
-; Persistent state accessors. owner/set-owner!/claim-key/set-claim!/
+; Persistent state accessors. owner/set-owner!/recovery-secret/set-recovery-secret!/
 ; recovery-secret/set-recovery-secret!/owner-caller? live in node.ma.
 (define (name)
   (let ((n (get-prop "name")))

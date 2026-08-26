@@ -4,6 +4,8 @@
 ; Kinds.
 (define ROOM_KIND "/ma/room/0.0.1")
 (define EXIT_KIND "/ma/exit/0.0.1")
+(define (node-kind) "room")
+(define (node-protocol) ROOM_KIND)
 
 ; Direct DID presence is stored in the same child collection as actor children.
 ; Every room resident lives in the inherited children map. Bare direct DIDs

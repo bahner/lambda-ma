@@ -114,19 +114,20 @@
 (define (parent-kind)
   (if (map? (parent-ctx)) (ctx-text (parent-ctx) "kind") ""))
 
-(define (parent-who-map)
-  (let ((value (if (map? (parent-ctx)) (map-ref (parent-ctx) "who" #f) #f)))
-    (if (map? value) value (make-map))))
+(define (parent-has-child? did)
+  (let loop ((ctxs (if (map? (parent-ctx))
+                       (map-values (map-ref (parent-ctx) "children" (make-map)))
+                       '())))
+    (cond ((null? ctxs) #f)
+          ((same-actor? (ctx-text (car ctxs) "actor") did) #t)
+          (else (loop (cdr ctxs))))))
 
-; :hold's sole gate: presence in the room, per the cached occupant list -
-; not cryptographically authoritative (parent-ctx is unauthenticated data
-; the parent chose to hand over), but it is the whole requirement, since
-; :hold is deliberately ownership-blind (see handle-node-hold! below). #t
-; whenever the parent isn't (cached as) a room, so it never blocks non-room
-; holders.
+; :hold's sole gate: presence in the room's authoritative children map.
+; Parent ctx is still a cached snapshot, but it contains no parallel `who`
+; list; membership is derived lazily by iterating the room's children.
 (define (node-same-room-as-parent? did)
   (or (not (equal? (parent-kind) "room"))
-      (map-ref (parent-who-map) did #f)))
+      (parent-has-child? did)))
 
 (define (apply-node-parent-ctx! ctx)
   (begin
@@ -199,16 +200,6 @@
       (del-prop! "recovery-secret")
       (set-prop! "recovery-secret" secret))
   (ma-save-state!))
-
-(define (claim-key actor)
-  (string-append "claim:" (canonical-actor actor)))
-
-(define (set-claim! actor ctx)
-  (if (map? ctx)
-      (begin
-        (set-prop! (claim-key actor) ctx)
-        (ma-save-state!))
-      #f))
 
 (define (owner-caller? msg)
   (let ((o (owner)))
@@ -347,10 +338,16 @@
         (ma-send! current (list :parent (node-ctx))))))
 
 ; Unconditional fire-and-forget cascade: every child learns its current room.
+; A room may initiate this manually as its own authority, without requiring a
+; parent gate. Other nodes still require the normal parent check.
+(define (room-node?)
+  (equal? (node-protocol) "/ma/room/0.0.1"))
+
 (define (handle-node-here! args msg)
   (cond ((null? args)
          (reply-error msg "usage: :here <room-did-url>"))
-        ((not (node-caller-is-parent? msg))
+        ((and (not (room-node?))
+              (not (node-caller-is-parent? msg)))
          (reply-error msg "only parent may send :here"))
         ((not (valid-did-url? (car args)))
          (reply-error msg ":here requires a room DID-URL"))
@@ -728,9 +725,6 @@
            (reply-error msg "ctx-map must include non-empty parent, kind, protocol, name, nick, description"))
           (else
            (begin
-             (if (and (not (null? (cdr rest))) (node-valid-transfer-ctx? (car (cdr rest))))
-                 (set-claim! did (car (cdr rest)))
-                 #f)
              (propose-node-parent! (car rest))
              (reply-ok-with msg "set-parent requested"))))))
 
