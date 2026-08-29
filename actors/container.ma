@@ -271,27 +271,43 @@
                    (ma-send! (root) (list :put-request put-ctx))
                    (reply-ok-with msg id))))))))
 
-; Avatar initiates take; container validates lock and child presence, then forwards to root.
+; :take has two callers:
+;   1. Avatar → initiate take-from-this-container: validates lock and child
+;      presence, then forwards :take-request to root and replies with an id.
+;   2. Root → this-container-is-the-item: drives propose-node-hold! to the
+;      requestor, exactly like thing.ma/agent.ma's item-side :take.
 (set-rpc-method! :take
   (lambda (args msg)
-    (cond ((or (locked?) (closed?))
-           (reply-locked msg))
-          ((null? args)
-           (reply-error msg "usage: :take <item-did-url>"))
-          ((not (valid-did-url? (car args)))
-           (reply-error msg ":take requires a DID-URL"))
-          ((not (child-ctx (canonical-actor (car args))))
-           (reply-error msg "item not in this container"))
-          (else
-           (let* ((id (generate-action-id))
-                  (take-ctx (make-map
-                               "action" "take"
-                               "id" id
-                               "requestor" (msg-from msg)
-                               "item" (canonical-actor (car args))
-                               "container" (canonical-actor (self)))))
-             (ma-send! (root) (list :take-request take-ctx))
-             (reply-ok-with msg id))))))
+    (if (and (not (null? args)) (map? (car args)))
+        ; Root relays :take <take-ctx> when this container is itself the item
+        ; being taken out of another container. Cross-runtime safe: validate
+        ; against the containing container's runtime root and that it is our
+        ; current parent (take-relay-authorised? in node.ma).
+        (if (take-relay-authorised? (car args) msg)
+            (begin
+              (propose-node-hold! (map-ref (car args) "requestor" ""))
+              (reply-ok msg))
+            (reply-error msg "take ctx not authorised"))
+        ; Avatar initiates a take-from-this-container: lock + child checks, then
+        ; forward :take-request to root and reply with an id.
+        (cond ((or (locked?) (closed?))
+               (reply-locked msg))
+              ((null? args)
+               (reply-error msg "usage: :take <item-did-url>"))
+              ((not (valid-did-url? (car args)))
+               (reply-error msg ":take requires a DID-URL"))
+              ((not (child-ctx (canonical-actor (car args))))
+               (reply-error msg "item not in this container"))
+              (else
+               (let* ((id (generate-action-id))
+                      (take-ctx (make-map
+                                   "action" "take"
+                                   "id" id
+                                   "requestor" (msg-from msg)
+                                   "item" (canonical-actor (car args))
+                                   "container" (canonical-actor (self)))))
+                 (ma-send! (root) (list :take-request take-ctx))
+                 (reply-ok-with msg id)))))))
 
 (set-rpc-method! :lock
   (lambda (args msg)

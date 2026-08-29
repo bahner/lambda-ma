@@ -170,9 +170,9 @@
 ; Root sends :take after spatial validation; item validates requestor (override to restrict).
 (set-cmd-method! :take
   (lambda (args msg)
-    (when (and (node-caller-is-local-root? msg)
-               (not (null? args))
-               (map? (car args)))
+    (when (and (not (null? args))
+               (map? (car args))
+               (take-relay-authorised? (car args) msg))
       ; Requestor is a bare avatar DID, so use hold-admissibility (not DID-URL).
       (propose-node-hold! (map-ref (car args) "requestor" "")))))
 

@@ -755,6 +755,89 @@ mod tests {
     }
 
     #[test]
+    fn node_forge_seeds_child_here_from_room_forger() {
+        let env = node_env();
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#room".to_string());
+        config.insert("kind".to_string(), "/ma/room/0.0.1".to_string());
+        crate::state::set_config(config);
+        install_send_reply_recorders(&env);
+        eval_all(
+            r#"
+            (define (ma-create-actor kind behaviour init fragment)
+              (set-prop! "forge-init" init)
+              "did:ma:runtime#newthing1")
+            "#,
+            &env,
+        )
+        .unwrap();
+        let ctx = eval_all(
+            r#"(map-set (map-set (make-map) "kind" "/ma/thing/0.0.1") "name" "Lamp")"#,
+            &env,
+        )
+        .unwrap();
+        env.define(Rc::from("forge_ctx"), ctx.clone());
+        env.define(
+            Rc::from("forge_msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:owner",
+                "did:ma:runtime#room",
+                Value::list(vec![Value::symbol(":forge"), ctx]),
+            )),
+        );
+
+        eval_all("(on-message forge_msg)", &env).unwrap();
+
+        let init = eval_str("(get-prop \"forge-init\")", &env);
+        assert!(init.contains("(set-init-prop! \"here\" \"did:ma:runtime#room\")"));
+    }
+
+    #[test]
+    fn node_forge_seeds_child_here_from_container_forger() {
+        let env = node_env();
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#box".to_string());
+        config.insert("kind".to_string(), "/ma/container/0.0.1".to_string());
+        crate::state::set_config(config);
+        eval_all(
+            r#"(set-init-prop! "here" "did:ma:runtime#construct")"#,
+            &env,
+        )
+        .unwrap();
+        install_send_reply_recorders(&env);
+        eval_all(
+            r#"
+            (define (ma-create-actor kind behaviour init fragment)
+              (set-prop! "forge-init" init)
+              "did:ma:runtime#newthing2")
+            "#,
+            &env,
+        )
+        .unwrap();
+        let ctx = eval_all(
+            r#"(map-set (map-set (make-map) "kind" "/ma/thing/0.0.1") "name" "Lamp")"#,
+            &env,
+        )
+        .unwrap();
+        env.define(Rc::from("forge_ctx"), ctx.clone());
+        env.define(
+            Rc::from("forge_msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:owner",
+                "did:ma:runtime#box",
+                Value::list(vec![Value::symbol(":forge"), ctx]),
+            )),
+        );
+
+        eval_all("(on-message forge_msg)", &env).unwrap();
+
+        let init = eval_str("(get-prop \"forge-init\")", &env);
+        assert!(init.contains("(set-init-prop! \"here\" \"did:ma:runtime#construct\")"));
+    }
+
+    #[test]
     fn node_forge_rejects_ctx_missing_kind_or_name() {
         let env = node_env();
         let mut config = std::collections::HashMap::new();
@@ -2488,7 +2571,10 @@ mod tests {
 
         eval_all("((find-method :phone-home) '() msg)", &env).unwrap();
 
-        assert_eq!(eval_str("(get-prop \"sent-target:1\")", &env), "did:ma:runtime#room");
+        assert_eq!(
+            eval_str("(get-prop \"sent-target:1\")", &env),
+            "did:ma:runtime#room"
+        );
         assert_eq!(
             eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
             Value::symbol(":ok")
@@ -3530,7 +3616,10 @@ mod tests {
             eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
             Value::symbol(":ok")
         );
-        assert!(eval_bool(r#"(map? (child-ctx "did:ma:runtime#lamp"))"#, &env));
+        assert!(eval_bool(
+            r#"(map? (child-ctx "did:ma:runtime#lamp"))"#,
+            &env
+        ));
     }
 
     #[test]
@@ -3619,7 +3708,10 @@ mod tests {
             eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
             Value::symbol(":ok")
         );
-        assert!(eval_bool(r#"(map? (child-ctx "did:ma:runtime#lamp"))"#, &env));
+        assert!(eval_bool(
+            r#"(map? (child-ctx "did:ma:runtime#lamp"))"#,
+            &env
+        ));
     }
 
     #[test]
@@ -3631,14 +3723,20 @@ mod tests {
         crate::state::set_config(config);
 
         assert_eq!(
-            eval_str(r#"(ctx-text (node-ctx-for-parent "did:ma:runtime#bag") "here")"#, &env),
+            eval_str(
+                r#"(ctx-text (node-ctx-for-parent "did:ma:runtime#bag") "here")"#,
+                &env
+            ),
             ""
         );
 
         eval_all(r#"(set-prop! "here" "did:ma:runtime#room")"#, &env).unwrap();
 
         assert_eq!(
-            eval_str(r#"(ctx-text (node-ctx-for-parent "did:ma:runtime#bag") "here")"#, &env),
+            eval_str(
+                r#"(ctx-text (node-ctx-for-parent "did:ma:runtime#bag") "here")"#,
+                &env
+            ),
             "did:ma:runtime#room"
         );
     }
@@ -5598,6 +5696,94 @@ mod tests {
     }
 
     #[test]
+    fn thing_take_accepts_cross_runtime_relay_from_parents_root() {
+        // Item is hosted by did:ma:old, co-located in did:ma:new, parented by
+        // did:ma:new#bag. The containing container's runtime root
+        // (did:ma:new#root) relays :take; the item must accept it even though
+        // its own host root is did:ma:old#root.
+        let env = thing_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:old".to_string());
+        config.insert("self".to_string(), "did:ma:old#lamp".to_string());
+        config.insert("root".to_string(), "did:ma:old#root".to_string());
+        crate::state::set_config(config);
+        env.define(
+            Rc::from("relay_msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:new#root",
+                "did:ma:old#lamp",
+                Value::symbol(":take"),
+            )),
+        );
+
+        eval_all(
+            r#"
+            (set-prop! "here" "did:ma:new#construct")
+            (set-prop! "parent" "did:ma:new#bag")
+            (set-prop! "name" "lamp")
+            (set-prop! "nick" "lamp")
+            (set-prop! "description" "A lamp.")
+            (define take-ctx (make-map "action" "take" "id" "test-x"
+                                        "requestor" "did:ma:avatar"
+                                        "item" "did:ma:old#lamp"
+                                        "container" "did:ma:new#bag"))
+            ((find-method :take) (list take-ctx) relay_msg)
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        assert_eq!(
+            eval_str("(get-prop \"sent-target:1\")", &env),
+            "did:ma:avatar"
+        );
+        assert_eq!(
+            eval_all("(car (get-prop \"sent-term:1\"))", &env).unwrap(),
+            Value::symbol(":parent")
+        );
+    }
+
+    #[test]
+    fn thing_take_ignores_cross_runtime_relay_when_container_is_not_parent() {
+        // A foreign runtime's root relays a :take whose container is not our
+        // current parent — must be ignored, not handed to the requestor.
+        let env = thing_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:old".to_string());
+        config.insert("self".to_string(), "did:ma:old#lamp".to_string());
+        config.insert("root".to_string(), "did:ma:old#root".to_string());
+        crate::state::set_config(config);
+        env.define(
+            Rc::from("relay_msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:evil#root",
+                "did:ma:old#lamp",
+                Value::symbol(":take"),
+            )),
+        );
+
+        eval_all(
+            r#"
+            (set-prop! "parent" "did:ma:new#bag")
+            (set-prop! "name" "lamp")
+            (set-prop! "nick" "lamp")
+            (set-prop! "description" "A lamp.")
+            (define take-ctx (make-map "action" "take" "id" "test-y"
+                                        "requestor" "did:ma:attacker"
+                                        "item" "did:ma:old#lamp"
+                                        "container" "did:ma:evil#bag"))
+            ((find-method :take) (list take-ctx) relay_msg)
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        assert!(eval_bool("(not (has-prop? \"sent-count\"))", &env));
+    }
+
+    #[test]
     fn thing_take_from_non_root_is_ignored() {
         let env = thing_env();
         install_send_reply_recorders(&env);
@@ -5995,6 +6181,51 @@ mod tests {
         assert_eq!(
             eval_all("(car (get-prop \"reply-term:1\"))", &env).unwrap(),
             Value::symbol(":ok")
+        );
+    }
+
+    #[test]
+    fn container_take_from_root_drives_propose_hold_to_requestor() {
+        let env = container_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#bag".to_string());
+        config.insert("root".to_string(), "did:ma:runtime#root".to_string());
+        crate::state::set_config(config);
+        env.define(
+            Rc::from("root_msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:runtime#root",
+                "did:ma:runtime#bag",
+                Value::symbol(":take"),
+            )),
+        );
+
+        eval_all(
+            r#"
+            (set-prop! "parent" "did:ma:runtime#room")
+            (set-prop! "name" "bag")
+            (set-prop! "nick" "bag")
+            (set-prop! "description" "A bag.")
+            (define take-ctx (make-map "action" "take" "id" "test-id-3"
+                                        "requestor" "did:ma:avatar"
+                                        "item" "did:ma:runtime#bag"
+                                        "container" "did:ma:runtime#room"))
+            ((find-method :take) (list take-ctx) root_msg)
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        // propose-node-hold! sends :parent to bare DID requestor.
+        assert_eq!(
+            eval_str("(get-prop \"sent-target:1\")", &env),
+            "did:ma:avatar"
+        );
+        assert_eq!(
+            eval_all("(car (get-prop \"sent-term:1\"))", &env).unwrap(),
+            Value::symbol(":parent")
         );
     }
 

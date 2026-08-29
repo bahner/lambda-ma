@@ -274,6 +274,18 @@
 (define (node-caller-is-local-root? msg)
   (same-actor? (msg-from msg) (root)))
 
+; Cross-runtime take relay. A `:take <take-ctx>` arrives from the root of the
+; runtime that hosts the *container* (the container sent `:take-request` to its
+; own root), which may differ from our own host root when the container and we
+; live in different runtimes. Accept it only when the ctx's `container` is our
+; current parent and the sender is that container's runtime root — so a foreign
+; runtime cannot hand us to an impostor requestor.
+(define (take-relay-authorised? take-ctx msg)
+  (let ((container (map-ref take-ctx "container" "")))
+    (and (non-empty-string? container)
+         (same-actor? container (node-parent))
+         (same-actor? (msg-from msg) (actor-runtime-root container)))))
+
 (define (node-transfer-caller-authorised? did msg)
   (or (node-caller-is-parent? msg)
       (node-orphan-owner-recovery? did)
@@ -960,16 +972,23 @@
 
 ; ma-lambda-ma-v1.md §7: forge ctx MUST have kind/name, MUST NOT carry an
 ; owner or caller-supplied init — owner is always msg-from, parent is self.
+; The new child is also born co-located with its forger: its "here" is the
+; forger's own location, so container admission (which compares a proposing
+; child's here against the container's here) never refuses a freshly-forged
+; item whose :here cascade has not yet arrived.
 (define (forge-ctx-valid? ctx)
   (and (map? ctx)
        (non-empty-string? (ctx-text ctx "kind"))
        (non-empty-string? (ctx-text ctx "name"))))
 
-(define (forge-init name owner-did)
+(define (forge-init name owner-did here)
   (string-append
     "(set-init-prop! \"name\" \"" name "\")\n"
     "(set-init-prop! \"owner\" \"" owner-did "\")\n"
     "(set-init-prop! \"parent\" \"" (canonical-actor (self)) "\")\n"
+    (if (non-empty-string? here)
+        (string-append "(set-init-prop! \"here\" \"" here "\")\n")
+        "")
     "(ma-save-state!)\n"))
 
 (define (handle-node-forge args msg)
@@ -981,9 +1000,10 @@
           (else
            (let* ((owner (canonical-actor (msg-from msg)))
                   (behaviour (ctx-text ctx "behaviour"))
+                  (here (if (room-node?) (self) (node-here)))
                 (actor (ma-create-actor (ctx-text ctx "kind")
                                 (if (non-empty-string? behaviour) behaviour #f)
-                                (forge-init (ctx-text ctx "name") owner)
+                                (forge-init (ctx-text ctx "name") owner here)
                                 #f)))
              (reply-ok-with msg actor))))))
 

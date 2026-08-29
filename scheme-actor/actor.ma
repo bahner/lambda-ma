@@ -54,6 +54,13 @@
       (car (string-split actor "#"))
       #f))
 
+; The `#root` of the runtime that hosts `actor` (its full DID's base), used to
+; recognise a relay whose authority derives from that actor's runtime rather
+; than our own host runtime — see take-relay-authorised? in node.ma.
+(define (actor-runtime-root actor)
+  (let ((base (actor-runtime actor)))
+    (and base (string-append base "#root"))))
+
 (define RUNTIME_CTX_KEY "ctx")
 
 (define (runtime-ctx-valid? ctx)
