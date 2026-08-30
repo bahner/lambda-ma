@@ -82,6 +82,13 @@ fn room_env() -> Rc<ma_scheme_actor::env::Env> {
                       "name" nick
                       "nick" nick
                       "description" "A test thing.")))
+        (define (test-did-presence! did ctx)
+          (remember-child!
+            (map-set
+              (map-set
+                (map-set ctx "actor" did)
+                "kind" "agent")
+              "protocol" "/ma/agent/0.0.1")))
         "#,
         &env,
     )
@@ -279,7 +286,7 @@ fn room_emote_broadcasts_typed_event_and_acknowledges() {
     ma_scheme_actor::state::set_config(make_config("did:ma:runtime", "did:ma:runtime#room"));
     eval_all(
         r#"
-        (set-did-ctx! "did:ma:bob"
+        (test-did-presence! "did:ma:bob"
           (make-map "did" "did:ma:bob"
                     "parent" "did:ma:runtime#room"
                     "name" "Bob"
@@ -389,12 +396,12 @@ fn room_direct_did_entry_enables_say_and_emote() {
 }
 
 #[test]
-fn room_enriches_child_speech_for_did_occupants() {
+fn room_enriches_child_speech_for_every_present_actor() {
     let env = room_env();
     ma_scheme_actor::state::set_config(make_config("did:ma:runtime", "did:ma:runtime#room"));
     eval_all(
         r#"
-        (set-did-ctx! "did:ma:alice"
+        (test-did-presence! "did:ma:alice"
           (make-map "did" "did:ma:alice"
                     "parent" "did:ma:runtime#room"
                     "name" "Alice"
@@ -417,6 +424,7 @@ fn room_enriches_child_speech_for_did_occupants() {
     );
     eval_all("(on-message say_msg)", &env).unwrap();
 
+    // The duckie's speech reaches every present actor: Alice and the duckie itself.
     assert_eq!(
         eval_str("(get-prop \"sent-target:1\")", &env),
         "did:ma:alice"
@@ -436,6 +444,14 @@ fn room_enriches_child_speech_for_did_occupants() {
         eval_str("(car (cdr (cdr (get-prop \"sent-term:1\"))))", &env),
         "quack"
     );
+    assert_eq!(
+        eval_str("(get-prop \"sent-target:2\")", &env),
+        "did:ma:runtime#duckie"
+    );
+    assert_eq!(
+        eval_all("(car (get-prop \"sent-term:2\"))", &env).unwrap(),
+        Value::symbol(":say")
+    );
 
     env.define(
         Rc::from("emote_msg"),
@@ -448,23 +464,31 @@ fn room_enriches_child_speech_for_did_occupants() {
     eval_all("(on-message emote_msg)", &env).unwrap();
 
     assert_eq!(
-        eval_str("(get-prop \"sent-target:2\")", &env),
+        eval_str("(get-prop \"sent-target:3\")", &env),
         "did:ma:alice"
     );
     assert_eq!(
-        eval_all("(car (get-prop \"sent-term:2\"))", &env).unwrap(),
+        eval_all("(car (get-prop \"sent-term:3\"))", &env).unwrap(),
         Value::symbol(":emote")
     );
     assert_eq!(
         eval_str(
-            "(ctx-text (car (cdr (get-prop \"sent-term:2\"))) \"actor\")",
+            "(ctx-text (car (cdr (get-prop \"sent-term:3\"))) \"actor\")",
             &env
         ),
         "did:ma:runtime#duckie"
     );
     assert_eq!(
-        eval_str("(car (cdr (cdr (get-prop \"sent-term:2\"))))", &env),
+        eval_str("(car (cdr (cdr (get-prop \"sent-term:3\"))))", &env),
         "dances"
+    );
+    assert_eq!(
+        eval_str("(get-prop \"sent-target:4\")", &env),
+        "did:ma:runtime#duckie"
+    );
+    assert_eq!(
+        eval_all("(car (get-prop \"sent-term:4\"))", &env).unwrap(),
+        Value::symbol(":emote")
     );
 }
 

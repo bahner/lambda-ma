@@ -138,7 +138,7 @@
 
 (define (node-delegated-did-arg? args msg)
   (and (not (null? args))
-       (valid-did? (car args))
+       (is-did? (car args))
        (or (local-actor-ref? (msg-from msg))
            (node-caller-is-parent? msg))))
 
@@ -153,7 +153,7 @@
       args))
 
 (define (node-valid-parent-ref? ref)
-  (and (non-empty-string? ref) (valid-did-url? ref)))
+  (and (non-empty-string? ref) (is-did-url? ref)))
 
 (define (node-valid-transfer-ctx? ctx)
   (and (actor-ctx-shape? ctx)
@@ -246,9 +246,7 @@
   (let ((stored (recovery-secret))
         (did (claim-caller-did args msg))
         (claim-args (claim-command-args args msg)))
-    (cond ((not (valid-did? did))
-           (reply-user-error msg did "claim requires a bare DID sender"))
-          ((not (or (null? claim-args) (null? (cdr claim-args))))
+    (cond ((not (or (null? claim-args) (null? (cdr claim-args))))
            (reply-user-error msg did "usage: :claim [secret]"))
           ((and (not (owner)) (not stored) (null? claim-args))
            (begin
@@ -299,7 +297,7 @@
            (node-owner-delegation? did msg))))
 
 (define (node-parent-admissible? target-parent)
-  (and (valid-did-url? target-parent)
+  (and (is-did-url? target-parent)
        (not (same-actor? target-parent (self)))
        (not (node-root?))
        (or (not (equal? (node-protocol) "/ma/room/0.0.1"))
@@ -328,11 +326,10 @@
           #t)
         #f)))
 
-; :hold's target parent is always a bare avatar DID, never a DID-URL - a
-; deliberately separate admissibility gate from :set-parent's, which keeps
-; requiring a DID-URL (ma-lambda-ma-v1.md sec 6).
+; :hold's target parent is the caller's DID (`msg.from`). `is-did-url?` is a
+; cheap format check (is this shaped like a DID-URL), not a validity gate.
 (define (node-hold-admissible? target)
-  (and (valid-did? target)
+  (and (is-did-url? target)
        (not (same-actor? target (self)))))
 
 (define (propose-node-hold! did)
@@ -361,7 +358,7 @@
         ((and (not (room-node?))
               (not (node-caller-is-parent? msg)))
          (reply-error msg "only parent may send :here"))
-        ((not (valid-did-url? (car args)))
+        ((not (is-did-url? (car args)))
          (reply-error msg ":here requires a room DID-URL"))
         (else
          (begin
@@ -428,9 +425,8 @@
 
 (define (child-ctx-valid? ctx)
   (and (actor-ctx-shape? ctx)
-       (or (valid-did? (ctx-text ctx "actor"))
-           (valid-did-url? (ctx-text ctx "actor")))
-       (valid-did-url? (ctx-text ctx "parent"))))
+       (is-did-url? (ctx-text ctx "actor"))
+       (is-did-url? (ctx-text ctx "parent"))))
 
 (define (child-ctx-self-authentic? ctx msg)
   (and (child-ctx-valid? ctx)
@@ -438,14 +434,14 @@
 
 ; A terminating child (e.g. recycle) has no real new parent to report, so its
 ; announcement carries an explicitly empty "parent" rather than a DID-URL.
-; A child held by a bare avatar DID also departs from DID-URL containers.
-; This is distinct from child-ctx-valid?, which requires a real target parent
-; and is used for admission/reparenting.
+; A child held by a bare avatar DID now reports that bare DID as its parent
+; (itself a valid DID-URL), so it is admitted via child-ctx-valid? and the
+; parent!=self branch below rather than this departure path.
 (define (child-departure-ctx? ctx)
   (and (map? ctx)
-       (valid-did-url? (ctx-text ctx "actor"))
-       ; Empty parent = recycled; bare DID parent = now held by an avatar.
-       (not (valid-did-url? (ctx-text ctx "parent")))
+       (is-did-url? (ctx-text ctx "actor"))
+       ; Empty parent = recycled.
+       (not (is-did-url? (ctx-text ctx "parent")))
        (non-empty-string? (ctx-text ctx "name"))
        (non-empty-string? (ctx-text ctx "nick"))
        (non-empty-string? (ctx-text ctx "description"))))
@@ -477,8 +473,8 @@
   (let ((actor (ctx-text ctx "actor"))
         (orphan-root (ctx-text ctx "parent")))
     (and (map? ctx)
-         (valid-did-url? actor)
-         (valid-did-url? orphan-root)
+         (is-did-url? actor)
+         (is-did-url? orphan-root)
          (equal? (ctx-text ctx "kind") "orphan")
          (equal? (ctx-text ctx "protocol") "/ma/orphan/0.0.1")
          (non-empty-string? (ctx-text ctx "name"))
@@ -681,7 +677,7 @@
            (child-token-text-matches? token (ctx-text ctx "nick")))))
 
 (define (child-ref token)
-  (if (valid-did-url? token)
+  (if (is-did-url? token)
       (if (child-ctx token) (canonical-actor token) #f)
       (let loop ((entries (map->alist (children-map))))
         (cond ((null? entries) #f)
@@ -725,8 +721,6 @@
     (cond ((handle-stale-parent-drop did rest msg) #t)
           ((not (node-transfer-caller-authorised? did msg))
            (reply-error msg "set-parent must be requested by current parent"))
-          ((not (valid-did? did))
-           (reply-error msg "set-parent requires DID with did:ma: prefix"))
           ((null? rest)
            (reply-error msg "usage: :set-parent <target-parent-did-url> [ctx-map]"))
           ((not (node-valid-parent-ref? (car rest)))
@@ -755,8 +749,8 @@
   (let ((did (msg-from msg)))
     (cond ((not (null? args))
            (reply-error msg "usage: :hold"))
-          ((not (valid-did? did))
-           (reply-error msg "hold requires caller with did:ma: prefix, not a DID-URL"))
+          ((not (is-did-url? did))
+           (reply-error msg "hold requires a DID-URL caller"))
           ((not (node-same-room-as-parent? did))
            (begin
              (announce-node-parent!)
@@ -832,7 +826,7 @@
 (define (orphan-node-child! args msg)
   (cond ((or (null? args) (not (null? (cdr args))))
          "usage: :orphan <actor>")
-        ((not (valid-did-url? (car args)))
+        ((not (is-did-url? (car args)))
          "orphan actor must be a DID-URL")
         ((not (owner-authorised? msg))
          "only owner may orphan a child")
@@ -866,7 +860,7 @@
          (reply-error msg "only thing, agent, or container may be orphaned"))
         ((not (node-owner-ref-authorised? (car args)))
          (reply-error msg "only owner may orphan this actor"))
-        ((not (valid-did-url? (car (cdr args))))
+        ((not (is-did-url? (car (cdr args))))
          (reply-error msg "orphan parent must be a DID-URL"))
         ((not (same-actor? (node-parent) (car (cdr args))))
          (reply-error msg "orphan parent does not match actor parent"))
@@ -979,7 +973,8 @@
 (define (forge-ctx-valid? ctx)
   (and (map? ctx)
        (non-empty-string? (ctx-text ctx "kind"))
-       (non-empty-string? (ctx-text ctx "name"))))
+       (non-empty-string? (ctx-text ctx "name"))
+       (not (is-did-url? (ctx-text ctx "name")))))
 
 (define (forge-init name owner-did here)
   (string-append

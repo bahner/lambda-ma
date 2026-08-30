@@ -19,12 +19,10 @@ A bare DID in `msg.from` is the authenticated identity; no identity entity
 exists.
 
 - `#root` is the hardcoded local trust anchor. `:ctx?` publishes dynamic full
-  DID-URL service references such as `#scheduler` and `#house`. `:enter?`
+  DID-URL service references such as `#scheduler`. `:enter?`
   gives unqualified-entry discovery: it always replies with a ctx naming a
   room to enter, defaulting to the configured `start` room. Only `#root` is
-  required in a runtime — `#house` is optional and need not exist.
-- `#house` owns world policy for DID ctx and entity ctx. It must not
-  impersonate or forward commands for an identity.
+  required in a runtime.
 - A client enters a known room directly with `:enter`; the room stores its
   DID-keyed child ctx and replies with its committed snapshot.
 - Clients route focused room commands directly to the confirmed room DID-URL.
@@ -48,6 +46,39 @@ exists.
   the current map is stale or dead; it is not a permanent child collection,
   an occupancy list, or an alternative source of truth. Do not remove it or
   replace it with `who`, `occupants`, `things`, or another kind-specific list.
+
+## Actors, not humans
+
+ma-space is a Hewitt actor system: every node is an actor, and an actor is a
+universal computational primitive (a variable, a set, a stack, a calculator, a
+room, a thing, a person's presence). Actors communicate only by asynchronous
+message-passing; on each message an actor may send messages, create actors, and
+designate its behaviour for the next message. There is no data/process split.
+
+In practice an actor is a key in a node's authoritative `children` map. Every
+actor has a DID-URL address — a bare DID is a DID-URL with an empty fragment,
+nothing more — and every actor can send and receive messages. A bare DID has no
+identity entity, but its child ctx is room state like any other: the human's
+presence is just another actor keyed alongside a duckie, a chest, or a lamp.
+There is no human/actor distinction, and no subset of occupants distinguished
+by "having a DID" — they all have one.
+
+`kind` (`/ma/thing/0.0.1`, `/ma/container/0.0.1`, `/ma/agent/0.0.1`,
+`/ma/exit/0.0.1`, `/ma/room/0.0.1`) is a protocol — the verbs an actor
+understands and the state it keeps — never a human/non-human classification.
+
+Events (`:say`, `:emote`, `:arrive`, `:leave`) are broadcast to every actor
+present in the room — every key in `children`, regardless of kind. Each
+receiving actor decides what to do: a human client renders it, a parrot
+remembers and repeats it, a microphone thing records it, and any actor may
+ignore it. The reason an `:emote` is not sent to "a calculator" is not that a
+calculator is non-human but that a pure calculator is not a `/ma/*` world actor
+present in a room's `children`; were it a child, it would receive the event and
+ignore it.
+
+Rule: the recipients of a room event are the room's children — nothing else.
+Never reintroduce a bare-DID/human-only broadcast path, a `did-occupants` view,
+or any "has-DID / has-no-DID" split.
 
 ## Props and ctx
 

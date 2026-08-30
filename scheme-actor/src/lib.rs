@@ -117,6 +117,13 @@ mod tests {
                                 "description" description))
                         (define (test-agent-claim! actor nick)
                             (set-claim! actor (test-actor-claim "agent" "/ma/agent/0.0.1" actor nick "A test agent.")))
+                        (define (test-did-presence! did ctx)
+                            (remember-child!
+                              (map-set
+                                (map-set
+                                  (map-set ctx "actor" did)
+                                  "kind" "agent")
+                                "protocol" "/ma/agent/0.0.1")))
                         "#,
                         &env,
                 )
@@ -253,22 +260,6 @@ mod tests {
               (set-prop! "sent-term" term))
             (define (ma-save-state!) #f)
             "#,
-            &env,
-        )
-        .unwrap();
-        env
-    }
-
-    fn house_env() -> Rc<Env> {
-        crate::state::load_from_cbor(&empty_state_cbor()).unwrap();
-        let env = new_root_env();
-        crate::state::install(&env);
-        crate::msg::install(&env);
-        eval_all(include_str!("../stdlib.ma"), &env).unwrap();
-        eval_all(include_str!("../actor.ma"), &env).unwrap();
-        eval_all(include_str!("../../actors/house.ma"), &env).unwrap();
-        eval_all(
-            "(define (ma-send! target term) #f) (define (ma-reply! msg term) #f) (define (ma-save-state!) #f)",
             &env,
         )
         .unwrap();
@@ -462,6 +453,37 @@ mod tests {
             eval_str("(get-prop \"description\")", &env),
             "A warm desk lamp"
         );
+    }
+
+    #[test]
+    fn actor_name_rejects_did_name() {
+        let env = actor_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#lamp".to_string());
+        crate::state::set_config(config);
+        env.define(
+            Rc::from("owner_msg"),
+            Value::Msg(sample_msg("did:ma:owner", "did:ma:runtime#lamp")),
+        );
+        eval_all(
+            r#"
+            (set-prop! "owner" "did:ma:owner")
+            ((find-method :name) (list "did:ma:runtime#fake") owner_msg)
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
+            Value::list(vec![
+                Value::symbol(":error"),
+                Value::str("name must not be a DID or DID-URL")
+            ])
+        );
+        assert!(!eval_bool("(has-prop? \"name\")", &env));
     }
 
     #[test]
@@ -865,6 +887,40 @@ mod tests {
                 Value::str("usage: :forge <ctx with kind, name>")
             ])
         );
+    }
+
+    #[test]
+    fn node_forge_rejects_did_name() {
+        let env = node_env();
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#room".to_string());
+        crate::state::set_config(config);
+        install_send_reply_recorders(&env);
+        let ctx = eval_all(
+            r#"(map-set (map-set (make-map) "kind" "/ma/thing/0.0.1") "name" "did:ma:runtime#lamp")"#,
+            &env,
+        )
+        .unwrap();
+        env.define(
+            Rc::from("forge_msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:owner",
+                "did:ma:runtime#room",
+                Value::list(vec![Value::symbol(":forge"), ctx]),
+            )),
+        );
+
+        eval_all("(on-message forge_msg)", &env).unwrap();
+
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
+            Value::list(vec![
+                Value::symbol(":error"),
+                Value::str("usage: :forge <ctx with kind, name>")
+            ])
+        );
+        assert!(eval_bool("(not (has-prop? \"sent-count\"))", &env));
     }
 
     #[test]
@@ -1281,7 +1337,6 @@ mod tests {
                         (set-prop! "ctx"
                             (make-map "runtime" "did:ma:ma"
                                                 "root" "did:ma:ma#root"
-                                                "house" "did:ma:world#house44"
                                                 "scheduler" "did:ma:ma#scheduler"
                                                 "rev" 1))
                         "#,
@@ -1305,31 +1360,66 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            eval_str("(ctx-text (did-ctx did) \"parent\")", &env),
+            eval_str("(ctx-text (claim-ctx did) \"parent\")", &env),
             "did:ma:ma#cloud"
         );
-        assert_eq!(eval_str("(ctx-text (did-ctx did) \"actor\")", &env), did);
+        assert_eq!(eval_str("(ctx-text (claim-ctx did) \"actor\")", &env), did);
         assert!(eval_bool("(map-has-key? (children-map) did)", &env));
         assert_eq!(eval_str("(speaker-name did)", &env), "Pondus");
         assert_eq!(eval_int("(get-prop \"reply-count\")", &env), 1);
-        assert_eq!(eval_str("(who-text)", &env), "Who: Pondus");
-        assert_eq!(
-            eval_str("(get-prop \"sent-target:2\")", &env),
-            "did:ma:world#house44"
-        );
-        assert!(eval_bool(
-            "(equal? (car (get-prop \"sent-term:2\")) :did-ctx)",
-            &env
-        ));
     }
 
     #[test]
-    fn room_who_replies_with_cbor_encodable_child_derived_map() {
+    fn room_enter_dispatch_uses_argument_shape_not_sender() {
         let env = room_env();
         install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#room".to_string());
+        crate::state::set_config(config);
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_msg("did:ma:alice", "did:ma:runtime#room")),
+        );
         eval_all(
             r#"
-            (set-did-ctx! "did:ma:duckie"
+            ((find-method :enter)
+             (list (make-map "actor" "did:ma:runtime#duckie"
+                             "kind" "agent"
+                             "protocol" "/ma/agent/0.0.1"
+                             "parent" "did:ma:runtime#room"
+                             "name" "Duckie"
+                             "nick" "Duckie"
+                             "description" "A duckie."))
+             msg)
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        // The ctx-map's actor (a full DID-URL) was admitted, not the sender's
+        // bare DID — dispatch follows argument shape, not msg.from's string.
+        assert!(eval_bool(
+            "(map-has-key? (children-map) \"did:ma:runtime#duckie\")",
+            &env
+        ));
+        assert_eq!(
+            eval_str("(speaker-name \"did:ma:runtime#duckie\")", &env),
+            "Duckie"
+        );
+    }
+
+    #[test]
+    fn room_who_replies_with_cbor_encodable_occupant_list() {
+        let env = room_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#construct".to_string());
+        crate::state::set_config(config);
+        eval_all(
+            r#"
+            (test-did-presence! "did:ma:duckie"
               (make-map "did" "did:ma:duckie"
                         "parent" "did:ma:runtime#construct"
                         "name" "Duckie"
@@ -1348,12 +1438,12 @@ mod tests {
         let reply = eval_all("(get-prop \"reply-term:1\")", &env).unwrap();
         crate::cbor::encode(&reply).unwrap();
         assert!(eval_bool(
-            "(map? (car (cdr (get-prop \"reply-term:1\"))))",
+            "(pair? (car (cdr (get-prop \"reply-term:1\"))))",
             &env
         ));
         assert_eq!(
             eval_str(
-                "(ctx-text (map-ref (car (cdr (get-prop \"reply-term:1\"))) \"did:ma:duckie\") \"name\")",
+                "(ctx-text (car (car (cdr (get-prop \"reply-term:1\")))) \"name\")",
                 &env
             ),
             "Duckie"
@@ -1370,7 +1460,7 @@ mod tests {
         crate::state::set_config(config);
         eval_all(
             r#"
-            (set-did-ctx! "did:ma:bob"
+            (test-did-presence! "did:ma:bob"
               (make-map "did" "did:ma:bob"
                         "parent" "did:ma:runtime#room"
                         "name" "Bob"
@@ -1403,131 +1493,7 @@ mod tests {
     }
 
     #[test]
-    fn house_replaces_did_parent_after_notifying_previous_room() {
-        let env = house_env();
-        install_send_reply_recorders(&env);
-        env.define(
-            Rc::from("msg"),
-            Value::Msg(sample_msg("did:ma:ma#spa", "did:ma:ma#house")),
-        );
-        eval_all(
-            r#"
-                (set-prop! "did-ctxs"
-                  (map-set (make-map) "did:ma:alice"
-                  (make-map "did" "did:ma:alice"
-                      "parent" "did:ma:ma#lobby"
-                          "name" "Alice"
-                          "nick" "Alice"
-                          "description" "A visitor."
-                          "rev" 1)))
-                ((find-method :did-ctx)
-                  (list "did:ma:alice"
-                  (make-map "did" "did:ma:alice"
-                      "parent" "did:ma:ma#spa"
-                          "name" "Alice"
-                          "nick" "Alice"
-                          "description" "A visitor."
-                          "rev" 2))
-                  msg)
-                "#,
-            &env,
-        )
-        .unwrap();
-        assert_eq!(
-            eval_str("(get-prop \"sent-target:1\")", &env),
-            "did:ma:ma#lobby"
-        );
-        assert!(eval_bool(
-            "(equal? (car (get-prop \"sent-term:1\")) :leave)",
-            &env
-        ));
-        assert_eq!(
-            eval_str("(car (cdr (get-prop \"sent-term:1\")))", &env),
-            "did:ma:alice"
-        );
-        assert_eq!(
-            eval_str(
-                "(ctx-text (map-ref (get-prop \"did-ctxs\") \"did:ma:alice\") \"parent\")",
-                &env
-            ),
-            "did:ma:ma#spa"
-        );
-    }
-
-    #[test]
-    fn house_rejects_did_ctx_with_a_mismatched_identity() {
-        let env = house_env();
-        install_send_reply_recorders(&env);
-        env.define(
-            Rc::from("msg"),
-            Value::Msg(sample_msg("did:ma:ma#spa", "did:ma:ma#house")),
-        );
-        eval_all(
-            r#"
-                (set-prop! "did-ctxs" (make-map))
-                ((find-method :did-ctx)
-                  (list "did:ma:alice"
-                    (make-map "did" "did:ma:bob"
-                          "parent" "did:ma:ma#spa"
-                          "name" "Alice"
-                          "nick" "Alice"
-                          "description" "A visitor."
-                          "rev" 1))
-                  msg)
-                "#,
-            &env,
-        )
-        .unwrap();
-
-        assert!(eval_bool(
-            "(equal? (car (get-prop \"reply-term:1\")) :error)",
-            &env
-        ));
-        assert!(!eval_bool(
-            "(map-has-key? (house-map \"did-ctxs\") \"did:ma:alice\")",
-            &env
-        ));
-    }
-
-    #[test]
-    fn house_keys_entity_ctx_by_full_sender_without_duplicate_identity() {
-        let env = house_env();
-        install_send_reply_recorders(&env);
-        env.define(
-            Rc::from("msg"),
-            Value::Msg(sample_msg("did:ma:world#lamp", "did:ma:ma#house")),
-        );
-        eval_all(
-            r#"
-                ((find-method :entity-ctx)
-                  (list
-                    (make-map "kind" "thing"
-                          "protocol" "/ma/thing/0.0.1"
-                          "name" "Lamp"
-                          "nick" "lamp"
-                          "description" "A lamp."
-                          "parent" "did:ma:world#room"
-                          "rev" 1))
-                  msg)
-                "#,
-            &env,
-        )
-        .unwrap();
-        assert_eq!(
-            eval_str(
-                "(ctx-text (map-ref (get-prop \"entity-ctxs\") \"did:ma:world#lamp\") \"kind\")",
-                &env
-            ),
-            "thing"
-        );
-        assert!(!eval_bool(
-            "(map-has-key? (map-ref (get-prop \"entity-ctxs\") \"did:ma:world#lamp\") \"actor\")",
-            &env
-        ));
-    }
-
-    #[test]
-    fn room_only_accepts_targeted_did_leave_from_house() {
+    fn room_self_leave_removes_caller_and_rejects_targeted_leave() {
         let env = room_env();
         install_send_reply_recorders(&env);
         let mut config = std::collections::HashMap::new();
@@ -1535,31 +1501,173 @@ mod tests {
         config.insert("self".to_string(), "did:ma:runtime#room".to_string());
         crate::state::set_config(config);
         eval_all(
-                        r#"
-                                                (set-prop! "ctx"
-                                                    (make-map "runtime" "did:ma:runtime"
-                                                                        "root" "did:ma:runtime#root"
-                                                                        "house" "did:ma:world#house44"
-                                                                        "scheduler" "did:ma:runtime#scheduler"
-                                                                        "rev" 1))
-                                                (set-did-ctx! "did:ma:alice"
-                                                    (make-map "parent" "did:ma:runtime#room"
-                                                              "name" "Alice"
-                                                              "nick" "Alice"
-                                                              "description" "A visitor."
-                                                              "rev" 1))
-                        "#,
-                        &env,
-                )
-                .unwrap();
+            r#"
+                (test-did-presence! "did:ma:alice"
+                    (make-map "parent" "did:ma:runtime#room"
+                              "name" "Alice"
+                              "nick" "Alice"
+                              "description" "A visitor."
+                              "rev" 1))
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        // Argument-free :leave removes the caller, whatever its address shape.
         env.define(
             Rc::from("msg"),
-            Value::Msg(sample_msg("did:ma:world#house44", "did:ma:runtime#room")),
+            Value::Msg(sample_msg("did:ma:alice", "did:ma:runtime#room")),
+        );
+        eval_all("((find-method :leave) '() msg)", &env).unwrap();
+        assert!(!eval_bool(
+            "(member-entry? \"did:ma:alice\" (occupants))",
+            &env
+        ));
+
+        // A targeted :leave <did> from someone else is refused.
+        eval_all(
+            r#"
+                (test-did-presence! "did:ma:alice"
+                    (make-map "parent" "did:ma:runtime#room"
+                              "name" "Alice"
+                              "nick" "Alice"
+                              "description" "A visitor."
+                              "rev" 1))
+            "#,
+            &env,
+        )
+        .unwrap();
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_msg("did:ma:bob", "did:ma:runtime#room")),
         );
         eval_all("((find-method :leave) (list \"did:ma:alice\") msg)", &env).unwrap();
+        assert!(eval_bool(
+            "(member-entry? \"did:ma:alice\" (occupants))",
+            &env
+        ));
+    }
+
+    #[test]
+    fn room_self_leave_removes_actor() {
+        let env = room_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#room".to_string());
+        crate::state::set_config(config);
+        eval_all(
+            r#"
+            (set-claim! "did:ma:runtime#duckie"
+              (make-map "actor" "did:ma:runtime#duckie"
+                        "kind" "agent"
+                        "protocol" "/ma/agent/0.0.1"
+                        "parent" "did:ma:runtime#room"
+                        "name" "Duckie"
+                        "nick" "Duckie"
+                        "description" "A duckie."))
+            "#,
+            &env,
+        )
+        .unwrap();
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_msg("did:ma:runtime#duckie", "did:ma:runtime#room")),
+        );
+        eval_all("((find-method :leave) '() msg)", &env).unwrap();
+
+        // A full DID-URL actor can self-leave, not just a bare DID.
+        assert!(!eval_bool(
+            "(map-has-key? (children-map) \"did:ma:runtime#duckie\")",
+            &env
+        ));
+    }
+
+    #[test]
+    fn room_events_broadcast_to_all_children_not_just_bare_dids() {
+        let env = room_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#room".to_string());
+        crate::state::set_config(config);
+        eval_all(
+            r#"
+            (test-did-presence! "did:ma:alice"
+              (make-map "parent" "did:ma:runtime#room"
+                        "name" "Alice" "nick" "Alice"
+                        "description" "A visitor." "rev" 1))
+            (remember-child!
+              (make-map "actor" "did:ma:runtime#duckie" "kind" "agent"
+                        "protocol" "/ma/agent/0.0.1" "parent" "did:ma:runtime#room"
+                        "name" "Duckie" "nick" "Duckie" "description" "A duckie."))
+            (remember-child!
+              (make-map "actor" "did:ma:runtime#lamp" "kind" "thing"
+                        "protocol" "/ma/thing/0.0.1" "parent" "did:ma:runtime#room"
+                        "name" "Lamp" "nick" "Lamp" "description" "A lamp."))
+            (remember-child!
+              (make-map "actor" "did:ma:runtime#kiste" "kind" "container"
+                        "protocol" "/ma/container/0.0.1" "parent" "did:ma:runtime#room"
+                        "name" "Kiste" "nick" "Kiste" "description" "A chest."))
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:alice",
+                "did:ma:runtime#room",
+                Value::list(vec![Value::symbol(":say"), Value::str("hello")]),
+            )),
+        );
+        eval_all("(on-message msg)", &env).unwrap();
+
+        assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 4);
         assert_eq!(
-            eval_bool("(member-string? \"did:ma:alice\" (did-occupants))", &env),
-            false
+            eval_str("(get-prop \"sent-target:1\")", &env),
+            "did:ma:alice"
+        );
+        assert_eq!(
+            eval_str("(get-prop \"sent-target:2\")", &env),
+            "did:ma:runtime#duckie"
+        );
+        assert_eq!(
+            eval_str("(get-prop \"sent-target:3\")", &env),
+            "did:ma:runtime#kiste"
+        );
+        assert_eq!(
+            eval_str("(get-prop \"sent-target:4\")", &env),
+            "did:ma:runtime#lamp"
+        );
+    }
+
+    #[test]
+    fn room_thing_alias_rejects_did_name() {
+        let env = room_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#room".to_string());
+        crate::state::set_config(config);
+        eval_all("(set-prop! \"owner\" \"did:ma:owner\")", &env).unwrap();
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_msg("did:ma:owner", "did:ma:runtime#room")),
+        );
+        eval_all(
+            r#"((find-method :thing) (list "did:ma:runtime#lamp" "did:ma:runtime#lamp") msg)"#,
+            &env,
+        )
+        .unwrap();
+
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
+            Value::list(vec![
+                Value::symbol(":error"),
+                Value::str("thing alias must not be a DID or DID-URL")
+            ])
         );
     }
 
@@ -1616,7 +1724,7 @@ mod tests {
         );
         eval_all(
             r#"
-            (set-did-ctx! "did:ma:alice"
+            (test-did-presence! "did:ma:alice"
                           (make-map "actor" "did:ma:alice"
                                     "parent" "did:ma:runtime#room"
                                     "kind" "agent"
@@ -1653,7 +1761,7 @@ mod tests {
         install_send_reply_recorders(&env);
         eval_all(
             r#"
-            (set-did-ctx! "did:ma:alice"
+            (test-did-presence! "did:ma:alice"
                             (make-map "did" "did:ma:alice"
                                                 "parent" "did:ma:runtime#room"
                         "name" "Alice"
@@ -1709,7 +1817,7 @@ mod tests {
                         "name" "duckie"
                         "nick" "Duckie"
                         "description" "A duck."))
-                        (set-did-ctx! "did:ma:alice"
+                        (test-did-presence! "did:ma:alice"
                             (make-map "parent" "did:ma:runtime#room"
                                                 "name" "Alice"
                                                 "nick" "Alice"
@@ -1771,7 +1879,7 @@ mod tests {
         crate::state::set_config(config);
         eval_all(
             r#"
-            (set-did-ctx! "did:ma:alice"
+            (test-did-presence! "did:ma:alice"
               (make-map "parent" "did:ma:runtime#room"
                         "name" "Alice"
                         "nick" "Alice"
@@ -1981,13 +2089,10 @@ mod tests {
             r##"(local-actor-ref? "did:ma:other#room")"##,
             &env
         ));
-        assert!(eval_bool(
-            r##"(valid-did-url? "did:ma:runtime#room")"##,
-            &env
-        ));
-        assert!(!eval_bool(r##"(valid-did-url? "did:ma:runtime")"##, &env));
-        assert!(eval_bool(r##"(valid-did? "did:ma:did")"##, &env));
-        assert!(!eval_bool(r##"(valid-did? "did:ma:runtime#room")"##, &env));
+        assert!(eval_bool(r##"(is-did-url? "did:ma:runtime#room")"##, &env));
+        assert!(eval_bool(r##"(is-did-url? "did:ma:runtime")"##, &env));
+        assert!(eval_bool(r##"(is-did? "did:ma:did")"##, &env));
+        assert!(!eval_bool(r##"(is-did? "did:ma:runtime#room")"##, &env));
     }
 
     #[test]
@@ -2381,7 +2486,6 @@ mod tests {
                         (set-prop! "ctx"
                             (make-map "runtime" "did:ma:runtime"
                                                 "root" "did:ma:runtime#root"
-                                                "house" "did:ma:world#house44"
                                                 "scheduler" "did:ma:runtime#scheduler"
                                                 "rev" 1))
             (on-signal :init)
@@ -4577,6 +4681,73 @@ mod tests {
     }
 
     #[test]
+    fn exit_traverse_accepts_any_mover_kind() {
+        let env = exit_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#north-exit".to_string());
+        crate::state::set_config(config);
+        eval_all(
+            r#"
+            (set-prop! "parent" "did:ma:runtime#room")
+            (set-prop! "target-room" "did:ma:runtime#elsewhere")
+            (set-prop! "direction" "north")
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        // A human (bare DID), a duckie (agent DID-URL), and a wandering kiste
+        // (container DID-URL) are all equally valid travellers — the exit keys
+        // on the traveller's address and current parent, never on its kind.
+        for (i, did) in [
+            "did:ma:alice",
+            "did:ma:runtime#duckie",
+            "did:ma:runtime#kiste",
+        ]
+        .iter()
+        .enumerate()
+        {
+            env.define(
+                Rc::from("msg"),
+                Value::Msg(sample_term_msg(
+                    did,
+                    "did:ma:runtime#north-exit",
+                    Value::symbol(":traverse"),
+                )),
+            );
+            eval_all(
+                &format!(
+                    "((find-method :traverse) (list (make-map \"did\" \"{did}\" \"parent\" \"did:ma:runtime#room\")) msg)"
+                ),
+                &env,
+            )
+            .unwrap();
+
+            let reply = format!("reply-term:{}", i + 1);
+            assert_eq!(
+                eval_all(&format!("(car (get-prop \"{reply}\"))"), &env).unwrap(),
+                Value::symbol(":ok")
+            );
+            assert_eq!(
+                eval_str(
+                    &format!("(ctx-text (car (cdr (get-prop \"{reply}\"))) \"did\")"),
+                    &env
+                ),
+                *did
+            );
+            assert_eq!(
+                eval_str(
+                    &format!("(ctx-text (car (cdr (get-prop \"{reply}\"))) \"parent\")"),
+                    &env
+                ),
+                "did:ma:runtime#elsewhere"
+            );
+        }
+    }
+
+    #[test]
     fn room_fill_broadcasts_typed_event() {
         let env = room_env();
         install_send_reply_recorders(&env);
@@ -4587,14 +4758,14 @@ mod tests {
         eval_all(
             r#"
             (set-prop! "owner" "did:ma:owner")
-            (set-did-ctx! "did:ma:owner"
+            (test-did-presence! "did:ma:owner"
               (make-map "did" "did:ma:owner"
                         "parent" "did:ma:runtime#room"
                         "name" "Owner"
                         "nick" "Owner"
                         "description" "A visitor."
                         "rev" 1))
-            (set-did-ctx! "did:ma:observer"
+            (test-did-presence! "did:ma:observer"
               (make-map "did" "did:ma:observer"
                         "parent" "did:ma:runtime#room"
                         "name" "Observer"
@@ -4681,10 +4852,10 @@ mod tests {
             eval_str(r#"(existing-room-target "did:ma:runtime#kitchen")"#, &env),
             "did:ma:runtime#kitchen"
         );
-        assert!(eval_bool(
-            r#"(not (existing-room-target "did:ma:runtime"))"#,
-            &env
-        ));
+        assert_eq!(
+            eval_str(r#"(existing-room-target "did:ma:runtime")"#, &env),
+            "did:ma:runtime"
+        );
         assert!(eval_bool(r#"(not (existing-room-target "bar"))"#, &env));
     }
 
@@ -4762,7 +4933,6 @@ mod tests {
         let mut config = std::collections::HashMap::new();
         config.insert("runtime".to_string(), "did:ma:runtime".to_string());
         config.insert("self".to_string(), "did:ma:runtime#root".to_string());
-        config.insert("house".to_string(), "did:ma:world#house44".to_string());
         config.insert(
             "scheduler".to_string(),
             "did:ma:runtime#scheduler".to_string(),
@@ -4791,20 +4961,16 @@ mod tests {
         );
         assert_eq!(
             eval_str(
-                "(ctx-text (car (cdr (get-prop \"reply-term:1\"))) \"house\")",
+                "(ctx-text (car (cdr (get-prop \"reply-term:1\"))) \"scheduler\")",
                 &env
             ),
-            "did:ma:world#house44"
+            "did:ma:runtime#scheduler"
         );
 
         let mut fragment_config = std::collections::HashMap::new();
         fragment_config.insert("runtime".to_string(), "did:ma:runtime".to_string());
         fragment_config.insert("self".to_string(), "did:ma:runtime#root".to_string());
-        fragment_config.insert("house".to_string(), "#house".to_string());
-        fragment_config.insert(
-            "scheduler".to_string(),
-            "did:ma:runtime#scheduler".to_string(),
-        );
+        fragment_config.insert("scheduler".to_string(), "#scheduler".to_string());
         crate::state::set_config(fragment_config);
 
         eval_all("((find-method :ctx?) '() msg)", &env).unwrap();
@@ -4872,7 +5038,6 @@ mod tests {
         let mut config = std::collections::HashMap::new();
         config.insert("runtime".to_string(), "did:ma:runtime".to_string());
         config.insert("self".to_string(), "did:ma:runtime#root".to_string());
-        config.insert("house".to_string(), "did:ma:world#house44".to_string());
         config.insert(
             "scheduler".to_string(),
             "did:ma:runtime#scheduler".to_string(),
@@ -4913,10 +5078,8 @@ mod tests {
               (map-set
                 (map-set
                   (map-set
-                    (map-set
-                      (map-set (make-map) "runtime" "did:ma:runtime")
-                      "root" "did:ma:runtime#root")
-                    "house" "did:ma:world#house44")
+                    (map-set (make-map) "runtime" "did:ma:runtime")
+                    "root" "did:ma:runtime#root")
                   "scheduler" "did:ma:runtime#scheduler")
                 "rev" 1))
             "#,
@@ -4941,8 +5104,8 @@ mod tests {
             Value::symbol(":ok")
         );
         assert_eq!(
-            eval_str("(ctx-text (get-prop \"ctx\") \"house\")", &env),
-            "did:ma:world#house44"
+            eval_str("(ctx-text (get-prop \"ctx\") \"scheduler\")", &env),
+            "did:ma:runtime#scheduler"
         );
 
         env.define(

@@ -154,7 +154,7 @@
                  (reply-error msg "not authorised to put this item"))
                 ((null? rest)
                  (reply-error msg "usage: :put <container-did-url>"))
-                ((not (valid-did-url? (car rest)))
+                ((not (is-did-url? (car rest)))
                  (reply-error msg ":put requires a container DID-URL"))
                 (else
                  (let* ((container (canonical-actor (car rest)))
@@ -192,8 +192,6 @@
           (rest (node-effective-args args msg)))
       (cond ((not (null? rest))
              (reply-error msg "usage: :recycle <did>"))
-            ((not (valid-did? did))
-             (reply-error msg "recycle requires DID with did:ma: prefix"))
             ((not (node-recycle-caller-authorised? did msg))
              (reply-error msg "only owner may recycle this agent"))
             (else

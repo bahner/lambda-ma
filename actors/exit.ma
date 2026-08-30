@@ -31,8 +31,7 @@
   (same-actor? (msg-from msg) (node-parent)))
 
 (define (traveller-caller? ctx msg)
-  (and (valid-did? (ctx-text ctx "did"))
-       (equal? (ctx-text ctx "did") (msg-from msg))))
+  (equal? (ctx-text ctx "did") (msg-from msg)))
 
 (define (set-locked! value)
   (set-prop! "locked" (if value "true" "false"))
@@ -45,8 +44,8 @@
 
 (define (valid-did-traversal-ctx? ctx)
   (and (map? ctx)
-  (valid-did? (ctx-text ctx "did"))
-  (same-actor? (ctx-text ctx "parent") (node-parent))))
+       (non-empty-string? (ctx-text ctx "did"))
+       (same-actor? (ctx-text ctx "parent") (node-parent))))
 
 (define (traversal-reply ctx room text)
   (make-map "did" (ctx-text ctx "did")

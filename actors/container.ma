@@ -258,7 +258,7 @@
                  (reply-error msg "not authorised to put this container"))
                 ((null? rest)
                  (reply-error msg "usage: :put <container-did-url>"))
-                ((not (valid-did-url? (car rest)))
+                ((not (is-did-url? (car rest)))
                  (reply-error msg ":put requires a container DID-URL"))
                 (else
                  (let* ((target (canonical-actor (car rest)))
@@ -294,7 +294,7 @@
                (reply-locked msg))
               ((null? args)
                (reply-error msg "usage: :take <item-did-url>"))
-              ((not (valid-did-url? (car args)))
+              ((not (is-did-url? (car args)))
                (reply-error msg ":take requires a DID-URL"))
               ((not (child-ctx (canonical-actor (car args))))
                (reply-error msg "item not in this container"))
@@ -313,9 +313,7 @@
   (lambda (args msg)
         (let ((did (node-effective-did args msg))
           (rest (node-effective-args args msg)))
-      (cond ((not (valid-did? did))
-             (reply-error msg "lock requires DID with did:ma: prefix"))
-            ((not (node-owner-did? did))
+      (cond ((not (node-owner-did? did))
              (reply-error msg "only owner may lock this container"))
             (else
              (begin
@@ -327,9 +325,7 @@
   (lambda (args msg)
     (let ((did (node-effective-did args msg))
           (rest (node-effective-args args msg)))
-      (cond ((not (valid-did? did))
-             (reply-error msg "unlock requires DID with did:ma: prefix"))
-            ((and (not (node-owner-did? did))
+      (cond ((and (not (node-owner-did? did))
                   (or (null? rest)
                       (not (equal? (join-words rest) (lock-secret)))))
              (reply-error msg "only owner or lock secret may unlock this container"))
@@ -379,8 +375,6 @@
           (rest (node-effective-args args msg)))
       (cond ((not (null? rest))
              (reply-error msg "usage: :recycle <did>"))
-            ((not (valid-did? did))
-             (reply-error msg "recycle requires DID with did:ma: prefix"))
             ((not (node-recycle-caller-authorised? did msg))
              (reply-error msg "only owner may recycle this container"))
             (else

@@ -21,7 +21,7 @@
 (define (entity-url fragment)
   (string-append (runtime) "#" fragment))
 
-(define (valid-did? value)
+(define (is-did? value)
   (and (string? value)
        (string-prefix? "did:ma:" value)
        (not (string-contains? "#" value))))
@@ -44,13 +44,15 @@
   (and (string? actor)
   (string-prefix? (string-append (runtime) "#") actor)))
 
-(define (valid-did-url? actor)
+; A DID-URL's fragment is optional (W3C DID Core §3.2): a bare DID
+; `did:ma:<ipns>` is itself a valid DID-URL. `msg.from` is always a DID-URL,
+; so callers must not reject a value merely for lacking a `#`.
+(define (is-did-url? actor)
   (and (string? actor)
-       (string-prefix? "did:ma:" actor)
-       (string-contains? "#" actor)))
+       (string-prefix? "did:ma:" actor)))
 
 (define (actor-runtime actor)
-  (if (valid-did-url? actor)
+  (if (is-did-url? actor)
       (car (string-split actor "#"))
       #f))
 
@@ -67,13 +69,11 @@
   (if (map? ctx)
       (let ((ctx-runtime (ctx-text ctx "runtime"))
             (ctx-root (ctx-text ctx "root"))
-            (ctx-house (ctx-text ctx "house"))
             (ctx-scheduler (ctx-text ctx "scheduler"))
             (ctx-rev (map-ref ctx "rev" #f)))
-        (and (valid-did? ctx-runtime)
-             (valid-did-url? ctx-root)
-             (valid-did-url? ctx-house)
-             (valid-did-url? ctx-scheduler)
+        (and (is-did? ctx-runtime)
+             (is-did-url? ctx-root)
+             (is-did-url? ctx-scheduler)
              (equal? (actor-runtime ctx-root) ctx-runtime)
              (number? ctx-rev)))
       #f))
@@ -105,29 +105,28 @@
 (define (dead-local-actor? actor)
   (and (local-actor-ref? actor) (not (entity-live? actor))))
 
-(define (ctx-did ctx)
-  (let ((did (ctx-text ctx "did"))
-     (actor (ctx-text ctx "actor")))
-    (cond ((valid-did? did) did)
-    ((valid-did? actor) actor)
-    (else #f))))
-
 (define (ctx-sender-valid? ctx msg)
-  (let ((did (ctx-did ctx))
-     (actor (ctx-text ctx "actor"))
-     (from (msg-from msg)))
-    (cond ((valid-did? did)
-     (equal? from did))
-    ((non-empty-string? actor)
-     (same-actor? actor from))
-    (else #f))))
+  (let ((did (ctx-text ctx "did"))
+        (actor (ctx-text ctx "actor"))
+        (from (msg-from msg)))
+    (cond ((non-empty-string? did)
+           (equal? from did))
+          ((non-empty-string? actor)
+           (same-actor? actor from))
+          (else #f))))
 
 (define (presentation-did-authorised? did msg)
-  (and (valid-did? did)
+  (and (non-empty-string? did)
        (equal? did (msg-from msg))))
 
 (define (msg-from-owner? owner msg)
   (equal? (msg-from msg) owner))
+
+; Case-insensitive string equality for matching actor labels and names.
+(define (casefold-text-match? a b)
+  (and (string? a)
+       (string? b)
+       (equal? (string-downcase a) (string-downcase b))))
 
 (define (canonical-entry entry)
   (canonical-actor entry))
@@ -220,7 +219,9 @@
           (reply-error msg (string-append "only owner may set " key)))))
 
 (define (handle-actor-name args msg)
-  (handle-actor-text-prop! "name" actor-name args msg))
+  (if (and (not (null? args)) (is-did-url? (join-words args)))
+      (reply-error msg "name must not be a DID or DID-URL")
+      (handle-actor-text-prop! "name" actor-name args msg)))
 
 (define (handle-actor-description args msg)
   (handle-actor-text-prop! "description" actor-description args msg))
@@ -397,4 +398,4 @@
           (*default-method* verb args msg)
           (flush-ctx-prop-changes!)
           #f)
-        (ma-reply! msg (list :error "unknown verb"))))))
+        #f))))

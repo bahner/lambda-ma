@@ -53,8 +53,6 @@ room to enter:
 
 The room's reply is the current DID ctx. Plain focused commands and direct
 methods both address that confirmed room; there is no intermediate actor.
-The room also publishes the committed ctx to house, where it can be queried as
-`@runtime#house:did-ctx? did:ma:<identity>` until world ACL policy is enabled.
 
 ## Lock a container
 

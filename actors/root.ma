@@ -4,7 +4,7 @@
 (define (local-self) (canonical-actor (self)))
 
 (define (root-local-actor? actor)
-  (and (valid-did-url? actor)
+  (and (is-did-url? actor)
        (equal? (actor-runtime actor) (runtime))))
 
 (define (root-orphanable-ctx? ctx)
@@ -32,7 +32,7 @@
 
 (define (root-service-ref key)
   (let ((value (ma-get-config-key key)))
-    (if (valid-did-url? value) value #f)))
+    (if (is-did-url? value) value #f)))
 
 (define ROOT_SUBSCRIBERS_KEY "subscribers")
 
@@ -48,15 +48,12 @@
 
 (define (runtime-ctx)
   (let ((root-url (local-self))
-        (house-url (root-service-ref "house"))
         (scheduler-url (root-service-ref "scheduler")))
-    (if (and (valid-did-url? root-url)
-             (valid-did-url? house-url)
-             (valid-did-url? scheduler-url))
+    (if (and (is-did-url? root-url)
+             (is-did-url? scheduler-url))
         (make-map
           "runtime" (runtime)
           "root" root-url
-          "house" house-url
           "scheduler" scheduler-url
           "rev" 1)
         #f)))
@@ -71,9 +68,8 @@
         (reply-error msg "usage: :ctx?"))))
 
 ; Unqualified entry always gets a ctx from root, even if it is a dumb default
-; (the configured "start" room). A richer root may consult #house internally
-; and return a DID-specific ctx instead; that is an implementation detail
-; invisible to the caller.
+; (the configured "start" room). A richer root may return a DID-specific ctx
+; instead; that is an implementation detail invisible to the caller.
 (set-rpc-method! :enter?
   (lambda (args msg)
     (if (not (null? args))
@@ -109,7 +105,7 @@
            (reply-error msg "usage: :orphan <actor> from <parent>"))
           ((not (root-local-actor? (car args)))
            (reply-error msg "orphan actor must belong to this runtime"))
-          ((not (valid-did-url? (car (cdr (cdr args)))))
+          ((not (is-did-url? (car (cdr (cdr args)))))
            (reply-error msg "orphan parent must be a DID-URL"))
           ((entity-live? (car args))
            (begin
@@ -134,16 +130,16 @@
 (define (put-ctx-valid? ctx)
   (and (map? ctx)
        (non-empty-string? (map-ref ctx "id" ""))
-       (valid-did? (map-ref ctx "requestor" ""))
-       (valid-did-url? (map-ref ctx "item" ""))
-       (valid-did-url? (map-ref ctx "container" ""))))
+       (is-did-url? (map-ref ctx "requestor" ""))
+       (is-did-url? (map-ref ctx "item" ""))
+       (is-did-url? (map-ref ctx "container" ""))))
 
 (define (take-ctx-valid? ctx)
   (and (map? ctx)
        (non-empty-string? (map-ref ctx "id" ""))
-       (valid-did? (map-ref ctx "requestor" ""))
-       (valid-did-url? (map-ref ctx "item" ""))
-       (valid-did-url? (map-ref ctx "container" ""))))
+       (is-did-url? (map-ref ctx "requestor" ""))
+       (is-did-url? (map-ref ctx "item" ""))
+       (is-did-url? (map-ref ctx "container" ""))))
 
 (define (send-put-event! put-ctx status reason)
   (let ((full-ctx (if reason

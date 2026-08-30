@@ -31,10 +31,6 @@ runtime:
       kind: /ma/root/0.0.1
       acl: open
 
-    house:
-      kind: /ma/house/0.0.1
-      acl: open
-
     construct:
       kind: /ma/room/0.0.1
       attributes:

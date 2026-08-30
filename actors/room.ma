@@ -8,29 +8,9 @@
 (define (node-protocol) ROOM_KIND)
 
 ; Direct DID presence is stored in the same child collection as actor children.
-; Every room resident lives in the inherited children map. Bare direct DIDs
-; are ordinary child keys alongside actor DID-URLs; views derive from ctxs.
-(define (did-ctx did)
-  (let ((ctx (child-ctx did)))
-    (if (and (map? ctx) (valid-did? (ctx-text ctx "actor"))) ctx #f)))
-
-(define (did-occupants)
-  (let loop ((ctxs (child-ctxs)) (acc '()))
-    (cond ((null? ctxs) (reverse acc))
-          ((valid-did? (ctx-text (car ctxs) "actor"))
-           (loop (cdr ctxs) (cons (ctx-text (car ctxs) "actor") acc)))
-          (else (loop (cdr ctxs) acc)))))
-
-; Normalise direct-entry ctxs without introducing a second store.
-(define (set-did-ctx! did ctx)
-  (begin
-    (remember-child!
-      (map-set
-        (map-set
-          (map-set ctx "actor" did)
-          "kind" "agent")
-        "protocol" "/ma/agent/0.0.1"))
-    (ma-save-state!)))
+; Every room resident lives in the inherited children map. A bare DID's child
+; ctx is an ordinary child key alongside actor DID-URLs; views derive from
+; ctxs. Every actor has a DID-URL address — there is no bare-DID-only subset.
 
 ; A room claim is any child ctx whose parent resolves to this room.
 (define (room-claim? ctx)
@@ -74,11 +54,6 @@
   (let ((ctx (child-ctx actor)))
     (if (map? ctx) (child-label ctx) actor)))
 
-(define (casefold-text-match? a b)
-  (and (string? a)
-       (string? b)
-       (equal? (string-downcase a) (string-downcase b))))
-
 (define (visible-occupant-matches token)
   (let loop ((xs (occupants)))
     (cond ((null? xs) '())
@@ -103,16 +78,11 @@
 (define (take-carrier-parent take-args carrier)
   (let ((candidate (if (or (null? take-args) (null? (cdr take-args))) #f (car (cdr take-args)))))
     (if (and (non-empty-string? candidate)
-             (or (valid-did-url? candidate) (local-actor-ref? candidate)))
+             (or (is-did-url? candidate) (local-actor-ref? candidate)))
         (canonical-actor candidate)
         (canonical-actor carrier))))
 
 ; Human token lookup crosses exits, things, containers, and occupants.
-(define (entry-lines xs)
-  (cond ((null? xs) "")
-        ((null? (cdr xs)) (car xs))
-        (else (string-append (car xs) "\n" (entry-lines (cdr xs))))))
-
 (define (occupant-did-lines)
   (let loop ((xs (occupants)))
     (if (null? xs)
@@ -254,13 +224,6 @@
         (reverse acc)
         (loop (cdr xs) (cons (exit-entry-ctx (car xs)) acc)))))
 
-(define (did-entry-map dids)
-  (let loop ((xs dids)
-             (entries (make-map)))
-    (if (null? xs)
-        entries
-        (loop (cdr xs) (map-set entries (car xs) (did-ctx (car xs)))))))
-
 ; Public visible children are the authoritative KV map, keyed by actor DID.
 (define (visible-ctx)
   (children-map))
@@ -332,7 +295,7 @@
           (else did))))
 
 (define (next-did-revision did)
-  (+ 1 (let ((previous (did-ctx did)))
+  (+ 1 (let ((previous (claim-ctx did)))
          (if (and (map? previous) (number? (map-ref previous "rev" #f)))
              (map-ref previous "rev" #f)
              0))))
@@ -348,32 +311,23 @@
             "description" "A direct DID presence."
             "rev" (next-did-revision did)))
 
-; House indexes bare DID location so reconnecting clients can rediscover rooms.
-(define (publish-did-ctx! did ctx)
-  (let ((runtime-ctx (stored-runtime-ctx)))
-    (if runtime-ctx
-        (ma-send! (ctx-text runtime-ctx "house") (list :did-ctx did ctx))
-        #f)))
-
 ; Commit a direct DID entry without creating a separate identity actor.
 (define (commit-did-entry! msg args)
   (let* ((did (msg-from msg))
          (name (did-name-from-entry args did))
          (nick (did-nick-from-entry args did))
-         (was-present (member-string? did (did-occupants)))
+         (was-present (member-entry? did (occupants)))
          (ctx (did-child-ctx did name nick)))
           (remember-child! ctx)
           (ma-save-state!)
     (if was-present #f (broadcast-term-except did (list :arrive ctx)))
     (broadcast-room-ctx!)
-    (publish-did-ctx! did ctx)
     (ma-reply! msg (list :ok ctx))))
 
 ; Actor entries must carry their own ctx; room only admits or refuses it.
 (define (handle-enter-ctx! msg ctx)
   (let* ((actor (ctx-text ctx "actor"))
-         (ctxdid (ctx-did ctx))
-         (did (if (valid-did? ctxdid) ctxdid (if (valid-did? actor) actor (msg-from msg))))
+         (did (if (non-empty-string? actor) actor (msg-from msg)))
          (kind (ctx-text ctx "kind"))
          (name (ctx-text ctx "name")))
     (cond ((and (agent-kind? kind) (enter-direct-ctx-valid? ctx "agent"))
@@ -432,7 +386,7 @@
            (set-claim! actor ctx)
            (set-label! actor label)
            (set-thing! token actor)
-           (if was-known #f (broadcast-term (list :arrive ctx)))
+           (if was-known #f (broadcast-term-except actor (list :arrive ctx)))
            (broadcast-room-ctx!)
            (ma-send! actor (list :here (self)))
            (ma-reply! msg (list :ok "entered"))))))
@@ -493,7 +447,7 @@
 
 ; Things and containers share the room-visible object namespace.
 (define (thing-ref token)
-  (if (valid-did-url? token)
+  (if (is-did-url? token)
       (let ((ctx (child-ctx token)))
         (if (and (map? ctx)
                  (or (thing-kind? (ctx-text ctx "kind"))
@@ -531,7 +485,7 @@
   (let ((lines (list-append (list-append (occupant-did-lines) (thing-did-lines)) (exit-did-lines))))
     (if (null? lines)
         "DIDs: none."
-        (string-append "DIDs:\n" (entry-lines lines)))))
+        (string-append "DIDs:\n" (actor-entry-lines lines)))))
 
 (define (handle-dids! msg args)
   (let ((mediated #f))
@@ -561,7 +515,7 @@
                         (else (occupant-did-match-lines token)))))
             (if (null? lines)
               (reply-command-error msg mediated (string-append "No " kind ": " token))
-              (reply-command-ok msg mediated (entry-lines lines))))))
+              (reply-command-ok msg mediated (actor-entry-lines lines))))))
        (else
         (let* ((token (join-words did-args))
             (matches (did-matches token))
@@ -571,7 +525,7 @@
              ((null? (cdr matches))
               (reply-command-ok msg mediated (string-append token " = " (canonical-actor (car matches)))))
              (else
-              (reply-command-ok msg mediated (string-append "Ambiguous name: " token "\n" (entry-lines lines))))))))))
+              (reply-command-ok msg mediated (string-append "Ambiguous name: " token "\n" (actor-entry-lines lines))))))))))
 
 (define (handle-owner-query! msg args)
   (let ((mediated #f)
@@ -591,7 +545,7 @@
                    (ma-send! (canonical-actor (car matches)) (list :owner? (canonical-actor (msg-from msg)) token))
                    (reply-ok msg)))
                 (else
-                 (reply-command-ok msg mediated (string-append "Ambiguous name: " token "\n" (entry-lines lines)))))))))
+                 (reply-command-ok msg mediated (string-append "Ambiguous name: " token "\n" (actor-entry-lines lines)))))))))
 
 ; Exit state and traversal helpers.
 (define (exit-ctxs) (child-ctxs-by-kind "exit"))
@@ -657,12 +611,6 @@
         "Exits: none."
         (string-append "Exits: " (names-of directions)))))
 
-(define (who-text)
-  (let ((dids (did-occupants)))
-    (if (null? dids)
-        "Who: none."
-        (string-append "Who: " (names-of dids)))))
-
 ; Room-facing text surfaces.
 (define (thing-token-names)
   (let loop ((ctxs (list-append (child-ctxs-by-kind "thing")
@@ -683,8 +631,8 @@
     (room-name) " help\n"
     "  look              look around\n"
     "  exits?            list exits\n"
-    "  who?              show bare DIDs here\n"
-    "  occupants?        show agents here\n"
+    "  who?              list occupants here\n"
+    "  occupants?        list occupants here\n"
     "  things?           list known things\n"
     "  did? [kind] <name> show the DID for a visible occupant, thing, or exit\n"
     "  owner? <name>     show who owns a visible occupant, thing, or exit\n"
@@ -720,7 +668,7 @@
   (equal? did (owner)))
 
 (define (valid-owner? value)
-  (valid-did? value))
+  (is-did-url? value))
 
 (define (owner-message? msg)
   (msg-from-owner? (owner) msg))
@@ -730,8 +678,7 @@
   (ma-save-state!))
 
 (define (claim-owner-did args msg)
-  (let ((from (msg-from msg)))
-    (if (valid-did? from) from #f)))
+  (msg-from msg))
 
 ; Room text props reuse the generic node prop machinery.
 (define (set-room-prop! key value)
@@ -807,7 +754,7 @@
   (if (delegated-call? args msg) (cdr args) args))
 
 (define (recycle-caller-did args msg)
-  (if (valid-did? (msg-from msg)) (msg-from msg) #f))
+  (msg-from msg))
 
 (define (recycle-command-args args msg) args)
 
@@ -815,7 +762,7 @@
   (delegated-call? args msg))
 
 (define (go-caller-did args msg)
-  (if (valid-did? (msg-from msg)) (msg-from msg) #f))
+  (msg-from msg))
 
 (define (go-command-args args msg)
   (if (go-delegated-call? args msg) (cdr args) args))
@@ -860,40 +807,24 @@
            (if (map? ctx) (broadcast-term (list :leave ctx)) #f))))
         (else #f)))
 
-; Only house may request targeted bare-DID leave for another principal.
-(define (house-caller? msg)
-  (let ((runtime-ctx (stored-runtime-ctx)))
-    (and runtime-ctx
-         (same-actor? (msg-from msg) (ctx-text runtime-ctx "house")))))
-
 (define (leave-candidate args msg)
-  (cond ((house-caller? msg)
-         (if (and (not (null? args))
-                  (null? (cdr args))
-                  (valid-did? (car args)))
-             (car args)
-             #f))
-        ((null? args) (canonical-actor (msg-from msg)))
-        (else #f)))
+  (if (null? args) (canonical-actor (msg-from msg)) #f))
 
   ; Leave is idempotent: absent occupants still receive an ok.
 (define (handle-leave! msg args)
   (let ((actor (leave-candidate args msg)))
     (if actor
-        (if (and (valid-did? actor) (member-string? actor (did-occupants)))
-            (begin
-              (let ((ctx (did-ctx actor)))
-              (forget-child! actor)
-              (ma-save-state!)
-              (if (map? ctx) (broadcast-term (list :leave ctx)) #f))
-              (reply-ok msg))
-            (reply-ok msg))
-        (reply-error msg "usage: :leave [bare-did]"))))
+        (let ((ctx (claim-ctx actor)))
+          (forget-child! actor)
+          (ma-save-state!)
+          (if (map? ctx) (broadcast-term (list :leave ctx)) #f)
+          (reply-ok msg))
+        (reply-error msg "usage: :leave"))))
 
   ; Owner removal accepts exact actor refs or a unique visible child label.
 (define (remove-candidate token)
   (cond ((not (string? token)) #f)
-    ((and (or (valid-did? token) (valid-did-url? token))
+    ((and (is-did-url? token)
       (map? (child-ctx token)))
      (canonical-actor token))
     (else (unique-visible-child-ref token))))
@@ -925,31 +856,29 @@
                    (else
                     (reply-error msg (string-append "No such child: " target)))))))))
 
-; Room events are sent only to bare-DID clients currently present in the room.
+; Room events are broadcast to every actor present in the room — every child,
+; regardless of kind. Each receiving actor decides what to do: a human client
+; renders it, an agent may remember or react, and any actor may ignore it.
 (define (broadcast-term term)
-  (let loop ((xs (did-occupants)))
-    (cond ((null? xs)
-           #f)
+  (let loop ((ctxs (child-ctxs)))
+    (cond ((null? ctxs) #f)
           (else
            (begin
-             (ma-send! (car xs) term)
-             (loop (cdr xs)))))))
+             (ma-send! (canonical-actor (ctx-text (car ctxs) "actor")) term)
+             (loop (cdr ctxs)))))))
 
 (define (broadcast-term-except excluded term)
-  (let loop ((xs (did-occupants)))
-    (cond ((null? xs)
-           #f)
-          ((same-actor? (car xs) excluded)
-           (loop (cdr xs)))
+  (let loop ((ctxs (child-ctxs)))
+    (cond ((null? ctxs) #f)
+          ((same-actor? (ctx-text (car ctxs) "actor") excluded)
+           (loop (cdr ctxs)))
           (else
            (begin
-             (ma-send! (car xs) term)
-             (loop (cdr xs)))))))
+             (ma-send! (canonical-actor (ctx-text (car ctxs) "actor")) term)
+             (loop (cdr ctxs)))))))
 
 (define (event-subject-ctx actor)
-  (if (valid-did? actor)
-      (did-ctx actor)
-      (claim-ctx actor)))
+  (claim-ctx actor))
 
 ; Exit build/link state. Existing-room links handshake across both rooms;
 ; new-room digs wait for a child-alive callback before installing the exit.
@@ -1058,7 +987,7 @@
         #f)))
 
 (define (existing-room-target target)
-  (if (and target (valid-did-url? target)) target #f))
+  (if (and target (is-did-url? target)) target #f))
 
 (define (request-link-authorisation! requester did direction target-room)
   (begin
@@ -1126,7 +1055,7 @@
                 (create-exit! direction target-room target-name)
                 (clear-pending-new-room! direction)
                 (ma-save-state!)
-                (let ((ctx (did-ctx did)))
+                (let ((ctx (claim-ctx did)))
                   (if (map? ctx) (broadcast-term (list :dig ctx direction)) #f))
                 (enter-dig-target! requester did target-room)))
             #f))))
@@ -1204,13 +1133,11 @@
   (lambda (args msg)
     (reply-ok-with msg (exit-entry-list (exit-directions)))))
 
-(set-cmd-method! :who?
-  (lambda (args msg)
-    (reply-ok-with msg (did-entry-map (did-occupants)))))
+(define (handle-occupants-query! args msg)
+  (reply-ok-with msg (agent-entry-list (occupants))))
 
-(set-cmd-method! :occupants?
-  (lambda (args msg)
-    (reply-ok-with msg (agent-entry-list (occupants)))))
+(set-cmd-method! :who? handle-occupants-query!)
+(set-cmd-method! :occupants? handle-occupants-query!)
 
 (set-cmd-method! :things?
   (lambda (args msg)
@@ -1243,6 +1170,8 @@
                    (reply-error msg (string-append "Unknown thing alias: " token)))))
             ((not (owner-message? msg))
              (reply-error msg "Only this room's owner can change thing aliases."))
+            ((is-did-url? (car thing-args))
+             (reply-error msg "thing alias must not be a DID or DID-URL"))
             ((equal? (car (cdr thing-args)) "")
              (begin
                (remove-thing! (car thing-args))
@@ -1262,7 +1191,7 @@
            (did (recycle-caller-did args msg))
            (recycle-args (recycle-command-args args msg))
            (token (if (null? recycle-args) #f (car recycle-args)))
-           (actor (if token (if (valid-did-url? token) token (movable-ref token)) #f)))
+           (actor (if token (if (is-did-url? token) token (movable-ref token)) #f)))
       (cond ((not did)
              (reply-command-error msg mediated "Could not determine caller DID for recycle."))
             ((not token)
@@ -1457,7 +1386,7 @@
                        (create-exit! direction target-room #f)
                        (clear-pending-link! direction)
                        (ma-save-state!)
-                       (let ((ctx (did-ctx did)))
+                       (let ((ctx (claim-ctx did)))
                          (if (map? ctx) (broadcast-term (list :dig ctx direction)) #f))
                        (enter-dig-target! requester did target-room))))
               #f)))))
@@ -1530,7 +1459,7 @@
                           (forget-child! exit)
                           (ma-save-state!)
                           (broadcast-room-ctx!)
-                          (let ((ctx (did-ctx did)))
+                          (let ((ctx (claim-ctx did)))
                             (if (map? ctx) (broadcast-term (list :fill ctx direction)) #f))
                           (reply-ok msg))
                         (reply-error msg (string-append "No exit " direction "."))))))))))))
@@ -1585,11 +1514,9 @@
 
 (set-cmd-method! :enter
   (lambda (args msg)
-    (if (valid-did? (msg-from msg))
-        (commit-did-entry! msg args)
-        (if (enter-ctx-args? args)
-            (handle-enter-ctx! msg (car args))
-            (reply-error msg "room entry requires a controlling DID")))))
+    (if (enter-ctx-args? args)
+        (handle-enter-ctx! msg (car args))
+        (commit-did-entry! msg args))))
 
 ; Lifecycle signals from the runtime.
 (define (on-signal term)

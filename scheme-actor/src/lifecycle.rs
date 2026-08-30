@@ -75,7 +75,6 @@ fn load_config() {
         "started_at",
         "parent",
         "root",
-        "house",
         "scheduler",
         "start",
         "i18n",

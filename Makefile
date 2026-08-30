@@ -16,14 +16,13 @@ SCHEME_STATE_CID_FILE := $(CID_DIR)/scheme-state.cid
 SCHEME_NODE_CID_FILE := $(CID_DIR)/node.cid
 KINDS_CID_FILE := $(CID_DIR)/kinds.cid
 
-ACTORS := root house room exit agent rms duck thing container
+ACTORS := root room exit agent rms duck thing container
 CID_FILES := $(ACTORS:%=$(CID_DIR)/%.cid)
 BOOTSTRAP_KIND_FILES := \
 	kinds/ma-scheme-actor.yaml \
 	kinds/ma-scheme-state.yaml \
 	kinds/ma-node.yaml \
 	kinds/ma-scheme-root.yaml \
-	kinds/ma-scheme-house.yaml \
 	kinds/ma-scheme-room.yaml \
 	kinds/ma-scheme-exit.yaml \
 	kinds/ma-scheme-agent.yaml \
@@ -83,7 +82,6 @@ $(OUT): lambda-ma.template.yaml Makefile $(BOOTSTRAP_KIND_FILES) $(SCHEME_ACTOR_
 	scheme_state_cid=$$(cat "$(SCHEME_STATE_CID_FILE)"); \
 	node_cid=$$(cat "$(SCHEME_NODE_CID_FILE)"); \
 	root_cid=$$(cat "$(CID_DIR)/root.cid"); \
-	house_cid=$$(cat "$(CID_DIR)/house.cid"); \
 	room_cid=$$(cat "$(CID_DIR)/room.cid"); \
 	exit_cid=$$(cat "$(CID_DIR)/exit.cid"); \
 	agent_cid=$$(cat "$(CID_DIR)/agent.cid"); \
@@ -102,7 +100,6 @@ $(OUT): lambda-ma.template.yaml Makefile $(BOOTSTRAP_KIND_FILES) $(SCHEME_ACTOR_
 	  -e "s|__SCHEME_STATE_CID__|$$scheme_state_cid|g" \
 	  -e "s|__NODE_CID__|$$node_cid|g" \
 	  -e "s|__ROOT_BEHAVIOUR_CID__|$$root_cid|g" \
-	  -e "s|__HOUSE_BEHAVIOUR_CID__|$$house_cid|g" \
 	  -e "s|__ROOM_BEHAVIOUR_CID__|$$room_cid|g" \
 	  -e "s|__EXIT_BEHAVIOUR_CID__|$$exit_cid|g" \
 	  -e "s|__AGENT_BEHAVIOUR_CID__|$$agent_cid|g" \
