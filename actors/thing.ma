@@ -55,10 +55,6 @@
 (set-rpc-method! :owner handle-node-owner)
 (set-rpc-method! :owner? handle-node-owner?)
 
-(set-rpc-method! :prop
-  (lambda (args msg)
-    (handle-node-text-prop! "thing" msg args)))
-
 (set-rpc-method! :set-recovery-secret handle-node-set-recovery-secret!)
 
 (set-cmd-method! :claim handle-node-claim!)

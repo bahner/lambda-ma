@@ -714,10 +714,6 @@
 (define (claim-owner-did args msg)
   (msg-from msg))
 
-; Room text props reuse the generic node prop machinery.
-(define (set-room-prop! key value)
-  (set-node-prop! key value))
-
 ; Delegated replies are printed to the controlling DID as well as acked.
 (define (reply-to-sender msg text)
   (ma-send! (canonical-actor (msg-from msg)) (list :print text)))
@@ -734,40 +730,6 @@
   (begin
     (if delegated (reply-to-sender msg text) #f)
     (reply-error msg text)))
-
-(define (reply-room-prop-ok msg delegated text)
-  (reply-command-ok msg delegated text))
-
-(define (reply-room-prop-error msg delegated text)
-  (reply-command-error msg delegated text))
-
-; Empty value resets a prop to the empty string rather than deleting it.
-(define (apply-room-prop! msg key value-args delegated)
-  (if (null? value-args)
-      (begin
-        (set-room-prop! key "")
-        (reply-room-prop-ok msg delegated (string-append "Reset prop " key ".")))
-      (begin
-        (set-room-prop! key (join-words value-args))
-        (reply-room-prop-ok msg delegated (string-append "Set prop " key ".")))))
-
-(define (handle-room-prop! msg args)
-  (let ((mediated #f)
-        (prop-args args))
-    (cond ((null? args)
-           (reply-room-prop-error msg mediated "Usage: prop <key> [value]"))
-          ((null? prop-args)
-           (reply-room-prop-error msg mediated "Usage: prop <key> [value]"))
-          ((equal? (car prop-args) "")
-           (reply-room-prop-error msg mediated "Prop key must be non-empty."))
-          ((not (owned?))
-           (reply-room-prop-error msg mediated "This room is unowned. Claim it before building here."))
-          ((not (valid-owner? (owner)))
-           (reply-room-prop-error msg mediated "Owner must be a DID."))
-          ((not (owner-message? msg))
-           (reply-room-prop-error msg mediated "Only this room's owner can set props here."))
-          (else
-           (apply-room-prop! msg (car prop-args) (cdr prop-args) mediated)))))
 
 ; DID-context helpers for movement and parent-authority flows.
 (define (delegated-did-arg? args)
@@ -1358,10 +1320,6 @@
              (let ((new-owner (car owner-args)))
                (set-owner! new-owner)
                (reply-command-ok msg mediated (string-append "Owner set to " new-owner "."))))))))
-
-(set-rpc-method! :prop
-  (lambda (args msg)
-    (handle-room-prop! msg args)))
 
 ; ── Link handshake callbacks ──────────────────────────────────────────────
 

@@ -202,15 +202,10 @@ fn room_prop_owner_can_set_and_reset_text_properties() {
     eval_all("(on-message msg)", &env).unwrap();
 
     assert_eq!(
-        eval_all("(car (get-prop \"reply-term:1\"))", &env).unwrap(),
+        eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
         Value::symbol(":ok")
     );
-    // Verify prop was set: reply text names the key and node-name reflects it.
-    let reply_text = eval_str("(car (cdr (get-prop \"reply-term:1\")))", &env);
-    assert!(
-        reply_text.contains("name"),
-        "reply text should mention 'name', got: {reply_text}"
-    );
+    // Verify the prop was set: node-name reflects it.
     assert_eq!(eval_str("(get-prop \"name\")", &env), "Grand Hall");
 
     // Reset the prop (no value args).
@@ -225,7 +220,7 @@ fn room_prop_owner_can_set_and_reset_text_properties() {
     eval_all("(on-message msg2)", &env).unwrap();
 
     assert_eq!(
-        eval_all("(car (get-prop \"reply-term:2\"))", &env).unwrap(),
+        eval_all("(get-prop \"reply-term:2\")", &env).unwrap(),
         Value::symbol(":ok")
     );
     // set-node-prop! with "" calls del-prop! so the key is absent, not set to ""
@@ -999,12 +994,19 @@ fn exit_traverse_locked_narrates_refusal_to_traveller() {
 }
 
 #[test]
-fn exit_prop_locked_msg_text_settable_by_source_room_only() {
+fn exit_prop_locked_msg_text_settable_by_source_room_or_owner() {
     let env = exit_env();
     let mut config = make_config("did:ma:runtime", "did:ma:runtime#north-exit");
     config.insert("kind".to_string(), "/ma/exit/0.0.1".to_string());
     ma_scheme_actor::state::set_config(config);
-    eval_all(r#"(set-prop! "parent" "did:ma:runtime#room")"#, &env).unwrap();
+    eval_all(
+        r#"
+        (set-prop! "parent" "did:ma:runtime#room")
+        (set-prop! "owner" "did:ma:owner")
+        "#,
+        &env,
+    )
+    .unwrap();
 
     // Source room sets the refusal message.
     env.define(
@@ -1022,14 +1024,41 @@ fn exit_prop_locked_msg_text_settable_by_source_room_only() {
     eval_all("(on-message msg)", &env).unwrap();
 
     assert_eq!(
-        eval_all("(car (get-prop \"reply-term:1\"))", &env).unwrap(),
+        eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
         Value::symbol(":ok")
     );
     assert_eq!(eval_str("(locked-msg-text)", &env), "None shall pass!");
 
-    // A passer-by may not edit exit props.
+    // The room owner (the avatar, a bare DID) may also set it directly — the
+    // command from the bug report: `prop <exit> locked-msg-text …`.
     env.define(
         Rc::from("msg2"),
+        sample_msg(
+            "did:ma:owner",
+            "did:ma:runtime#north-exit",
+            Value::list(vec![
+                Value::symbol(":prop"),
+                Value::str("locked-msg-text"),
+                Value::str("Abandon hope"),
+                Value::str("all ye"),
+                Value::str("who enter"),
+            ]),
+        ),
+    );
+    eval_all("(on-message msg2)", &env).unwrap();
+
+    assert_eq!(
+        eval_all("(get-prop \"reply-term:2\")", &env).unwrap(),
+        Value::symbol(":ok")
+    );
+    assert_eq!(
+        eval_str("(locked-msg-text)", &env),
+        "Abandon hope all ye who enter"
+    );
+
+    // A passer-by may not edit exit props.
+    env.define(
+        Rc::from("msg3"),
         sample_msg(
             "did:ma:intruder",
             "did:ma:runtime#north-exit",
@@ -1040,13 +1069,19 @@ fn exit_prop_locked_msg_text_settable_by_source_room_only() {
             ]),
         ),
     );
-    eval_all("(on-message msg2)", &env).unwrap();
+    eval_all("(on-message msg3)", &env).unwrap();
 
     assert_eq!(
-        eval_all("(car (get-prop \"reply-term:2\"))", &env).unwrap(),
-        Value::symbol(":error")
+        eval_all("(get-prop \"reply-term:3\")", &env).unwrap(),
+        Value::list(vec![
+            Value::symbol(":error"),
+            Value::str("not authorised to edit props")
+        ])
     );
-    assert_eq!(eval_str("(locked-msg-text)", &env), "None shall pass!");
+    assert_eq!(
+        eval_str("(locked-msg-text)", &env),
+        "Abandon hope all ye who enter"
+    );
 }
 
 #[test]

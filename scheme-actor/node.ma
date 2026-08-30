@@ -205,23 +205,35 @@
   (let ((o (owner)))
     (and o (msg-from-owner? o msg))))
 
-; Shared editable ctx text for ordinary movable nodes.
-(define (node-editable-text-prop? key)
-  (or (equal? key "name")
-      (equal? key "nick")
-      (equal? key "description")))
+; Shared :prop — one gatekeeper for the owner (or kind policy) to set any
+; prop key except the protocol-managed ones. Kinds with a different
+; authorisation contract override `prop-caller-authorised?` instead of
+; re-registering the verb.
+(define (prop-caller-authorised? msg)
+  (owner-caller? msg))
 
-(define (handle-node-text-prop! kind msg args)
-  (cond ((not (owner-caller? msg))
-         (reply-error msg (string-append "only owner may edit " kind " props")))
-        ((null? args)
-         (reply-error msg "usage: :prop <name|nick|description> [value]"))
-        ((not (node-editable-text-prop? (car args)))
-         (reply-error msg (string-append "editable " kind " props: name, nick, description")))
+; Structural/security props owned by their own protocol verbs (:claim,
+; :parent/:child, :lock, :here, :ctx, …) — never writable via :prop.
+(define (protected-prop? key)
+  (member-string? key
+    '("owner" "parent" "parent-ctx" "children" "here"
+      "recovery-secret" "lock-secret" "locked" "closed"
+      "ctx" "direction" "target-room" "target-name")))
+
+; Handlers registered by bare name are dispatched args-first (`(fn args msg)`),
+; matching handle-node-owner and handle-node-parent? — keep the parameter order
+; (args msg), never the (msg args) of the per-kind lambda wrappers.
+(define (handle-node-prop! args msg)
+  (cond ((not (prop-caller-authorised? msg))
+         (reply-error msg "not authorised to edit props"))
+        ((or (null? args) (not (non-empty-string? (car args))))
+         (reply-error msg "usage: :prop <key> [value]"))
+        ((protected-prop? (car args))
+         (reply-error msg (string-append (car args) " is a protected prop")))
         (else
          (begin
            (set-node-prop! (car args) (join-words (cdr args)))
-           (reply-ok-with msg "prop updated")))))
+           (reply-ok msg)))))
 
 ; Shared :owner/:owner?/:set-recovery-secret/:claim bodies — identical across
 ; thing/container/agent, kept here once instead of duplicated per kind file.
@@ -932,6 +944,7 @@
 (set-internal-rpc-method! :roll-call-child handle-node-roll-call-child!)
 (set-internal-rpc-method! :phone-home handle-node-phone-home!)
 (set-internal-rpc-method! :orphan-root handle-node-root-orphan!)
+(set-rpc-method! :prop handle-node-prop!)
 ; The timed end arrives from the runtime scheduler, which dispatches as
 ; <runtime>#scheduler rather than as this node, so it needs its own clause.
 (define (roll-call-end-caller-authorised? msg)

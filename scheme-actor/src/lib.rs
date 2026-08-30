@@ -3039,7 +3039,7 @@ mod tests {
         );
         assert_eq!(
             eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
-            Value::list(vec![Value::symbol(":ok"), Value::str("prop updated")]),
+            Value::symbol(":ok"),
         );
     }
 
@@ -3077,7 +3077,7 @@ mod tests {
         assert_eq!(eval_str("(name)", &env), "Burnin' rubber duck");
         assert_eq!(
             eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
-            Value::list(vec![Value::symbol(":ok"), Value::str("prop updated")]),
+            Value::symbol(":ok"),
         );
     }
 
@@ -3103,14 +3103,14 @@ mod tests {
 
         eval_all("(flush-ctx-prop-changes!)", &env).unwrap();
         assert!(eval_bool("(not (has-prop? \"sent-count\"))", &env));
-        eval_all("(set-room-prop! \"name\" \"Old Harbour\")", &env).unwrap();
+        eval_all("(set-node-prop! \"name\" \"Old Harbour\")", &env).unwrap();
         eval_all("(flush-ctx-prop-changes!)", &env).unwrap();
         assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 1);
-        eval_all("(set-room-prop! \"nick\" \"old harbour\")", &env).unwrap();
+        eval_all("(set-node-prop! \"nick\" \"old harbour\")", &env).unwrap();
         eval_all("(flush-ctx-prop-changes!)", &env).unwrap();
         assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 2);
         eval_all(
-            "(set-room-prop! \"description\" \"A weathered harbour.\")",
+            "(set-node-prop! \"description\" \"A weathered harbour.\")",
             &env,
         )
         .unwrap();
@@ -3700,6 +3700,115 @@ mod tests {
         assert_eq!(
             eval_all("(get-prop \"reply-term:12\")", &env).unwrap(),
             Value::list(vec![Value::symbol(":ok"), Value::str("unlocked")])
+        );
+    }
+
+    #[test]
+    fn container_prop_uses_shared_node_handler_with_locked_message_key() {
+        let env = container_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#bag".to_string());
+        crate::state::set_config(config);
+        eval_all(r#"(set-prop! "owner" "did:ma:owner")"#, &env).unwrap();
+
+        env.define(
+            Rc::from("owner_msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:owner",
+                "did:ma:runtime#bag",
+                Value::list(vec![
+                    Value::symbol(":prop"),
+                    Value::str("locked-message"),
+                    Value::str("Do not touch."),
+                ]),
+            )),
+        );
+        eval_all("(on-message owner_msg)", &env).unwrap();
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
+            Value::symbol(":ok")
+        );
+        assert_eq!(
+            eval_str("(get-prop \"locked-message\")", &env),
+            "Do not touch."
+        );
+
+        // Any key is settable — the owner defines props on their own actor.
+        env.define(
+            Rc::from("custom_msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:owner",
+                "did:ma:runtime#bag",
+                Value::list(vec![
+                    Value::symbol(":prop"),
+                    Value::str("custom-note"),
+                    Value::str("a bag of holding"),
+                ]),
+            )),
+        );
+        eval_all("(on-message custom_msg)", &env).unwrap();
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:2\")", &env).unwrap(),
+            Value::symbol(":ok")
+        );
+        assert_eq!(
+            eval_str("(get-prop \"custom-note\")", &env),
+            "a bag of holding"
+        );
+
+        // Protocol-managed props are protected even from the owner.
+        env.define(
+            Rc::from("protected_owner_msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:owner",
+                "did:ma:runtime#bag",
+                Value::list(vec![
+                    Value::symbol(":prop"),
+                    Value::str("owner"),
+                    Value::str("did:ma:other"),
+                ]),
+            )),
+        );
+        eval_all("(on-message protected_owner_msg)", &env).unwrap();
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:3\")", &env).unwrap(),
+            Value::list(vec![
+                Value::symbol(":error"),
+                Value::str("owner is a protected prop")
+            ])
+        );
+        assert_eq!(eval_str("(get-prop \"owner\")", &env), "did:ma:owner");
+
+        env.define(
+            Rc::from("protected_children_msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:owner",
+                "did:ma:runtime#bag",
+                Value::list(vec![Value::symbol(":prop"), Value::str("children")]),
+            )),
+        );
+        eval_all("(on-message protected_children_msg)", &env).unwrap();
+        assert_eq!(
+            eval_all("(car (get-prop \"reply-term:4\"))", &env).unwrap(),
+            Value::symbol(":error")
+        );
+        assert!(eval_bool("(not (has-prop? \"children\"))", &env));
+
+        // A non-owner cannot edit container props; the shared gate refuses.
+        env.define(
+            Rc::from("guest_msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:guest",
+                "did:ma:runtime#bag",
+                Value::list(vec![Value::symbol(":prop"), Value::str("nick")]),
+            )),
+        );
+        eval_all("(on-message guest_msg)", &env).unwrap();
+        assert_eq!(
+            eval_all("(car (get-prop \"reply-term:5\"))", &env).unwrap(),
+            Value::symbol(":error")
         );
     }
 

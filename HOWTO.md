@@ -81,10 +81,13 @@ locked exit with `go <direction> <secret>`.
 exit blocks the way and narrates the refusal to the traveller as an in-world
 `:say` event. The message defaults to `This is not the way.` and is settable
 with the `locked-msg-text` prop (the `:message blocked <text>` slot is a
-synonym):
+synonym). Exit props follow the shared `:prop` contract: the source room may
+edit them through `:exit`, and the room owner may set them directly with the
+ordinary avatar command:
 
 ```text
 @runtime#room:exit mirror prop locked-msg-text None shall pass!
+prop mirror locked-msg-text None shall pass!
 ```
 
 ## Clear out disconnected players

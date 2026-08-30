@@ -161,29 +161,11 @@
           (else
            (reply-error msg "only source room or lock secret may unlock this exit")))))
 
-; Settable exit props, mirroring container.ma's :prop shape. Only the
-; source room may edit them, like :message/:lock/:unlock.
-(define (editable-prop? key)
-  (or (equal? key "name")
-      (equal? key "nick")
-      (equal? key "description")
-      (equal? key "locked-msg-text")))
-
-(define (handle-exit-prop! msg args)
-  (cond ((not (source-room-caller? msg))
-         (reply-error msg "only source room may edit exit props"))
-        ((null? args)
-         (reply-error msg "usage: :prop <name|nick|description|locked-msg-text> [value]"))
-        ((not (editable-prop? (car args)))
-         (reply-error msg "editable exit props: name, nick, description, locked-msg-text"))
-        (else
-         (begin
-           (set-node-prop! (car args) (join-words (cdr args)))
-           (reply-ok-with msg "prop updated")))))
-
-(set-rpc-method! :prop
-  (lambda (args msg)
-    (handle-exit-prop! msg args)))
+; Exit props use the shared :prop handler (node.ma). The source room may
+; always edit them (the room's `:exit <dir> prop …` forwarding path); the room
+; owner may too, so `prop <exit> locked-msg-text …` works directly.
+(define (prop-caller-authorised? msg)
+  (or (source-room-caller? msg) (owner-caller? msg)))
 
 (set-rpc-method! :message
   (lambda (args msg)

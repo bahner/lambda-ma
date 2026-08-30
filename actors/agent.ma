@@ -110,10 +110,6 @@
 (set-rpc-method! :owner handle-node-owner)
 (set-rpc-method! :owner? handle-node-owner?)
 
-(set-rpc-method! :prop
-  (lambda (args msg)
-    (handle-node-text-prop! "agent" msg args)))
-
 (set-internal-rpc-method! :print
   (lambda (args msg)
     (set-last-message! (join-words args))))

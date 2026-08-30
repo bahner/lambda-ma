@@ -150,27 +150,6 @@
           #f)
       (ma-end))))
 
-(define (editable-prop? key)
-  (or (equal? key "name")
-      (equal? key "nick")
-      (equal? key "description")
-      (equal? key "locked-message")))
-
-(define (set-container-prop! key value)
-  (set-node-prop! key value))
-
-(define (handle-container-prop! msg args)
-  (cond ((not (owner-caller? msg))
-         (reply-error msg "only owner may edit container props"))
-        ((null? args)
-         (reply-error msg "usage: :prop <name|nick|description|locked-message> [value]"))
-        ((not (editable-prop? (car args)))
-         (reply-error msg "editable container props: name, nick, description, locked-message"))
-        (else
-         (begin
-           (set-container-prop! (car args) (join-words (cdr args)))
-           (reply-ok-with msg "prop updated")))))
-
 (define (reply-locked msg)
   (reply-error msg (locked-message)))
 
@@ -209,10 +188,6 @@
 
 (set-rpc-method! :owner handle-node-owner)
 (set-rpc-method! :owner? handle-node-owner?)
-
-(set-rpc-method! :prop
-  (lambda (args msg)
-    (handle-container-prop! msg args)))
 
 (set-rpc-method! :locked?
   (lambda (args msg)
