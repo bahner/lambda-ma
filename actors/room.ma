@@ -29,18 +29,27 @@
 (define (remove-claim! actor)
   (forget-child! actor))
 
-(define (occupant-kind? kind)
-  (equal? kind "agent"))
+; Kind lists are the single place presence kinds are classified. h00man is
+; the direct-DID human presence kind; runtime agents keep "agent". `who?` is
+; the h00man-only view — the people one can meaningfully talk to.
+(define occupant-kinds (list "agent" "h00man"))
+(define person-kinds (list "h00man"))
 
-(define (occupants)
+(define (occupant-kind? kind) (member-string? kind occupant-kinds))
+(define (person-kind? kind) (member-string? kind person-kinds))
+
+(define (occupants-by kind-pred)
   (let loop ((ctxs (child-ctxs)) (acc '()))
     (cond ((null? ctxs) (unique-actor-entries (reverse acc)))
           ((and (room-claim? (car ctxs))
-                (occupant-kind? (ctx-text (car ctxs) "kind")))
+                (kind-pred (ctx-text (car ctxs) "kind")))
            (loop (cdr ctxs)
                  (cons (canonical-actor (ctx-text (car ctxs) "actor")) acc)))
           (else
            (loop (cdr ctxs) acc)))))
+
+(define (occupants) (occupants-by occupant-kind?))
+(define (who) (occupants-by person-kind?))
 
 (define (set-label! actor label)
   (let ((ctx (child-ctx actor)))
@@ -304,7 +313,7 @@
   (make-map "actor" did
             "did" did
             "parent" (canonical-actor (self))
-            "kind" "agent"
+            "kind" "h00man"
             "protocol" "/ma/agent/0.0.1"
             "name" name
             "nick" nick
@@ -332,9 +341,11 @@
          (name (ctx-text ctx "name")))
     (cond ((and (agent-kind? kind) (enter-direct-ctx-valid? ctx "agent"))
            (handle-agent-enter! msg did ctx))
+          ((and (person-kind? kind) (enter-direct-ctx-valid? ctx "h00man"))
+           (handle-agent-enter! msg did ctx))
           ((and (thing-kind? kind) (enter-direct-ctx-valid? ctx "thing"))
            (handle-thing-enter! msg did ctx name))
-          (else (reply-error msg "enter ctx requires an agent or thing ctx")))))
+          (else (reply-error msg "enter ctx requires an agent, h00man, or thing ctx")))))
 
 ; Both branches ack with exactly one :child, via the shared send-fresh-child-ctx!
 ; (node.ma) so every ack carries the same wrapped parent-ctx, whether it's a
@@ -455,43 +466,38 @@
 (define (thing-kind? kind) (equal? kind "thing"))
 (define (container-kind? kind) (equal? kind "container"))
 (define (exit-kind? kind) (equal? kind "exit"))
-(define (movable-kind? kind)
-  (or (agent-kind? kind) (thing-kind? kind) (container-kind? kind)))
+; A h00man is a movable thing like any other — one shared object namespace.
+(define movable-kinds (list "agent" "thing" "container" "h00man"))
+(define (movable-kind? kind) (member-string? kind movable-kinds))
 
-; Movable occupant lookup: local token aliases first, then visible agent labels.
-(define (movable-occupant? actor)
-  (let ((ctx (claim-ctx actor)))
-    (and ctx (movable-kind? (ctx-text ctx "kind")))))
-
-(define (occupant-ref token)
-  (let loop ((xs (occupants)))
-    (cond ((null? xs) #f)
-          ((and (movable-occupant? (car xs)) (equal? (speaker-name (car xs)) token))
-           (car xs))
-          (else (loop (cdr xs))))))
+(define (movable-children)
+  (let loop ((ctxs (child-ctxs)) (acc '()))
+    (cond ((null? ctxs) (reverse acc))
+          ((movable-kind? (ctx-text (car ctxs) "kind"))
+           (loop (cdr ctxs) (cons (car ctxs) acc)))
+          (else (loop (cdr ctxs) acc)))))
 
 (define (actor-token-valid? token)
   (non-empty-string? token))
 
-; Things and containers share the room-visible object namespace.
+; Things, containers, agents, and h00mans share one room-visible object
+; namespace: a h00man is a movable thing like any other, and so is a duckie.
+; The presentation views (things?, look's "Things:") still narrow by kind;
+; lookup does not.
 (define (thing-ref token)
   (if (is-did-url? token)
       (let ((ctx (child-ctx token)))
-        (if (and (map? ctx)
-                 (or (thing-kind? (ctx-text ctx "kind"))
-                     (container-kind? (ctx-text ctx "kind"))))
+        (if (and (map? ctx) (movable-kind? (ctx-text ctx "kind")))
             (canonical-actor token)
             #f))
-      (let loop ((ctxs (list-append (child-ctxs-by-kind "thing")
-                                    (child-ctxs-by-kind "container"))))
+      (let loop ((ctxs (movable-children)))
         (cond ((null? ctxs) #f)
               ((child-token-matches? token (car ctxs))
                (canonical-actor (ctx-text (car ctxs) "actor")))
               (else (loop (cdr ctxs)))))))
 
 (define (movable-ref token)
-  (let ((thing (thing-ref token)))
-    (if thing thing (occupant-ref token))))
+  (thing-ref token))
 
 ; Removal updates children first; token aliases are now derived from that ctx.
 (define (set-thing! token did)
@@ -659,7 +665,7 @@
     (room-name) " help\n"
     "  look              look around\n"
     "  exits?            list exits\n"
-    "  who?              list occupants here\n"
+    "  who?              list the people here (h00mans)\n"
     "  occupants?        list occupants here\n"
     "  things?           list known things\n"
     "  did? [kind] <name> show the DID for a visible occupant, thing, or exit\n"
@@ -1161,10 +1167,13 @@
   (lambda (args msg)
     (reply-ok-with msg (exit-entry-list (exit-directions)))))
 
+(define (handle-who-query! args msg)
+  (reply-ok-with msg (agent-entry-list (who))))
+
 (define (handle-occupants-query! args msg)
   (reply-ok-with msg (agent-entry-list (occupants))))
 
-(set-cmd-method! :who? handle-occupants-query!)
+(set-cmd-method! :who? handle-who-query!)
 (set-cmd-method! :occupants? handle-occupants-query!)
 
 (set-cmd-method! :things?

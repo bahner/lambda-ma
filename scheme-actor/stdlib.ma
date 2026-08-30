@@ -80,6 +80,7 @@
 (define (ctx-kind-valid? kind)
   (or (equal? kind "thing")
       (equal? kind "agent")
+      (equal? kind "h00man")
       (equal? kind "room")
       (equal? kind "container")
       (equal? kind "exit")

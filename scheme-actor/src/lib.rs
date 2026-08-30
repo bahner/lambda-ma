@@ -122,7 +122,7 @@ mod tests {
                               (map-set
                                 (map-set
                                   (map-set ctx "actor" did)
-                                  "kind" "agent")
+                                  "kind" "h00man")
                                 "protocol" "/ma/agent/0.0.1")))
                         "#,
                         &env,
