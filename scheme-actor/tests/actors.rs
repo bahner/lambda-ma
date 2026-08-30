@@ -949,11 +949,11 @@ fn exit_traverse_locked_narrates_refusal_to_traveller() {
     ma_scheme_actor::state::set_config(config);
     eval_all(
         r#"
-        (set-prop! "parent"          "did:ma:runtime#room")
-        (set-prop! "target-room"     "did:ma:runtime#kitchen")
-        (set-prop! "direction"       "north")
-        (set-prop! "locked"          "true")
-        (set-prop! "blocked-message" "The giant door won't budge.")
+        (set-prop! "parent"      "did:ma:runtime#room")
+        (set-prop! "target-room" "did:ma:runtime#kitchen")
+        (set-prop! "direction"   "north")
+        (set-prop! "locked"      "true")
+        (set-prop! "locked-msg-text" "None shall pass!")
         "#,
         &env,
     )
@@ -986,7 +986,7 @@ fn exit_traverse_locked_narrates_refusal_to_traveller() {
     );
     assert_eq!(
         eval_all("(car (cdr (cdr (get-prop \"sent-term:1\"))))", &env).unwrap(),
-        Value::str("The giant door won't budge.")
+        Value::str("None shall pass!")
     );
     // Still blocked at the source room.
     assert_eq!(
@@ -996,6 +996,57 @@ fn exit_traverse_locked_narrates_refusal_to_traveller() {
         ),
         "did:ma:runtime#room"
     );
+}
+
+#[test]
+fn exit_prop_locked_msg_text_settable_by_source_room_only() {
+    let env = exit_env();
+    let mut config = make_config("did:ma:runtime", "did:ma:runtime#north-exit");
+    config.insert("kind".to_string(), "/ma/exit/0.0.1".to_string());
+    ma_scheme_actor::state::set_config(config);
+    eval_all(r#"(set-prop! "parent" "did:ma:runtime#room")"#, &env).unwrap();
+
+    // Source room sets the refusal message.
+    env.define(
+        Rc::from("msg"),
+        sample_msg(
+            "did:ma:runtime#room",
+            "did:ma:runtime#north-exit",
+            Value::list(vec![
+                Value::symbol(":prop"),
+                Value::str("locked-msg-text"),
+                Value::str("None shall pass!"),
+            ]),
+        ),
+    );
+    eval_all("(on-message msg)", &env).unwrap();
+
+    assert_eq!(
+        eval_all("(car (get-prop \"reply-term:1\"))", &env).unwrap(),
+        Value::symbol(":ok")
+    );
+    assert_eq!(eval_str("(locked-msg-text)", &env), "None shall pass!");
+
+    // A passer-by may not edit exit props.
+    env.define(
+        Rc::from("msg2"),
+        sample_msg(
+            "did:ma:intruder",
+            "did:ma:runtime#north-exit",
+            Value::list(vec![
+                Value::symbol(":prop"),
+                Value::str("locked-msg-text"),
+                Value::str("hacked"),
+            ]),
+        ),
+    );
+    eval_all("(on-message msg2)", &env).unwrap();
+
+    assert_eq!(
+        eval_all("(car (get-prop \"reply-term:2\"))", &env).unwrap(),
+        Value::symbol(":error")
+    );
+    assert_eq!(eval_str("(locked-msg-text)", &env), "None shall pass!");
 }
 
 #[test]

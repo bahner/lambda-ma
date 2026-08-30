@@ -78,10 +78,13 @@ locked exit with `go <direction> <secret>`.
 ```
 
 `go mirror supersecret` traverses the locked mirror; without the secret the
-exit blocks with its locked message, which the owner can customise:
+exit blocks the way and narrates the refusal to the traveller as an in-world
+`:say` event. The message defaults to `This is not the way.` and is settable
+with the `locked-msg-text` prop (the `:message blocked <text>` slot is a
+synonym):
 
 ```text
-@runtime#room:exit mirror message blocked The giant door won't budge.
+@runtime#room:exit mirror prop locked-msg-text None shall pass!
 ```
 
 ## Clear out disconnected players

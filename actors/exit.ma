@@ -23,9 +23,12 @@
   (let ((text (get-prop "traveller-message")))
     (if text text (string-append "You go " (direction) "."))))
 
-(define (blocked-message)
-  (let ((text (get-prop "blocked-message")))
-    (if text text "The way is locked.")))
+; The refusal message a traveller hears when a traverse is refused. Generic
+; default; settable via `:prop locked-msg-text <text>` (or the `:message
+; blocked <text>` slot).
+(define (locked-msg-text)
+  (let ((text (get-prop "locked-msg-text")))
+    (if (non-empty-string? text) text "This is not the way.")))
 
 (define (source-room-caller? msg)
   (same-actor? (msg-from msg) (node-parent)))
@@ -48,7 +51,7 @@
 
 (define (set-message! slot text)
   (begin
-    (set-prop! (string-append slot "-message") text)
+    (set-prop! (if (equal? slot "blocked") "locked-msg-text" (string-append slot "-message")) text)
     (ma-save-state!)))
 
 (define (valid-did-traversal-ctx? ctx)
@@ -64,7 +67,7 @@
             "direction" (direction)))
 
 (define (blocked-ctx ctx)
-  (traversal-reply ctx (node-parent) (blocked-message)))
+  (traversal-reply ctx (node-parent) (locked-msg-text)))
 
 ; Narrate a refused traverse to the traveller as an in-world :say event (the
 ; zion/visualisation stream) — never an inbox message. The blocked-ctx reply
@@ -158,6 +161,30 @@
           (else
            (reply-error msg "only source room or lock secret may unlock this exit")))))
 
+; Settable exit props, mirroring container.ma's :prop shape. Only the
+; source room may edit them, like :message/:lock/:unlock.
+(define (editable-prop? key)
+  (or (equal? key "name")
+      (equal? key "nick")
+      (equal? key "description")
+      (equal? key "locked-msg-text")))
+
+(define (handle-exit-prop! msg args)
+  (cond ((not (source-room-caller? msg))
+         (reply-error msg "only source room may edit exit props"))
+        ((null? args)
+         (reply-error msg "usage: :prop <name|nick|description|locked-msg-text> [value]"))
+        ((not (editable-prop? (car args)))
+         (reply-error msg "editable exit props: name, nick, description, locked-msg-text"))
+        (else
+         (begin
+           (set-node-prop! (car args) (join-words (cdr args)))
+           (reply-ok-with msg "prop updated")))))
+
+(set-rpc-method! :prop
+  (lambda (args msg)
+    (handle-exit-prop! msg args)))
+
 (set-rpc-method! :message
   (lambda (args msg)
     (cond ((not (source-room-caller? msg))
@@ -196,7 +223,7 @@
               (reply-error msg "only source room or traveller may use this exit")
               (if (and (locked?) (not (and secret (equal? secret (lock-secret)))))
                   (begin
-                    (send-refusal-say! ctx (blocked-message))
+                    (send-refusal-say! ctx (locked-msg-text))
                     (reply-ok-with msg (blocked-ctx ctx)))
                   (if (target-room)
                       (reply-ok-with msg (target-ctx ctx))
