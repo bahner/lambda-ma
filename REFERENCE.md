@@ -57,6 +57,14 @@ confirms `:child <ctx>`, the child commits, then informs its old parent. Each
 actor verifies `msg.from` before accepting ctx. Revisions provide ordering and
 idempotency, not authority.
 
+A room parent keeps its `children` map authoritative: every `:parent <ctx>`
+from a known child replaces that child's stored key with the announced ctx,
+and the room broadcasts a `:child-ctx <ctx>` event to every actor present so
+clients can refresh exactly that child's entry. Every `:child <ctx>` ack
+carries the room's own ctx as the nested `parent-ctx`; after a wholesale
+rebuild (e.g. `roll-call end`) that snapshot delivers the complete visible
+actor list to every child in one message.
+
 Parenting is placement, not ownership. `:set-parent` and `:hold` may change a
 movable actor's parent but MUST NOT change its `owner`; an unowned actor remains
 unowned after either operation. For an existing movable actor, `:claim` is the

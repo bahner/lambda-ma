@@ -401,10 +401,16 @@
              ))
 
 ; Child announcements are the room's single admission/departure boundary.
+; The child's own ctx is the authority: :parent simply replaces the stored
+; children-map key with the announced ctx. There is deliberately no re-entry
+; ceremony here — no token binding, no label/claim comparison, no kind-specific
+; admission rules — so a changed name/nick lands in the map immediately and a
+; roll-call answer is always re-noted. Views (look, things?, who?) derive
+; lazily from the children map. Exits keep the shared node handler, which
+; admits them without arrival events.
 (define (handle-child-announcement! msg ctx)
   (let ((kind (ctx-text ctx "kind"))
-        (actor (ctx-text ctx "actor"))
-        (name (ctx-text ctx "name")))
+        (actor (ctx-text ctx "actor")))
     (cond ((not (child-announcement-valid? ctx msg))
            (reply-error msg "child ctx actor must match sender"))
           ((not (same-actor? (child-parent-target ctx) (self)))
@@ -414,14 +420,36 @@
              (broadcast-term (list :leave ctx))
              (broadcast-room-ctx!)
              (reply-ok msg)))
-          ((and (agent-kind? kind) (enter-direct-ctx-valid? ctx "agent"))
-           (handle-agent-enter! msg actor ctx))
-          ((and (or (thing-kind? kind) (container-kind? kind)) (enter-ctx-valid? ctx))
-           (handle-thing-enter! msg actor ctx name))
-          ((and (exit-kind? kind) (enter-ctx-valid? ctx))
+          ((not (or (movable-kind? kind) (exit-kind? kind)))
+           (reply-error msg "child ctx must include actor, parent, kind, protocol, name, nick, description"))
+          ((exit-kind? kind)
            (handle-node-parent (list ctx) msg))
+          ((equal? (child-ctx actor) ctx)
+           ; Unchanged announcement (prop refresh, roll-call answer): the
+           ; replace is a no-op, so just ack the child directly.
+           (begin
+             (roll-call-note-child! ctx)
+             (send-fresh-child-ctx! actor)
+             (reply-ok msg)))
+          ((child-ctx actor)
+           ; Known child re-announcing a changed ctx: replace the stored key
+           ; and tell every actor in the room so clients can refresh exactly
+           ; that child's entry without a full room snapshot.
+           (begin
+             (remember-child! ctx)
+             (ma-save-state!)
+             (broadcast-term (list :child-ctx ctx))
+             (broadcast-room-ctx!)
+             (reply-ok msg)))
           (else
-           (reply-error msg "child ctx must include actor, parent, kind, protocol, name, nick, description")))))
+           ; First announcement: admit and announce the arrival.
+           (begin
+             (remember-child! ctx)
+             (ma-save-state!)
+             (broadcast-term-except actor (list :arrive ctx))
+             (broadcast-room-ctx!)
+             (ma-send! actor (list :here (self)))
+             (reply-ok msg))))))
 
 (define (agent-kind? kind) (equal? kind "agent"))
 (define (thing-kind? kind) (equal? kind "thing"))

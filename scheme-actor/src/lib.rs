@@ -2468,6 +2468,114 @@ mod tests {
     }
 
     #[test]
+    fn room_thing_parent_ctx_replace_updates_stored_children_key() {
+        // The child's own ctx is the authority: a changed :parent announcement
+        // replaces the stored children-map key, so look reflects the new
+        // name/nick immediately. Re-announcement must not route through the
+        // enter ceremony, where a token/label mismatch could reject the
+        // update and leave the room serving stale ctx.
+        let env = room_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#room".to_string());
+        crate::state::set_config(config);
+        let lamp_ctx = eval_all(
+            r#"
+                    (map-set
+                        (map-set
+                            (map-set
+                                (map-set
+                                    (map-set
+                                        (map-set
+                                            (map-set (make-map) "actor" "did:ma:runtime#lamp")
+                                            "kind" "thing")
+                                        "protocol" "/ma/thing/0.0.1")
+                                    "parent" "did:ma:runtime#room")
+                                "name" "lamp")
+                            "nick" "The Lamp")
+                        "description" "A brass lamp.")
+                    "#,
+            &env,
+        )
+        .unwrap();
+        env.define(
+            Rc::from("parent_msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:runtime#lamp",
+                "did:ma:runtime#room",
+                Value::list(vec![Value::symbol(":parent"), lamp_ctx]),
+            )),
+        );
+        eval_all("(on-message parent_msg)", &env).unwrap();
+
+        // The child re-announces with a changed nick, as after :prop nick.
+        let renamed_ctx = eval_all(
+            r#"
+                    (map-set
+                        (map-set
+                            (map-set
+                                (map-set
+                                    (map-set
+                                        (map-set
+                                            (map-set (make-map) "actor" "did:ma:runtime#lamp")
+                                            "kind" "thing")
+                                        "protocol" "/ma/thing/0.0.1")
+                                    "parent" "did:ma:runtime#room")
+                                "name" "lamp")
+                            "nick" "Lamp v2")
+                        "description" "A brass lamp.")
+                    "#,
+            &env,
+        )
+        .unwrap();
+        env.define(
+            Rc::from("renamed_msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:runtime#lamp",
+                "did:ma:runtime#room",
+                Value::list(vec![Value::symbol(":parent"), renamed_ctx]),
+            )),
+        );
+        eval_all("(on-message renamed_msg)", &env).unwrap();
+
+        // The changed announcement also broadcasts a :child-ctx event to the
+        // room's actors, so clients can refresh exactly this child's key.
+        assert!(eval_bool(
+            "(let loop ((i 1))
+                (if (> i (get-prop \"sent-count\"))
+                    #f
+                    (let ((term (get-prop (string-append \"sent-term:\" (number->string i)))))
+                      (if (equal? (car term) :child-ctx)
+                          (equal? (ctx-text (car (cdr term)) \"nick\") \"Lamp v2\")
+                          (loop (+ i 1))))))",
+            &env
+        ));
+
+        // The stored children-map key now carries the new ctx: look and the
+        // derived thing views see "Lamp v2", and the old label is gone.
+        assert_eq!(
+            eval_str(
+                "(ctx-text (claim-ctx \"did:ma:runtime#lamp\") \"nick\")",
+                &env
+            ),
+            "Lamp v2"
+        );
+        assert_eq!(
+            eval_str("(thing-ref \"Lamp v2\")", &env),
+            "did:ma:runtime#lamp"
+        );
+        assert!(eval_bool("(not (thing-ref \"The Lamp\"))", &env));
+        assert_eq!(
+            eval_str(
+                "(ctx-text (map-ref (map-ref (room-ctx) \"children\" (make-map)) \"did:ma:runtime#lamp\" (make-map)) \"nick\")",
+                &env
+            ),
+            "Lamp v2"
+        );
+    }
+
+    #[test]
     fn room_announces_root_on_init_and_start() {
         let env = room_env();
         let mut config = std::collections::HashMap::new();
