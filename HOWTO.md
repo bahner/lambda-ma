@@ -87,7 +87,9 @@ end it yourself instead:
 ```
 
 Bare `:roll-call` reports who has answered so far. Only the room's owner or its
-current parent may start one. If nobody answers at all the swap is skipped and
+current parent may start one. The bootstrap `#construct` is unowned until
+someone claims it, so on a fresh world the owner check fails until you run the
+room's `claim` command first. If nobody answers at all the swap is skipped and
 the existing children are kept, since that is far more likely to be a transport
 failure than a genuinely empty room.
 
