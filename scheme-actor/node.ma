@@ -965,11 +965,12 @@
 (set-rpc-method! :roll-call handle-node-roll-call!)
 
 ; ma-lambda-ma-v1.md §7: forge ctx MUST have kind/name, MUST NOT carry an
-; owner or caller-supplied init — owner is always msg-from, parent is self.
-; The new child is also born co-located with its forger: its "here" is the
-; forger's own location, so container admission (which compares a proposing
-; child's here against the container's here) never refuses a freshly-forged
-; item whose :here cascade has not yet arrived.
+; owner or caller-supplied init — owner is always msg-from, and parent is
+; msg-from too: a forged entity is born into its forger's hand, never into a
+; container. Its genesis therefore proposes itself straight to the forger
+; (announce-node-parent! at the end of init), so the forger's client holds it
+; without any container admission in the picture. The new child is born
+; co-located with its forger: its "here" is the forger's own location.
 (define (forge-ctx-valid? ctx)
   (and (map? ctx)
        (non-empty-string? (ctx-text ctx "kind"))
@@ -980,10 +981,11 @@
   (string-append
     "(set-init-prop! \"name\" \"" name "\")\n"
     "(set-init-prop! \"owner\" \"" owner-did "\")\n"
-    "(set-init-prop! \"parent\" \"" (canonical-actor (self)) "\")\n"
+    "(set-init-prop! \"parent\" \"" owner-did "\")\n"
     (if (non-empty-string? here)
         (string-append "(set-init-prop! \"here\" \"" here "\")\n")
         "")
+    "(announce-node-parent!)\n"
     "(ma-save-state!)\n"))
 
 (define (handle-node-forge args msg)

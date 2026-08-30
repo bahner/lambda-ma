@@ -65,6 +65,25 @@ secret replaces the old one immediately.
 @runtime#bag:unlock supersecret
 ```
 
+## Lock an exit
+
+A room's owner locks its exits through the room; the exit accepts lock commands
+from no one else. The secret contract is the same as for containers: anyone
+holding it may unlock the exit, and a traveller may pass straight through a
+locked exit with `go <direction> <secret>`.
+
+```text
+@runtime#room:exit mirror lock supersecret
+@runtime#room:exit mirror unlock supersecret
+```
+
+`go mirror supersecret` traverses the locked mirror; without the secret the
+exit blocks with its locked message, which the owner can customise:
+
+```text
+@runtime#room:exit mirror message blocked The giant door won't budge.
+```
+
 ## Clear out disconnected players
 
 A browser tab that simply closes never announces a departure, so its bare DID

@@ -38,9 +38,10 @@ parent, then informs the previous parent. Valid retries are idempotent.
 
 Parentage is placement, not ownership. `:set-parent` and `:hold` never change
 an existing actor's owner; `:claim` is the explicit ownership transition.
-`:forge` creates the sole exception by setting the new actor's initial owner to
-`msg.from`. Owner-gated policy such as container locking must require that
-existing owner and must not claim implicitly.
+`:forge` creates the sole exception by setting the new actor's initial owner
+and parent to `msg.from`, so a forged entity is born into its forger's hand.
+Owner-gated policy such as container locking must require that existing owner
+and must not claim implicitly.
 
 ## Container locks
 
@@ -48,6 +49,16 @@ Only a claimed container's owner can lock it. `:lock <secret>` also replaces
 the optional stored unlock secret, allowing any caller holding that value to
 call `:unlock <secret>`. The owner can always call `:unlock` without a secret;
 bare `:lock` is idempotent and preserves an existing stored secret.
+
+## Exit locks
+
+An exit accepts lock commands only from its source room; the room owner issues
+them through the room's `:exit <direction> <verb>` proxy, which forwards to the
+exit actor as the source room. `:lock <secret>` is the same contract as
+containers: it locks the exit and stores the optional secret. A traveller
+holding the secret may `:unlock <secret>` or pass straight through a locked
+exit with `:traverse <ctx> <secret>`; without it, the exit replies with its
+blocked message and the traveller stays in the source room.
 
 ## Traversal
 

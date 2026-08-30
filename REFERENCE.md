@@ -69,8 +69,10 @@ Parenting is placement, not ownership. `:set-parent` and `:hold` may change a
 movable actor's parent but MUST NOT change its `owner`; an unowned actor remains
 unowned after either operation. For an existing movable actor, `:claim` is the
 only ownership-changing verb. `:forge` is the sole creation exception: it
-initialises the newly created actor's owner from `msg.from`. Owner-gated actions
-such as locking a container require a prior claim and never claim implicitly.
+initialises the newly created actor's `owner` and `parent` from `msg.from`, so a
+forged entity is born into its forger's hand (its genesis proposes itself to
+the forger). Owner-gated actions such as locking a container require a prior
+claim and never claim implicitly.
 
 An owner may prepare a consent-based transfer with
 `:set-recovery-secret <one-time-secret>`. A later
@@ -145,6 +147,17 @@ use with `:unlock <secret>`. A later `:lock <new-secret>` replaces the secret
 immediately, even if the container is already locked. Bare `:lock` leaves an
 existing secret unchanged; a container locked without a secret can only be
 unlocked by its owner.
+
+## Exit locks
+
+Exits use the same `:lock <secret>` contract as containers, but only the room
+that owns the exit may lock it: the room owner sends `:exit <direction> lock
+[secret]` and the room forwards the verb to the exit actor as its source room.
+The stored secret lets a traveller unlock the exit with
+`:unlock <secret>` or pass straight through a locked exit by supplying it as
+the second `:traverse` argument (the avatar's `go <direction> <secret>`).
+Without the secret, a locked exit replies with its blocked message and keeps
+the traveller in the source room.
 
 ## Replies and events
 

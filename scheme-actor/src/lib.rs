@@ -765,7 +765,10 @@ mod tests {
         let init = eval_str("(get-prop \"forge-init\")", &env);
         assert!(init.contains("(set-init-prop! \"name\" \"Lamp\")"));
         assert!(init.contains("(set-init-prop! \"owner\" \"did:ma:owner\")"));
-        assert!(init.contains("(set-init-prop! \"parent\" \"did:ma:runtime#room\")"));
+        // The forged entity is born into its forger's hand: parent is the
+        // forger, not the creating actor, and genesis announces itself.
+        assert!(init.contains("(set-init-prop! \"parent\" \"did:ma:owner\")"));
+        assert!(init.contains("(announce-node-parent!)"));
         assert!(!init.contains("did:ma:sneaky"));
         assert_eq!(
             eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
@@ -3882,6 +3885,79 @@ mod tests {
     }
 
     #[test]
+    fn container_admission_refuses_proposed_child_when_locked_or_closed() {
+        // A forged entity is born into its forger's hand, never into a
+        // container, so this gate is the ordinary :parent admission that a
+        // `put` proposal also lands on: the container's locked/closed state
+        // refuses any child proposing itself — the final put simply fails.
+        let env = container_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#bag".to_string());
+        crate::state::set_config(config);
+        let child_ctx = eval_all(
+            r#"
+            (make-map "actor" "did:ma:runtime#lamp"
+                      "kind" "thing"
+                      "protocol" "/ma/thing/0.0.1"
+                      "parent" "did:ma:runtime#bag"
+                      "name" "lamp"
+                      "nick" "brass lamp"
+                      "description" "A warm brass lamp.")
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        // Locked: placement refused, child not admitted.
+        eval_all(r#"(set-prop! "locked" "true")"#, &env).unwrap();
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:runtime#lamp",
+                "did:ma:runtime#bag",
+                Value::list(vec![Value::symbol(":parent"), child_ctx.clone()]),
+            )),
+        );
+        eval_all("(on-message msg)", &env).unwrap();
+
+        assert_eq!(
+            eval_all("(car (get-prop \"reply-term:1\"))", &env).unwrap(),
+            Value::symbol(":error")
+        );
+        assert!(eval_bool(
+            r#"(not (child-ctx "did:ma:runtime#lamp"))"#,
+            &env
+        ));
+
+        // Closed: placement refused the same way.
+        eval_all(
+            r#"(set-prop! "locked" "false") (set-prop! "closed" "true")"#,
+            &env,
+        )
+        .unwrap();
+        env.define(
+            Rc::from("msg2"),
+            Value::Msg(sample_term_msg(
+                "did:ma:runtime#lamp",
+                "did:ma:runtime#bag",
+                Value::list(vec![Value::symbol(":parent"), child_ctx]),
+            )),
+        );
+        eval_all("(on-message msg2)", &env).unwrap();
+
+        assert_eq!(
+            eval_all("(car (get-prop \"reply-term:2\"))", &env).unwrap(),
+            Value::symbol(":error")
+        );
+        assert!(eval_bool(
+            r#"(not (child-ctx "did:ma:runtime#lamp"))"#,
+            &env
+        ));
+    }
+
+    #[test]
     fn container_admits_child_when_neither_side_has_here_yet() {
         // Neither the container nor the proposing child has been cascaded a
         // "here" yet (e.g. still being assembled) — both default to "", so
@@ -6139,6 +6215,56 @@ mod tests {
     }
 
     #[test]
+    fn container_put_from_root_refuses_and_notifies_if_closed() {
+        let env = container_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#bag".to_string());
+        config.insert("root".to_string(), "did:ma:runtime#root".to_string());
+        crate::state::set_config(config);
+        env.define(
+            Rc::from("root_msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:runtime#root",
+                "did:ma:runtime#bag",
+                Value::symbol(":put"),
+            )),
+        );
+
+        eval_all(
+            r#"
+            (set-prop! "closed" "true")
+            (define put-ctx (make-map "action" "put" "id" "p1"
+                                       "requestor" "did:ma:avatar"
+                                       "item" "did:ma:runtime#lamp"
+                                       "container" "did:ma:runtime#bag"))
+            ((find-method :put) (list put-ctx) root_msg)
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        // Sends :put-event failed to requestor.
+        assert_eq!(
+            eval_str("(get-prop \"sent-target:1\")", &env),
+            "did:ma:avatar"
+        );
+        assert_eq!(
+            eval_all("(car (get-prop \"sent-term:1\"))", &env).unwrap(),
+            Value::symbol(":put-event")
+        );
+        assert_eq!(
+            eval_all(
+                "(map-ref (car (cdr (get-prop \"sent-term:1\"))) \"status\" \"\")",
+                &env
+            )
+            .unwrap(),
+            Value::str("failed")
+        );
+    }
+
+    #[test]
     fn container_put_from_root_refuses_and_notifies_if_full() {
         let env = container_env();
         install_send_reply_recorders(&env);
@@ -6523,6 +6649,42 @@ mod tests {
         eval_all(
             r#"
             (set-prop! "locked" "true")
+            ((find-method :take) (list "did:ma:runtime#lamp") msg)
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        assert!(eval_bool("(not (has-prop? \"sent-count\"))", &env));
+        assert_eq!(
+            eval_all("(car (get-prop \"reply-term:1\"))", &env).unwrap(),
+            Value::symbol(":error")
+        );
+    }
+
+    #[test]
+    fn container_take_refuses_if_closed() {
+        let env = container_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#bag".to_string());
+        crate::state::set_config(config);
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:avatar",
+                "did:ma:runtime#bag",
+                Value::list(vec![
+                    Value::symbol(":take"),
+                    Value::str("did:ma:runtime#lamp"),
+                ]),
+            )),
+        );
+
+        eval_all(
+            r#"
+            (set-prop! "closed" "true")
             ((find-method :take) (list "did:ma:runtime#lamp") msg)
             "#,
             &env,

@@ -37,6 +37,10 @@ Claimed containers support owner-controlled locks. An owner may use `:lock` or
 `:unlock`; `:lock <secret>` additionally grants anyone with that secret access
 to `:unlock <secret>`, until the owner replaces it with another `:lock` call.
 
+Room-owned exits use the same `:lock <secret>` contract: the room owner locks
+an exit through the room, and a traveller holding the secret may unlock it or
+pass straight through with `go <direction> <secret>`.
+
 The normative contract is
 [ma-lambda-ma-v1.md](../ma-spec/runtime/ma-lambda-ma-v1.md). Local actor APIs
 and bootstrap details are in [REFERENCE.md](REFERENCE.md); operational setup is

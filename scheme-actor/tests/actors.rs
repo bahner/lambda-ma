@@ -871,6 +871,77 @@ fn exit_traverse_locked_returns_blocked_ctx_at_source_room() {
 }
 
 #[test]
+fn exit_traverse_locked_allows_traveller_with_matching_secret() {
+    let env = exit_env();
+    let mut config = make_config("did:ma:runtime", "did:ma:runtime#north-exit");
+    config.insert("kind".to_string(), "/ma/exit/0.0.1".to_string());
+    ma_scheme_actor::state::set_config(config);
+    eval_all(
+        r#"
+        (set-prop! "parent"      "did:ma:runtime#room")
+        (set-prop! "target-room" "did:ma:runtime#kitchen")
+        (set-prop! "direction"   "north")
+        (set-prop! "locked"      "true")
+        (set-prop! "lock-secret" "open sesame")
+        "#,
+        &env,
+    )
+    .unwrap();
+
+    let traversal_ctx = eval_all(
+        r#"(make-map "did" "did:ma:alice" "parent" "did:ma:runtime#room")"#,
+        &env,
+    )
+    .unwrap();
+
+    // Wrong secret: still blocked at the source room.
+    env.define(
+        Rc::from("msg"),
+        sample_msg(
+            "did:ma:alice",
+            "did:ma:runtime#north-exit",
+            Value::list(vec![
+                Value::symbol(":traverse"),
+                traversal_ctx.clone(),
+                Value::str("wrong"),
+            ]),
+        ),
+    );
+    eval_all("(on-message msg)", &env).unwrap();
+
+    assert_eq!(
+        eval_str(
+            "(ctx-text (car (cdr (get-prop \"reply-term:1\"))) \"parent\")",
+            &env
+        ),
+        "did:ma:runtime#room"
+    );
+
+    // Matching secret: traverses to the target room.
+    env.define(
+        Rc::from("msg2"),
+        sample_msg(
+            "did:ma:alice",
+            "did:ma:runtime#north-exit",
+            Value::list(vec![
+                Value::symbol(":traverse"),
+                traversal_ctx,
+                Value::str("open sesame"),
+            ]),
+        ),
+    );
+    eval_all("(on-message msg2)", &env).unwrap();
+
+    assert_eq!(
+        eval_str(
+            "(ctx-text (car (cdr (get-prop \"reply-term:2\"))) \"parent\")",
+            &env
+        ),
+        "did:ma:runtime#kitchen"
+    );
+}
+
+#[test]
 fn exit_traverse_rejects_caller_not_source_room_and_not_traveller() {
     let env = exit_env();
     let mut config = make_config("did:ma:runtime", "did:ma:runtime#north-exit");
@@ -968,6 +1039,105 @@ fn exit_lock_unlock_only_allowed_from_source_room() {
         Value::symbol(":ok")
     );
     assert!(eval_bool("(not (locked?))", &env));
+}
+
+#[test]
+fn exit_lock_secret_allows_non_owner_unlock_with_matching_secret() {
+    let env = exit_env();
+    let mut config = make_config("did:ma:runtime", "did:ma:runtime#north-exit");
+    config.insert("kind".to_string(), "/ma/exit/0.0.1".to_string());
+    ma_scheme_actor::state::set_config(config);
+    eval_all(r#"(set-prop! "parent" "did:ma:runtime#room")"#, &env).unwrap();
+
+    // Source room locks with a secret.
+    env.define(
+        Rc::from("msg"),
+        sample_msg(
+            "did:ma:runtime#room",
+            "did:ma:runtime#north-exit",
+            Value::list(vec![Value::symbol(":lock"), Value::str("open sesame")]),
+        ),
+    );
+    eval_all("(on-message msg)", &env).unwrap();
+
+    assert_eq!(
+        eval_all("(car (get-prop \"reply-term:1\"))", &env).unwrap(),
+        Value::symbol(":ok")
+    );
+    assert!(eval_bool("(locked?)", &env));
+    assert_eq!(eval_str("(lock-secret)", &env), "open sesame");
+
+    // A traveller without the secret may not unlock.
+    env.define(
+        Rc::from("msg2"),
+        sample_msg(
+            "did:ma:traveller",
+            "did:ma:runtime#north-exit",
+            Value::list(vec![Value::symbol(":unlock"), Value::str("wrong")]),
+        ),
+    );
+    eval_all("(on-message msg2)", &env).unwrap();
+
+    assert_eq!(
+        eval_all("(car (get-prop \"reply-term:2\"))", &env).unwrap(),
+        Value::symbol(":error")
+    );
+    assert!(eval_bool("(locked?)", &env));
+
+    // A traveller holding the secret may unlock.
+    env.define(
+        Rc::from("msg3"),
+        sample_msg(
+            "did:ma:traveller",
+            "did:ma:runtime#north-exit",
+            Value::list(vec![Value::symbol(":unlock"), Value::str("open sesame")]),
+        ),
+    );
+    eval_all("(on-message msg3)", &env).unwrap();
+
+    assert_eq!(
+        eval_all("(car (get-prop \"reply-term:3\"))", &env).unwrap(),
+        Value::symbol(":ok")
+    );
+    assert!(eval_bool("(not (locked?))", &env));
+}
+
+#[test]
+fn exit_bare_lock_preserves_existing_secret() {
+    let env = exit_env();
+    let mut config = make_config("did:ma:runtime", "did:ma:runtime#north-exit");
+    config.insert("kind".to_string(), "/ma/exit/0.0.1".to_string());
+    ma_scheme_actor::state::set_config(config);
+    eval_all(r#"(set-prop! "parent" "did:ma:runtime#room")"#, &env).unwrap();
+
+    // Lock with a secret, then re-lock bare: the stored secret must survive.
+    env.define(
+        Rc::from("msg"),
+        sample_msg(
+            "did:ma:runtime#room",
+            "did:ma:runtime#north-exit",
+            Value::list(vec![Value::symbol(":lock"), Value::str("sesame")]),
+        ),
+    );
+    eval_all("(on-message msg)", &env).unwrap();
+    assert_eq!(eval_str("(lock-secret)", &env), "sesame");
+
+    env.define(
+        Rc::from("msg2"),
+        sample_msg(
+            "did:ma:runtime#room",
+            "did:ma:runtime#north-exit",
+            Value::symbol(":lock"),
+        ),
+    );
+    eval_all("(on-message msg2)", &env).unwrap();
+
+    assert_eq!(
+        eval_all("(car (get-prop \"reply-term:2\"))", &env).unwrap(),
+        Value::symbol(":ok")
+    );
+    assert!(eval_bool("(locked?)", &env));
+    assert_eq!(eval_str("(lock-secret)", &env), "sesame");
 }
 
 // ── Exit `:locked?` ───────────────────────────────────────────────────────

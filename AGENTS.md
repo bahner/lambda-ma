@@ -132,7 +132,7 @@ convenience command, not a new wire verb: it resolves `target` (via the same
 description works, e.g. `tell golden duckie with peacock feathers to quack`)
 and forwards `verb`/`args` as an ordinary RPC call via `actor-call`. `to` is a
 hard separator, not optional — it is what lets the target description span
-multiple words before the verb, exactly like `forge`'s `named`/`in` split.
+multiple words before the verb, exactly like `forge`'s `named` separator.
 There is no dedicated ACL capability or handshake for `tell`; the receiving
 actor's own `set-cmd-method!`/`reply-error` decides whether to comply or
 refuse, same as every other verb.

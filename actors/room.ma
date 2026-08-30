@@ -673,7 +673,7 @@
     "  take <thing>      move something here into your inventory\n"
     "  drop [<thing>]    drop what you hold, or a named inventory item, here\n"
     "  put <item...> in <container...> place something inside a container\n"
-    "  forge <kind> named <name...> [in <target...>] create something\n"
+    "  forge <kind> named <name...> create something held by you\n"
     "  tell <target...> to <verb> [args...] ask something to perform a verb\n"
     "  recycle <thing>  remove an owned agent, thing, or container\n"
     "  where? <thing>    ask where an occupant says it is\n"
@@ -1279,14 +1279,19 @@
             (if exit
                 (begin
                   (ma-send! (canonical-actor exit) term)
-                  (reply-to-sender msg "Exit command queued."))
-                (reply-to-sender msg (string-append "No exit " direction ".")))))))))
+                  (reply-to-sender msg "Exit command queued.")
+                  (reply-ok msg))
+                (begin
+                  (reply-to-sender msg (string-append "No exit " direction "."))
+                  (reply-error msg (string-append "No exit " direction "."))))))))))
 
 (set-rpc-method! :exit
   (lambda (args msg)
     (let ((exit-args (command-args args msg)))
       (if (or (null? exit-args) (null? (cdr exit-args)))
-          (reply-to-sender msg "Usage: exit <direction> <verb> [args]")
+          (begin
+            (reply-to-sender msg "Usage: exit <direction> <verb> [args]")
+            (reply-error msg "Usage: exit <direction> <verb> [args]"))
           (let ((direction (car exit-args))
                 (verb (normalise-exit-verb (car (cdr exit-args))))
                 (verb-args (cdr (cdr exit-args))))

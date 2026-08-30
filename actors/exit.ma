@@ -37,6 +37,15 @@
   (set-prop! "locked" (if value "true" "false"))
   (ma-save-state!))
 
+(define (lock-secret)
+  (get-prop "lock-secret"))
+
+(define (set-lock-secret! secret)
+  (if (non-empty-string? secret)
+      (set-prop! "lock-secret" secret)
+      #f)
+  (ma-save-state!))
+
 (define (set-message! slot text)
   (begin
     (set-prop! (string-append slot "-message") text)
@@ -114,21 +123,31 @@
   (lambda (args msg)
     (reply-ok-with msg (if (locked?) "true" "false"))))
 
+; Only the source room may lock an exit. `:lock <secret>` also stores the
+; secret for a traveller to use with `:unlock <secret>`; a bare `:lock`
+; preserves an existing secret, matching container lock semantics.
 (set-rpc-method! :lock
   (lambda (args msg)
-    (if (source-room-caller? msg)
-        (begin
-          (set-locked! #t)
-          (reply-ok-with msg "locked"))
-        (reply-error msg "only source room may lock this exit"))))
+    (cond ((not (source-room-caller? msg))
+           (reply-error msg "only source room may lock this exit"))
+          (else
+           (if (null? args) #f (set-lock-secret! (join-words args)))
+           (set-locked! #t)
+           (reply-ok-with msg "locked")))))
 
+; The source room may always unlock. A traveller holding the stored lock
+; secret may also unlock; anyone else is refused.
 (set-rpc-method! :unlock
   (lambda (args msg)
-    (if (source-room-caller? msg)
-        (begin
-          (set-locked! #f)
-          (reply-ok-with msg "unlocked"))
-        (reply-error msg "only source room may unlock this exit"))))
+    (cond ((source-room-caller? msg)
+           (set-locked! #f)
+           (reply-ok-with msg "unlocked"))
+          ((and (not (null? args))
+                (equal? (join-words args) (lock-secret)))
+           (set-locked! #f)
+           (reply-ok-with msg "unlocked"))
+          (else
+           (reply-error msg "only source room or lock secret may unlock this exit")))))
 
 (set-rpc-method! :message
   (lambda (args msg)
@@ -155,14 +174,17 @@
 
 ; Exit traversal returns the selected room to the direct DID. The DID then
 ; asks that room to enter, preserving target-room admission authority.
+; A locked exit refuses unless the caller supplies the stored lock secret:
+; `:traverse <ctx> <secret>`.
 (set-rpc-method! :traverse
   (lambda (args msg)
-    (let ((ctx (if (null? args) #f (car args))))
+    (let ((ctx (if (null? args) #f (car args)))
+          (secret (if (or (null? args) (null? (cdr args))) #f (join-words (cdr args)))))
         (if (not (valid-did-traversal-ctx? ctx))
           (reply-error msg "traverse requires DID ctx with did and current parent")
           (if (not (or (source-room-caller? msg) (traveller-caller? ctx msg)))
               (reply-error msg "only source room or traveller may use this exit")
-              (if (locked?)
+              (if (and (locked?) (not (and secret (equal? secret (lock-secret)))))
                   (reply-ok-with msg (blocked-ctx ctx))
                   (if (target-room)
                       (reply-ok-with msg (target-ctx ctx))
