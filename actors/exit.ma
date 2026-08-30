@@ -66,6 +66,15 @@
 (define (blocked-ctx ctx)
   (traversal-reply ctx (node-parent) (blocked-message)))
 
+; Narrate a refused traverse to the traveller as an in-world :say event (the
+; zion/visualisation stream) — never an inbox message. The blocked-ctx reply
+; stays the structured data channel.
+(define (send-refusal-say! ctx text)
+  (let ((recipient (ctx-text ctx "did")))
+    (if (non-empty-string? recipient)
+        (ma-send! (canonical-actor recipient) (list :say (node-ctx) text))
+        #f)))
+
 (define (target-ctx ctx)
   (traversal-reply ctx (target-room) (traveller-message)))
 
@@ -175,7 +184,8 @@
 ; Exit traversal returns the selected room to the direct DID. The DID then
 ; asks that room to enter, preserving target-room admission authority.
 ; A locked exit refuses unless the caller supplies the stored lock secret:
-; `:traverse <ctx> <secret>`.
+; `:traverse <ctx> <secret>`. Every refusal is also narrated to the traveller
+; as a :say event so the refusal is visible without decoding the reply.
 (set-rpc-method! :traverse
   (lambda (args msg)
     (let ((ctx (if (null? args) #f (car args)))
@@ -185,11 +195,15 @@
           (if (not (or (source-room-caller? msg) (traveller-caller? ctx msg)))
               (reply-error msg "only source room or traveller may use this exit")
               (if (and (locked?) (not (and secret (equal? secret (lock-secret)))))
-                  (reply-ok-with msg (blocked-ctx ctx))
+                  (begin
+                    (send-refusal-say! ctx (blocked-message))
+                    (reply-ok-with msg (blocked-ctx ctx)))
                   (if (target-room)
                       (reply-ok-with msg (target-ctx ctx))
-                      (reply-ok-with msg
-                        (traversal-reply ctx (node-parent) "This exit leads nowhere.")))))))))
+                      (begin
+                        (send-refusal-say! ctx "This exit leads nowhere.")
+                        (reply-ok-with msg
+                          (traversal-reply ctx (node-parent) "This exit leads nowhere."))))))))))
 
 (define (node-protocol) "/ma/exit/0.0.1")
 (define (node-kind) "exit")

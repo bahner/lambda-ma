@@ -942,6 +942,63 @@ fn exit_traverse_locked_allows_traveller_with_matching_secret() {
 }
 
 #[test]
+fn exit_traverse_locked_narrates_refusal_to_traveller() {
+    let env = exit_env();
+    let mut config = make_config("did:ma:runtime", "did:ma:runtime#north-exit");
+    config.insert("kind".to_string(), "/ma/exit/0.0.1".to_string());
+    ma_scheme_actor::state::set_config(config);
+    eval_all(
+        r#"
+        (set-prop! "parent"          "did:ma:runtime#room")
+        (set-prop! "target-room"     "did:ma:runtime#kitchen")
+        (set-prop! "direction"       "north")
+        (set-prop! "locked"          "true")
+        (set-prop! "blocked-message" "The giant door won't budge.")
+        "#,
+        &env,
+    )
+    .unwrap();
+
+    let traversal_ctx = eval_all(
+        r#"(make-map "did" "did:ma:alice" "parent" "did:ma:runtime#room")"#,
+        &env,
+    )
+    .unwrap();
+    env.define(
+        Rc::from("msg"),
+        sample_msg(
+            "did:ma:alice",
+            "did:ma:runtime#north-exit",
+            Value::list(vec![Value::symbol(":traverse"), traversal_ctx]),
+        ),
+    );
+    eval_all("(on-message msg)", &env).unwrap();
+
+    // The refusal is narrated to the traveller as an in-world :say event,
+    // not an inbox message; the traverse reply stays the structured channel.
+    assert_eq!(
+        eval_str("(get-prop \"sent-target:1\")", &env),
+        "did:ma:alice"
+    );
+    assert_eq!(
+        eval_all("(car (get-prop \"sent-term:1\"))", &env).unwrap(),
+        Value::symbol(":say")
+    );
+    assert_eq!(
+        eval_all("(car (cdr (cdr (get-prop \"sent-term:1\"))))", &env).unwrap(),
+        Value::str("The giant door won't budge.")
+    );
+    // Still blocked at the source room.
+    assert_eq!(
+        eval_str(
+            "(ctx-text (car (cdr (get-prop \"reply-term:1\"))) \"parent\")",
+            &env
+        ),
+        "did:ma:runtime#room"
+    );
+}
+
+#[test]
 fn exit_traverse_rejects_caller_not_source_room_and_not_traveller() {
     let env = exit_env();
     let mut config = make_config("did:ma:runtime", "did:ma:runtime#north-exit");

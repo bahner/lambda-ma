@@ -156,8 +156,9 @@ that owns the exit may lock it: the room owner sends `:exit <direction> lock
 The stored secret lets a traveller unlock the exit with
 `:unlock <secret>` or pass straight through a locked exit by supplying it as
 the second `:traverse` argument (the avatar's `go <direction> <secret>`).
-Without the secret, a locked exit replies with its blocked message and keeps
-the traveller in the source room.
+Without the secret, a locked exit narrates the refusal to the traveller as an
+in-world `:say` event, replies with its blocked message, and keeps the
+traveller in the source room.
 
 ## Replies and events
 
