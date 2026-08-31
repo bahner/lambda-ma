@@ -679,6 +679,7 @@
     "  where? <thing>    ask where an occupant says it is\n"
     "  say <text>        speak here\n"
     "  emote <text>      act here\n"
+    "  narrate <text>    the room describes the scene (owner)\n"
     "  look <exit>       inspect an exit\n"
     "  :leave           stop being shown here until you return\n"
     "  :remove <who>     owner removes an occupant by unique nick or DID\n"
@@ -792,6 +793,17 @@
    ((owner-message? msg) (thunk))
         (else
          (reply-to-sender msg "Only this room's owner can transfer ownership."))))
+
+; Ambient narration is the room's own voice, so it uses the same owner gate
+; with narration-flavoured wording.
+(define (require-owner-narrate msg thunk)
+  (cond ((not (owned?))
+         (reply-error msg "This room is unowned. Claim it before narrating here."))
+   ((not (valid-owner? (owner)))
+    (reply-error msg "Owner must be a DID."))
+   ((owner-message? msg) (thunk))
+        (else
+         (reply-error msg "Only this room's owner can narrate here."))))
 
 ; Presence and room event handlers.
 (define (on-event event args msg)
@@ -1285,6 +1297,20 @@
             (broadcast-term (list :emote ctx text))
             (reply-ok msg))
           (reply-error msg "speaker has no event ctx")))))
+
+; Ambient room narration — the room's own voice, subject-less. The owner sets
+; the scene ("a cat walks past the doorway"); occupants still use :say and
+; :emote for themselves.
+(set-cmd-method! :narrate
+  (lambda (args msg)
+    (let ((text (join-words args)))
+      (require-owner-narrate msg
+        (lambda ()
+          (if (non-empty-string? text)
+              (begin
+                (broadcast-term (list :narrate text))
+                (reply-ok msg))
+              (reply-error msg "usage: :narrate <text>")))))))
 
 ; ── Ownership and room mutation methods ───────────────────────────────────
 

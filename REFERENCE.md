@@ -34,6 +34,7 @@ There is no identity entity. The bare controlling DID is `msg.from`.
 | room | `:enter [claim]` | Commits presence and replies with the DID ctx: `did`, `parent`, `name`, `nick`, `description`, and `rev`. |
 | room | `:look`, `:who?`, `:occupants?`, `:things?`, `:exits?` | Direct room presentation. |
 | room | `:say`, `:emote` | Broadcasts an in-world event to present DID identities. |
+| room | `:narrate <text>` | Owner-only ambient narration: the room itself broadcasts a subject-less in-world event. |
 | exit | `:traverse <{ did, parent }>` | Returns `{ did, parent, text, exit, direction }`; client follows with direct room entry. |
 | root | `:ctx?`, `:register` | Returns the runtime service ctx; `:register` subscribes `msg.from` and sends it the current ctx. |
 | root | `:enter?` | Unqualified-entry discovery: always replies with a ctx, `{ parent, rev }`, naming a room to enter. Defaults to the configured `start` room. |
@@ -168,8 +169,9 @@ structured values, validation, and errors. A room's `:look`, `:who?`,
 `:exits?`, and `:things?` responses are reply payloads, not print messages.
 
 Use `:print` only for world events. Rooms broadcast arrival, departure, speech,
-emotes, movement, and completed transfer narration to present bare DIDs. A
-technical bare `:ok` may acknowledge an action, but it is not narrative output.
+emotes, ambient narration, movement, and completed transfer narration to present
+bare DIDs. A technical bare `:ok` may acknowledge an action, but it is not
+narrative output.
 
 ## Build
 

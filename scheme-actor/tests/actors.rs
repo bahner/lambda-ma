@@ -508,6 +508,88 @@ fn room_emote_fails_for_speaker_without_event_ctx() {
     );
 }
 
+// ── Room `:narrate` ───────────────────────────────────────────────────────
+
+#[test]
+fn room_narrate_requires_owner_and_broadcasts() {
+    let env = room_env();
+    ma_scheme_actor::state::set_config(make_config("did:ma:runtime", "did:ma:runtime#room"));
+    eval_all(
+        r#"
+        (set-prop! "owner" "did:ma:alice")
+        (test-did-presence! "did:ma:bob"
+          (make-map "did" "did:ma:bob"
+                    "parent" "did:ma:runtime#room"
+                    "name" "Bob"
+                    "nick" "Bob"
+                    "description" "A visitor."
+                    "rev" 1))
+        "#,
+        &env,
+    )
+    .unwrap();
+
+    // A non-owner is refused before anything is broadcast.
+    env.define(
+        Rc::from("msg"),
+        sample_msg(
+            "did:ma:bob",
+            "did:ma:runtime#room",
+            Value::list(vec![
+                Value::symbol(":narrate"),
+                Value::str("a cat"),
+                Value::str("walks"),
+                Value::str("past"),
+            ]),
+        ),
+    );
+    eval_all("(on-message msg)", &env).unwrap();
+
+    assert_eq!(
+        eval_all("(get-prop \"sent-count\")", &env).unwrap(),
+        Value::Bool(false)
+    );
+    assert_eq!(
+        eval_all("(car (get-prop \"reply-term:1\"))", &env).unwrap(),
+        Value::symbol(":error")
+    );
+
+    // The owner's narration is broadcast subject-less to every child.
+    env.define(
+        Rc::from("narrate_msg"),
+        sample_msg(
+            "did:ma:alice",
+            "did:ma:runtime#room",
+            Value::list(vec![
+                Value::symbol(":narrate"),
+                Value::str("a cat"),
+                Value::str("walks"),
+                Value::str("past"),
+                Value::str("the"),
+                Value::str("doorway"),
+            ]),
+        ),
+    );
+    eval_all("(on-message narrate_msg)", &env).unwrap();
+
+    assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 1);
+    assert_eq!(eval_str("(get-prop \"sent-target:1\")", &env), "did:ma:bob");
+    assert_eq!(
+        eval_all("(car (get-prop \"sent-term:1\"))", &env).unwrap(),
+        Value::symbol(":narrate")
+    );
+    // The term is subject-less: just the verb and the joined text.
+    assert_eq!(
+        eval_str("(car (cdr (get-prop \"sent-term:1\")))", &env),
+        "a cat walks past the doorway"
+    );
+    // Reply is :ok.
+    assert_eq!(
+        eval_all("(get-prop \"reply-term:2\")", &env).unwrap(),
+        Value::symbol(":ok")
+    );
+}
+
 // ── Room `:where?` ────────────────────────────────────────────────────────
 
 #[test]

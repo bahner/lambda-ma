@@ -71,10 +71,10 @@ parent room with `:enter`.
 ## Replies and events
 
 Actor inspection and control use RPC replies. World narration uses `:print`:
-arrival, departure, speech, emotes, movement, and visible actor transfer are
-room broadcasts. A client-side command library may send direct room RPC, but it
-does not proxy commands or generate a second narrative for an acknowledged
-action.
+arrival, departure, speech, emotes, ambient room narration (`:narrate`), and
+movement and visible actor transfer are room broadcasts. A client-side command
+library may send direct room RPC, but it does not proxy commands or generate a
+second narrative for an acknowledged action.
 
 ## Ctx rules
 
