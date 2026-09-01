@@ -1037,6 +1037,80 @@ fn trigger_rule_narrates_to_scope_did_with_template() {
 }
 
 #[test]
+fn trigger_rule_scoped_to_explicit_did() {
+    let env = trigger_env();
+
+    // A rule scoped to one identity fires only when that DID's counter
+    // crosses the threshold; other DIDs' arrivals never touch its state.
+    let content = eval_all(
+        r#"(list :trigger "bob-2nd" :arrive "did" "did:ma:bob" "count" 2 :narrate_to
+             "Bob! Dette er ditt " (list :did-counter :arrive) ". besøk.")"#,
+        &env,
+    )
+    .unwrap();
+    env.define(
+        Rc::from("rule_msg"),
+        sample_msg("did:ma:alice", "did:ma:runtime#room", content),
+    );
+    eval_all("(on-message rule_msg)", &env).unwrap();
+    assert_eq!(
+        eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
+        Value::symbol(":ok")
+    );
+
+    let arrive = |did: &str, nick: &str| {
+        let ctx = eval_all(
+            &format!(
+                r#"(make-map "actor" "{}" "nick" "{}" "kind" "agent" "protocol" "/ma/agent/0.0.1")"#,
+                did, nick
+            ),
+            &env,
+        )
+        .unwrap();
+        sample_msg(
+            "did:ma:runtime#room",
+            "did:ma:runtime#room",
+            Value::list(vec![Value::symbol(":arrive"), ctx]),
+        )
+    };
+
+    // Alice arrives twice: the rule is scoped to Bob, so nothing fires.
+    env.define(Rc::from("a1"), arrive("did:ma:alice", "Alice"));
+    eval_all("(on-message a1)", &env).unwrap();
+    env.define(Rc::from("a2"), arrive("did:ma:alice", "Alice"));
+    eval_all("(on-message a2)", &env).unwrap();
+    assert_eq!(
+        eval_all("(get-prop \"sent-count\")", &env).unwrap(),
+        Value::Bool(false)
+    );
+
+    // Bob arrives once: no fire yet.
+    env.define(Rc::from("b1"), arrive("did:ma:bob", "Bob"));
+    eval_all("(on-message b1)", &env).unwrap();
+    assert_eq!(
+        eval_all("(get-prop \"sent-count\")", &env).unwrap(),
+        Value::Bool(false)
+    );
+
+    // Bob's second arrival crosses the threshold: the rule fires, targeted
+    // at Bob, with his own counter value rendered into the text.
+    env.define(Rc::from("b2"), arrive("did:ma:bob", "Bob"));
+    eval_all("(on-message b2)", &env).unwrap();
+    assert_eq!(
+        eval_str("(get-prop \"sent-target:1\")", &env),
+        "did:ma:runtime#room"
+    );
+    assert_eq!(
+        eval_all("(get-prop \"sent-term:1\")", &env).unwrap(),
+        Value::list(vec![
+            Value::symbol(":narrate-to"),
+            Value::str("did:ma:bob"),
+            Value::str("Bob! Dette er ditt 2. besøk.")
+        ])
+    );
+}
+
+#[test]
 fn trigger_automatically_counts_room_events() {
     let env = trigger_env();
     let bob_ctx = eval_all(
