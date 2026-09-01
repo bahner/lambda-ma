@@ -39,6 +39,20 @@ fn sample_msg(from: &str, to: &str, content: Value) -> Value {
     }))
 }
 
+fn sample_msg_at(from: &str, to: &str, content: Value, created_at: i64) -> Value {
+    Value::Msg(Rc::new(ma_scheme_actor::msg::MsgRecord {
+        id: "test-msg".to_string(),
+        from: from.to_string(),
+        to: to.to_string(),
+        created_at,
+        exp: 0,
+        reply_to: None,
+        msg_type: "application/vnd.ma.rpc.request".to_string(),
+        content_type: "application/vnd.ma.term".to_string(),
+        content,
+    }))
+}
+
 fn rpc_msg(from: &str, to: &str, verb: &str) -> Value {
     sample_msg(from, to, Value::symbol(verb))
 }
@@ -1200,6 +1214,194 @@ fn trigger_rejects_invalid_rule() {
         Value::symbol(":error")
     );
     assert_eq!(eval_int("(list-length (trigger-rules))", &env), 0);
+}
+
+#[test]
+fn trigger_rule_once_fires_only_first_time() {
+    let env = trigger_env();
+
+    // A once-rule fires on the first qualifying update and then never again,
+    // even when the counter keeps climbing.
+    let content = eval_all(
+        r#"(list :trigger "welcome" :arrive "once" :narrate_to
+             "Velkommen, " (list :did-name) "!")"#,
+        &env,
+    )
+    .unwrap();
+    env.define(
+        Rc::from("rule_msg"),
+        sample_msg("did:ma:alice", "did:ma:runtime#room", content),
+    );
+    eval_all("(on-message rule_msg)", &env).unwrap();
+
+    let arrive = |did: &str, nick: &str| {
+        let ctx = eval_all(
+            &format!(
+                r#"(make-map "actor" "{}" "nick" "{}" "kind" "agent" "protocol" "/ma/agent/0.0.1")"#,
+                did, nick
+            ),
+            &env,
+        )
+        .unwrap();
+        sample_msg(
+            "did:ma:runtime#room",
+            "did:ma:runtime#room",
+            Value::list(vec![Value::symbol(":arrive"), ctx]),
+        )
+    };
+
+    // First arrival fires once.
+    env.define(Rc::from("a1"), arrive("did:ma:bob", "Bob"));
+    eval_all("(on-message a1)", &env).unwrap();
+    assert_eq!(
+        eval_all("(get-prop \"sent-term:1\")", &env).unwrap(),
+        Value::list(vec![
+            Value::symbol(":narrate-to"),
+            Value::str("did:ma:bob"),
+            Value::str("Velkommen, Bob!")
+        ])
+    );
+
+    // Second arrival: the rule has already fired, so it stays silent.
+    env.define(Rc::from("a2"), arrive("did:ma:bob", "Bob"));
+    eval_all("(on-message a2)", &env).unwrap();
+    assert_eq!(
+        eval_all("(get-prop \"sent-count\")", &env).unwrap(),
+        Value::Int(1)
+    );
+}
+
+#[test]
+fn trigger_rule_within_fires_on_simultaneous_updates() {
+    let env = trigger_env();
+
+    // Two different DIDs updating the same counter within 5 seconds is the
+    // "talking at once" case: the second update fires.
+    let content = eval_all(
+        r#"(list :trigger "overlap" :arrive "within" 5 :narrate "To på en gang!")"#,
+        &env,
+    )
+    .unwrap();
+    env.define(
+        Rc::from("rule_msg"),
+        sample_msg("did:ma:alice", "did:ma:runtime#room", content),
+    );
+    eval_all("(on-message rule_msg)", &env).unwrap();
+
+    let arrive_at = |did: &str, nick: &str, at: i64| {
+        let ctx = eval_all(
+            &format!(
+                r#"(make-map "actor" "{}" "nick" "{}" "kind" "agent" "protocol" "/ma/agent/0.0.1")"#,
+                did, nick
+            ),
+            &env,
+        )
+        .unwrap();
+        sample_msg_at(
+            "did:ma:runtime#room",
+            "did:ma:runtime#room",
+            Value::list(vec![Value::symbol(":arrive"), ctx]),
+            at,
+        )
+    };
+
+    // Alice arrives at t=1 — no overlap yet.
+    env.define(Rc::from("a1"), arrive_at("did:ma:alice", "Alice", 1));
+    eval_all("(on-message a1)", &env).unwrap();
+    assert_eq!(
+        eval_all("(get-prop \"sent-count\")", &env).unwrap(),
+        Value::Bool(false)
+    );
+
+    // Bob arrives at t=3 — within 5s of Alice's update: fires.
+    env.define(Rc::from("b1"), arrive_at("did:ma:bob", "Bob", 3));
+    eval_all("(on-message b1)", &env).unwrap();
+    assert_eq!(
+        eval_all("(get-prop \"sent-term:1\")", &env).unwrap(),
+        Value::list(vec![
+            Value::symbol(":narrate"),
+            Value::str("To på en gang!")
+        ])
+    );
+
+    // Carol arrives at t=30 — long after the last update: no fire.
+    env.define(Rc::from("c1"), arrive_at("did:ma:carol", "Carol", 30));
+    eval_all("(on-message c1)", &env).unwrap();
+    assert_eq!(
+        eval_all("(get-prop \"sent-count\")", &env).unwrap(),
+        Value::Int(1)
+    );
+}
+
+#[test]
+fn trigger_rule_removal_and_listing() {
+    let env = trigger_env();
+
+    // Install two rules; the owner can list them all.
+    let install = |id: &str| {
+        let content = eval_all(
+            &format!(
+                r#"(list :trigger "{}" :arrive "once" :narrate "regel {}")"#,
+                id, id
+            ),
+            &env,
+        )
+        .unwrap();
+        sample_msg("did:ma:alice", "did:ma:runtime#room", content)
+    };
+
+    env.define(Rc::from("r1"), install("one"));
+    eval_all("(on-message r1)", &env).unwrap();
+    env.define(Rc::from("r2"), install("two"));
+    eval_all("(on-message r2)", &env).unwrap();
+    assert_eq!(eval_int("(list-length (trigger-rules))", &env), 2);
+
+    env.define(
+        Rc::from("list_msg"),
+        sample_msg(
+            "did:ma:alice",
+            "did:ma:runtime#room",
+            Value::list(vec![Value::symbol(":triggers")]),
+        ),
+    );
+    eval_all("(on-message list_msg)", &env).unwrap();
+    let reply = eval_all("(car (cdr (get-prop \"reply-term:3\")))", &env).unwrap();
+    env.define(Rc::from("rules"), reply);
+    assert_eq!(
+        eval_all("(list-length rules)", &env).unwrap(),
+        Value::Int(2)
+    );
+
+    // A non-owner may not list triggers.
+    env.define(
+        Rc::from("evil_msg"),
+        sample_msg(
+            "did:ma:bob",
+            "did:ma:runtime#room",
+            Value::list(vec![Value::symbol(":triggers")]),
+        ),
+    );
+    eval_all("(on-message evil_msg)", &env).unwrap();
+    assert_eq!(
+        eval_all("(car (get-prop \"reply-term:4\"))", &env).unwrap(),
+        Value::symbol(":error")
+    );
+
+    // Remove one rule by id: the rule and its state are gone.
+    env.define(
+        Rc::from("rm_msg"),
+        sample_msg(
+            "did:ma:alice",
+            "did:ma:runtime#room",
+            Value::list(vec![Value::symbol(":trigger"), Value::str("one")]),
+        ),
+    );
+    eval_all("(on-message rm_msg)", &env).unwrap();
+    assert_eq!(eval_int("(list-length (trigger-rules))", &env), 1);
+    assert_eq!(
+        eval_all("(map-has-key? (trigger-state) \"one\")", &env).unwrap(),
+        Value::Bool(false)
+    );
 }
 
 // ── Room `:where?` ────────────────────────────────────────────────────────
