@@ -989,8 +989,8 @@ fn trigger_rule_narrates_to_scope_did_with_template() {
     // with the counter value and name substituted into the text.
     let content = eval_all(
         r#"(list :trigger "salute" :arrive "every" 2 :narrate_to
-             "Velkommen" "tilbake," (list :string-append (list :did-name) "!")
-             "Du" "har" "vært" "her" (list :did-counter :arrive) "ganger.")"#,
+             "Velkommen tilbake, " (list :did-name) "! Du har vært her "
+             (list :did-counter :arrive) " ganger.")"#,
         &env,
     )
     .unwrap();

@@ -204,14 +204,14 @@
 ; side-effect-free vocabulary; no eval is available in ma-scheme, so the
 ; grammar is deliberately bounded. Malformed rules are rejected at setup.
 
-; The action text is a flat list of words: literal strings and expression
-; forms. Words are rendered (spans evaluated against the bindings) and joined
-; with single spaces.
+; The action text is a list of parts: literal strings (carrying their own
+; spacing and punctuation) and expression forms. Parts render at fire time
+; (spans evaluated against the bindings) and are concatenated, so prose like
+; "…room, " (:did-name) "!" glues naturally.
 (define (render-words words bindings)
   (cond ((null? words) "")
         ((null? (cdr words)) (render-word (car words) bindings))
         (else (string-append (render-word (car words) bindings)
-                             " "
                              (render-words (cdr words) bindings)))))
 
 (define (render-word word bindings)
@@ -221,10 +221,13 @@
                  ((pair? word) (eval-expr word bindings))
                  (else ""))))
 
+(define (form-head-symbol head)
+  (if (symbol? head) head (string->symbol head)))
+
 (define (eval-expr form bindings)
-  (if (not (and (pair? form) (symbol? (car form))))
+  (if (not (and (pair? form) (or (symbol? (car form)) (string? (car form)))))
       ""
-      (let ((fn (car form))
+      (let ((fn (form-head-symbol (car form)))
             (args (cdr form)))
         (cond
           ((equal? fn :did) (binding-get bindings "did"))
@@ -397,8 +400,8 @@
 
 (define (valid-expr? form)
   (and (pair? form)
-       (symbol? (car form))
-       (known-fn? (car form))
+       (or (symbol? (car form)) (string? (car form)))
+       (known-fn? (form-head-symbol (car form)))
        (valid-args? (cdr form))))
 
 (define (valid-args? args)

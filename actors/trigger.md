@@ -121,11 +121,14 @@ room's own counter it is the actor whose update caused the fire (the causer).
 
 ## Template expressions
 
-The `<text...>` is a flat word list: literal strings and expression forms
-`(:fn arg ...)`. Words render at fire time (spans evaluated against the
-concerning DID) and are joined with single spaces. The expression vocabulary
-is closed and side-effect-free (ma-scheme deliberately has no `eval`, so the
-grammar is bounded and structurally validated at setup).
+The `<text...>` is a list of parts: literal strings (carrying their own
+spacing and punctuation) and expression forms `(:fn arg ...)`. Parts render
+at fire time (spans evaluated against the concerning DID) and are
+**concatenated**, so prose like `"…room, " (:did-name) "!"` glues naturally.
+The expression vocabulary is closed and side-effect-free (ma-scheme
+deliberately has no `eval`, so the grammar is bounded and structurally
+validated at setup). Zion never evaluates the text — it only translates the
+human prose-with-spans into parts; the actor has the counters.
 
 | Binding | Meaning |
 | --- | --- |
@@ -145,8 +148,14 @@ Example (automatic counters use the room's event names verbatim, so an
 arrival is `:arrive`):
 
 ```
-:trigger farvel :arrive every 10 :narrate_to
-  "Kjære" (:did-name) "du" "har" "vært" "her" (:did-counter :arrive) "ganger."
+:trigger enter-1 :arrive once :narrate_to
+  "This is the first time you enter this room, " (:did-name) "!"
+```
+
+fires on the first arrival and sends to the room:
+
+```
+(:narrate-to <did> "This is the first time you enter this room, Lars!")
 ```
 
 `:trigger` validates the rule immediately: spans are checked against the known
