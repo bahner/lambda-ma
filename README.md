@@ -14,6 +14,7 @@ map; agents, things, and containers use full DID-URLs as their child keys.
 actors/root.ma          local trust anchor and runtime service directory
 actors/room.ma          room presence, exits, presentation, and room policy
 actors/exit.ma          direct DID traversal policy
+actors/trigger.md       trigger actor protocol — per-DID counters and narration rules
 kinds/                  kinds used by the generated bootstrap
 scheme-actor/           Scheme layers and the Wasm actor host
 Makefile                publishes sources and generates dist/lambda-ma.yaml

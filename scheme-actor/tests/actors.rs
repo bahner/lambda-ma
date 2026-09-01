@@ -590,6 +590,511 @@ fn room_narrate_requires_owner_and_broadcasts() {
     );
 }
 
+#[test]
+fn room_narrate_to_targets_one_child() {
+    let env = room_env();
+    ma_scheme_actor::state::set_config(make_config("did:ma:runtime", "did:ma:runtime#room"));
+    eval_all(
+        r#"
+        (set-prop! "owner" "did:ma:alice")
+        (test-did-presence! "did:ma:bob"
+          (make-map "did" "did:ma:bob"
+                    "parent" "did:ma:runtime#room"
+                    "name" "Bob"
+                    "nick" "Bob"
+                    "description" "A visitor."
+                    "rev" 1))
+        (test-agent-claim! "did:ma:runtime#duckie" "Duckie")
+        "#,
+        &env,
+    )
+    .unwrap();
+
+    env.define(
+        Rc::from("msg"),
+        sample_msg(
+            "did:ma:alice",
+            "did:ma:runtime#room",
+            Value::list(vec![
+                Value::symbol(":narrate-to"),
+                Value::str("did:ma:bob"),
+                Value::str("you"),
+                Value::str("hear"),
+                Value::str("a"),
+                Value::str("creak"),
+            ]),
+        ),
+    );
+    eval_all("(on-message msg)", &env).unwrap();
+
+    // Exactly one send, to the target only, with the subject-less :narrate event.
+    assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 1);
+    assert_eq!(eval_str("(get-prop \"sent-target:1\")", &env), "did:ma:bob");
+    assert_eq!(
+        eval_all("(get-prop \"sent-term:1\")", &env).unwrap(),
+        Value::list(vec![
+            Value::symbol(":narrate"),
+            Value::str("you hear a creak")
+        ])
+    );
+    assert_eq!(
+        eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
+        Value::symbol(":ok")
+    );
+}
+
+#[test]
+fn room_narrate_accepts_only_designated_trigger() {
+    let env = room_env();
+    ma_scheme_actor::state::set_config(make_config("did:ma:runtime", "did:ma:runtime#room"));
+    eval_all(
+        r#"
+        (set-prop! "owner" "did:ma:alice")
+        (set-prop! "trigger" "did:ma:runtime#trigger")
+        (test-agent-claim! "did:ma:runtime#trigger" "Trigger")
+        (test-agent-claim! "did:ma:runtime#impostor" "Impostor")
+        "#,
+        &env,
+    )
+    .unwrap();
+
+    // A forged trigger-kind child that is not the designated one is refused.
+    env.define(
+        Rc::from("bad_msg"),
+        sample_msg(
+            "did:ma:runtime#impostor",
+            "did:ma:runtime#room",
+            Value::list(vec![Value::symbol(":narrate"), Value::str("fake")]),
+        ),
+    );
+    eval_all("(on-message bad_msg)", &env).unwrap();
+    assert_eq!(
+        eval_all("(car (get-prop \"reply-term:1\"))", &env).unwrap(),
+        Value::symbol(":error")
+    );
+
+    // The designated trigger may narrate (broadcast to both children).
+    env.define(
+        Rc::from("msg"),
+        sample_msg(
+            "did:ma:runtime#trigger",
+            "did:ma:runtime#room",
+            Value::list(vec![
+                Value::symbol(":narrate"),
+                Value::str("the cat walks past"),
+            ]),
+        ),
+    );
+    eval_all("(on-message msg)", &env).unwrap();
+    assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 2);
+    assert_eq!(
+        eval_all("(get-prop \"sent-term:1\")", &env).unwrap(),
+        Value::list(vec![
+            Value::symbol(":narrate"),
+            Value::str("the cat walks past")
+        ])
+    );
+    assert_eq!(
+        eval_all("(get-prop \"reply-term:2\")", &env).unwrap(),
+        Value::symbol(":ok")
+    );
+}
+
+#[test]
+fn room_narrate_accepts_scheduler() {
+    let env = room_env();
+    ma_scheme_actor::state::set_config(make_config("did:ma:runtime", "did:ma:runtime#room"));
+    eval_all(r#"(set-prop! "owner" "did:ma:alice")"#, &env).unwrap();
+
+    // The runtime scheduler may narrate (time-based narration); no children, no sends.
+    env.define(
+        Rc::from("msg"),
+        sample_msg(
+            "did:ma:runtime#scheduler",
+            "did:ma:runtime#room",
+            Value::list(vec![
+                Value::symbol(":narrate"),
+                Value::str("the wind howls"),
+            ]),
+        ),
+    );
+    eval_all("(on-message msg)", &env).unwrap();
+    assert_eq!(
+        eval_all("(get-prop \"sent-count\")", &env).unwrap(),
+        Value::Bool(false)
+    );
+    assert_eq!(
+        eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
+        Value::symbol(":ok")
+    );
+}
+
+#[test]
+fn room_trigger_reports_designated_trigger() {
+    let env = room_env();
+    ma_scheme_actor::state::set_config(make_config("did:ma:runtime", "did:ma:runtime#room"));
+    eval_all(r#"(set-prop! "trigger" "did:ma:runtime#trigger")"#, &env).unwrap();
+
+    env.define(
+        Rc::from("msg"),
+        sample_msg(
+            "did:ma:bob",
+            "did:ma:runtime#room",
+            Value::symbol(":trigger?"),
+        ),
+    );
+    eval_all("(on-message msg)", &env).unwrap();
+    assert_eq!(
+        eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
+        Value::list(vec![
+            Value::symbol(":ok"),
+            Value::str("did:ma:runtime#trigger")
+        ])
+    );
+}
+
+// ── Trigger actor ──────────────────────────────────────────────────────────
+
+fn trigger_env() -> Rc<ma_scheme_actor::env::Env> {
+    ma_scheme_actor::state::load_from_cbor(&empty_state_cbor()).unwrap();
+    let env = new_root_env();
+    ma_scheme_actor::state::install(&env);
+    ma_scheme_actor::msg::install(&env);
+    eval_all(include_str!("../stdlib.ma"), &env).unwrap();
+    eval_all(include_str!("../actor.ma"), &env).unwrap();
+    eval_all(include_str!("../state.ma"), &env).unwrap();
+    eval_all(include_str!("../node.ma"), &env).unwrap();
+    eval_all(include_str!("../../actors/trigger.ma"), &env).unwrap();
+    eval_all(
+        r#"
+        (define (ma-send! target term)
+          (inc-prop! "sent-count" 1)
+          (set-prop! (string-append "sent-target:" (number->string (get-prop "sent-count"))) target)
+          (set-prop! (string-append "sent-term:" (number->string (get-prop "sent-count"))) term))
+        (define (ma-reply! msg term)
+          (inc-prop! "reply-count" 1)
+          (set-prop! (string-append "reply-term:" (number->string (get-prop "reply-count"))) term))
+        (define (ma-save-state!) #f)
+        (define (test-trigger-env!)
+          (set-prop! "parent" "did:ma:runtime#room")
+          (set-prop! "owner" "did:ma:alice")
+          (set-prop! "parent-ctx"
+            (make-map "children"
+              (make-map
+                "did:ma:alice" (make-map "actor" "did:ma:alice" "nick" "Alice" "name" "Alice" "kind" "agent" "protocol" "/ma/agent/0.0.1")
+                "did:ma:bob" (make-map "actor" "did:ma:bob" "nick" "Bob" "name" "Bob" "kind" "agent" "protocol" "/ma/agent/0.0.1")))))
+        "#,
+        &env,
+    )
+    .unwrap();
+    eval_all("(test-trigger-env!)", &env).unwrap();
+    env
+}
+
+fn count_msg(
+    env: &Rc<ma_scheme_actor::env::Env>,
+    from: &str,
+    did: &str,
+    name: &str,
+    delta: i64,
+) -> Value {
+    let _ = env;
+    sample_msg(
+        from,
+        "did:ma:runtime#room",
+        Value::list(vec![
+            Value::symbol(":count"),
+            Value::str(did),
+            Value::str(name),
+            Value::Int(delta),
+        ]),
+    )
+}
+
+#[test]
+fn trigger_count_self_and_owner_manage_counters() {
+    let env = trigger_env();
+
+    // Bob counts his own jokes (self-authorised).
+    env.define(
+        Rc::from("msg"),
+        count_msg(&env, "did:ma:bob", "did:ma:bob", "num_jokes", 1),
+    );
+    eval_all("(on-message msg)", &env).unwrap();
+    assert_eq!(
+        eval_int("(counter-value \"did:ma:bob\" \"num_jokes\")", &env),
+        1
+    );
+
+    // The owner sets an absolute value (override).
+    env.define(
+        Rc::from("set_msg"),
+        sample_msg(
+            "did:ma:alice",
+            "did:ma:runtime#room",
+            Value::list(vec![
+                Value::symbol(":set"),
+                Value::str("did:ma:bob"),
+                Value::str("karma_points"),
+                Value::Int(200),
+            ]),
+        ),
+    );
+    eval_all("(on-message set_msg)", &env).unwrap();
+    assert_eq!(
+        eval_int("(counter-value \"did:ma:bob\" \"karma_points\")", &env),
+        200
+    );
+
+    // A negative delta on the owner's behalf adjusts down.
+    env.define(
+        Rc::from("adjust_msg"),
+        count_msg(&env, "did:ma:alice", "did:ma:bob", "karma_points", -500),
+    );
+    eval_all("(on-message adjust_msg)", &env).unwrap();
+    assert_eq!(
+        eval_int("(counter-value \"did:ma:bob\" \"karma_points\")", &env),
+        -300
+    );
+
+    // Self-reset.
+    env.define(
+        Rc::from("reset_msg"),
+        sample_msg(
+            "did:ma:bob",
+            "did:ma:runtime#room",
+            Value::list(vec![
+                Value::symbol(":reset"),
+                Value::str("did:ma:bob"),
+                Value::str("num_jokes"),
+            ]),
+        ),
+    );
+    eval_all("(on-message reset_msg)", &env).unwrap();
+    assert_eq!(
+        eval_int("(counter-value \"did:ma:bob\" \"num_jokes\")", &env),
+        0
+    );
+
+    // The full counter map is queryable by any room child.
+    env.define(
+        Rc::from("query_msg"),
+        sample_msg(
+            "did:ma:bob",
+            "did:ma:runtime#room",
+            Value::list(vec![Value::symbol(":counters")]),
+        ),
+    );
+    eval_all("(on-message query_msg)", &env).unwrap();
+    let reply = eval_all("(car (cdr (get-prop \"reply-term:5\")))", &env).unwrap();
+    let expected = eval_all(
+        r#"(make-map "did:ma:bob" (make-map "karma_points" -300))"#,
+        &env,
+    )
+    .unwrap();
+    assert_eq!(reply, expected);
+}
+
+#[test]
+fn trigger_room_counter_accepts_any_present_child() {
+    let env = trigger_env();
+
+    // Bob (present in the room) increments the room's own shared counter.
+    env.define(
+        Rc::from("msg"),
+        count_msg(&env, "did:ma:bob", "did:ma:runtime#room", "visits", 1),
+    );
+    eval_all("(on-message msg)", &env).unwrap();
+    assert_eq!(
+        eval_int("(counter-value \"did:ma:runtime#room\" \"visits\")", &env),
+        1
+    );
+}
+
+#[test]
+fn trigger_rejects_unauthorised_count() {
+    let env = trigger_env();
+
+    // A stranger who is not a child, not the owner, and not the did itself.
+    env.define(
+        Rc::from("msg"),
+        count_msg(&env, "did:ma:mallory", "did:ma:bob", "num_jokes", 1),
+    );
+    eval_all("(on-message msg)", &env).unwrap();
+    assert_eq!(
+        eval_int("(counter-value \"did:ma:bob\" \"num_jokes\")", &env),
+        0
+    );
+    assert_eq!(
+        eval_all("(car (get-prop \"reply-term:1\"))", &env).unwrap(),
+        Value::symbol(":error")
+    );
+}
+
+#[test]
+fn trigger_rule_narrates_on_count_threshold() {
+    let env = trigger_env();
+
+    // The owner installs a rule: on "num_jokes" count 2 → narrate.
+    eval_all(
+        r#"
+        (define joke-rule
+          (make-map "id" "joke-2"
+                    "on" "num_jokes"
+                    "count" 2
+                    "narrate" "To vitser! Haha."))
+        "#,
+        &env,
+    )
+    .unwrap();
+    let content = eval_all("(list :trigger joke-rule)", &env).unwrap();
+    env.define(
+        Rc::from("rule_msg"),
+        sample_msg("did:ma:alice", "did:ma:runtime#room", content),
+    );
+    eval_all("(on-message rule_msg)", &env).unwrap();
+    assert_eq!(
+        eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
+        Value::symbol(":ok")
+    );
+
+    // One joke: no fire yet.
+    env.define(
+        Rc::from("c1"),
+        count_msg(&env, "did:ma:bob", "did:ma:bob", "num_jokes", 1),
+    );
+    eval_all("(on-message c1)", &env).unwrap();
+    assert_eq!(
+        eval_all("(get-prop \"sent-count\")", &env).unwrap(),
+        Value::Bool(false)
+    );
+
+    // Two jokes: the rule fires a room-wide narration.
+    env.define(
+        Rc::from("c2"),
+        count_msg(&env, "did:ma:bob", "did:ma:bob", "num_jokes", 1),
+    );
+    eval_all("(on-message c2)", &env).unwrap();
+    assert_eq!(
+        eval_str("(get-prop \"sent-target:1\")", &env),
+        "did:ma:runtime#room"
+    );
+    assert_eq!(
+        eval_all("(get-prop \"sent-term:1\")", &env).unwrap(),
+        Value::list(vec![
+            Value::symbol(":narrate"),
+            Value::str("To vitser! Haha.")
+        ])
+    );
+}
+
+#[test]
+fn trigger_rule_narrates_to_scope_did_with_template() {
+    let env = trigger_env();
+
+    // Per-identity rule: every 2nd arrival salutes the arriver personally,
+    // with the counter value and name substituted into the text.
+    eval_all(
+        r#"
+        (define salute-rule
+          (make-map "id" "salute"
+                    "on" ":arrive"
+                    "every" 2
+                    "narrate-to" (list "Velkommen tilbake, " (list :did-name) "! Du har vært her " (list :did-counter ":arrive") " ganger.")))
+        "#,
+        &env,
+    )
+    .unwrap();
+    let content = eval_all("(list :trigger salute-rule)", &env).unwrap();
+    env.define(
+        Rc::from("rule_msg"),
+        sample_msg("did:ma:alice", "did:ma:runtime#room", content),
+    );
+    eval_all("(on-message rule_msg)", &env).unwrap();
+
+    let alice_ctx = eval_all(
+        r#"(make-map "actor" "did:ma:alice" "nick" "Alice" "kind" "agent" "protocol" "/ma/agent/0.0.1")"#,
+        &env,
+    )
+    .unwrap();
+    let arrive = || {
+        sample_msg(
+            "did:ma:runtime#room",
+            "did:ma:runtime#room",
+            Value::list(vec![Value::symbol(":arrive"), alice_ctx.clone()]),
+        )
+    };
+
+    env.define(Rc::from("a1"), arrive());
+    eval_all("(on-message a1)", &env).unwrap();
+    assert_eq!(
+        eval_all("(get-prop \"sent-count\")", &env).unwrap(),
+        Value::Bool(false)
+    );
+
+    env.define(Rc::from("a2"), arrive());
+    eval_all("(on-message a2)", &env).unwrap();
+    assert_eq!(
+        eval_str("(get-prop \"sent-target:1\")", &env),
+        "did:ma:runtime#room"
+    );
+    assert_eq!(
+        eval_all("(get-prop \"sent-term:1\")", &env).unwrap(),
+        Value::list(vec![
+            Value::symbol(":narrate-to"),
+            Value::str("did:ma:alice"),
+            Value::str("Velkommen tilbake, Alice! Du har vært her 2 ganger.")
+        ])
+    );
+}
+
+#[test]
+fn trigger_automatically_counts_room_events() {
+    let env = trigger_env();
+    let bob_ctx = eval_all(
+        r#"(make-map "actor" "did:ma:bob" "nick" "Bob" "kind" "agent" "protocol" "/ma/agent/0.0.1")"#,
+        &env,
+    )
+    .unwrap();
+
+    env.define(
+        Rc::from("say_msg"),
+        sample_msg(
+            "did:ma:runtime#room",
+            "did:ma:runtime#room",
+            Value::list(vec![Value::symbol(":say"), bob_ctx, Value::str("hello")]),
+        ),
+    );
+    eval_all("(on-message say_msg)", &env).unwrap();
+    assert_eq!(eval_int("(counter-value \"did:ma:bob\" \":say\")", &env), 1);
+}
+
+#[test]
+fn trigger_rejects_invalid_rule() {
+    let env = trigger_env();
+
+    // A rule with an unknown template function must be rejected at setup.
+    eval_all(
+        r#"
+        (define bad-rule
+          (make-map "id" "bad" "on" "x" "count" 3 "narrate" (list :bogus)))
+        "#,
+        &env,
+    )
+    .unwrap();
+    let content = eval_all("(list :trigger bad-rule)", &env).unwrap();
+    env.define(
+        Rc::from("rule_msg"),
+        sample_msg("did:ma:alice", "did:ma:runtime#room", content),
+    );
+    eval_all("(on-message rule_msg)", &env).unwrap();
+    assert_eq!(
+        eval_all("(car (get-prop \"reply-term:1\"))", &env).unwrap(),
+        Value::symbol(":error")
+    );
+    assert_eq!(eval_int("(list-length (trigger-rules))", &env), 0);
+}
+
 // ── Room `:where?` ────────────────────────────────────────────────────────
 
 #[test]

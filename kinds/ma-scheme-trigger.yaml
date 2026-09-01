@@ -1,0 +1,4 @@
+protocol: /ma/trigger/0.0.1
+extends: /ma/node/0.0.1
+behaviour:
+  "/": __TRIGGER_BEHAVIOUR_CID__

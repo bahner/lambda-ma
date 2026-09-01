@@ -679,7 +679,8 @@
     "  where? <thing>    ask where an occupant says it is\n"
     "  say <text>        speak here\n"
     "  emote <text>      act here\n"
-    "  narrate <text>    the room describes the scene (owner)\n"
+    "  narrate <text>    the room describes the scene (owner/scheduler/trigger)\n"
+    "  :narrate-to <did> <text>  narrate to one child (owner/scheduler/trigger)\n"
     "  look <exit>       inspect an exit\n"
     "  :leave           stop being shown here until you return\n"
     "  :remove <who>     owner removes an occupant by unique nick or DID\n"
@@ -794,16 +795,16 @@
         (else
          (reply-to-sender msg "Only this room's owner can transfer ownership."))))
 
-; Ambient narration is the room's own voice, so it uses the same owner gate
-; with narration-flavoured wording.
-(define (require-owner-narrate msg thunk)
-  (cond ((not (owned?))
-         (reply-error msg "This room is unowned. Claim it before narrating here."))
-   ((not (valid-owner? (owner)))
-    (reply-error msg "Owner must be a DID."))
-   ((owner-message? msg) (thunk))
-        (else
-         (reply-error msg "Only this room's owner can narrate here."))))
+; The room's voice gate: the room owner, the runtime scheduler (for
+; time-based narration), or the designated trigger actor (the `trigger` prop),
+; provided it is still present as a child. Designation-based, never name-based.
+(define (narrate-authorised? msg)
+  (let ((trigger (get-prop "trigger")))
+    (or (owner-message? msg)
+        (same-actor? (msg-from msg) (entity-url "scheduler"))
+        (and (non-empty-string? trigger)
+             (same-actor? (msg-from msg) trigger)
+             (map? (child-ctx trigger))))))
 
 ; Presence and room event handlers.
 (define (on-event event args msg)
@@ -1298,19 +1299,44 @@
             (reply-ok msg))
           (reply-error msg "speaker has no event ctx")))))
 
-; Ambient room narration — the room's own voice, subject-less. The owner sets
-; the scene ("a cat walks past the doorway"); occupants still use :say and
-; :emote for themselves.
+; Ambient room narration — the room's own voice, subject-less. The owner,
+; scheduler, or designated trigger sets the scene ("a cat walks past the
+; doorway"); occupants still use :say and :emote for themselves.
 (set-cmd-method! :narrate
   (lambda (args msg)
     (let ((text (join-words args)))
-      (require-owner-narrate msg
-        (lambda ()
-          (if (non-empty-string? text)
-              (begin
-                (broadcast-term (list :narrate text))
-                (reply-ok msg))
-              (reply-error msg "usage: :narrate <text>")))))))
+      (cond ((not (narrate-authorised? msg))
+             (reply-error msg "not authorised to narrate here"))
+            ((non-empty-string? text)
+             (begin
+               (broadcast-term (list :narrate text))
+               (reply-ok msg)))
+            (else
+             (reply-error msg "usage: :narrate <text>"))))))
+
+; Targeted narration: the same subject-less event, delivered to one child only.
+(set-cmd-method! :narrate-to
+  (lambda (args msg)
+    (let ((target (if (pair? args) (canonical-actor (car args)) #f))
+          (text (join-words (if (pair? args) (cdr args) '()))))
+      (cond ((not (narrate-authorised? msg))
+             (reply-error msg "not authorised to narrate here"))
+            ((not (non-empty-string? target))
+             (reply-error msg "usage: :narrate-to <did> <words...>"))
+            ((not (map? (child-ctx target)))
+             (reply-error msg "no such child in this room"))
+            ((non-empty-string? text)
+             (begin
+               (ma-send! target (list :narrate text))
+               (reply-ok msg)))
+            (else
+             (reply-error msg "usage: :narrate-to <did> <words...>"))))))
+
+; The designated trigger actor, for avatar-side trigger management.
+(set-rpc-method! :trigger?
+  (lambda (args msg)
+    (let ((trigger (get-prop "trigger")))
+      (reply-ok-with msg (if (non-empty-string? trigger) trigger "none")))))
 
 ; ── Ownership and room mutation methods ───────────────────────────────────
 
