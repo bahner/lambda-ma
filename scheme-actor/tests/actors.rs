@@ -1111,6 +1111,55 @@ fn trigger_rule_scoped_to_explicit_did() {
 }
 
 #[test]
+fn trigger_public_counter_functions() {
+    let env = trigger_env();
+
+    // Direct, codeable counter manipulation — no wire verb, no authorisation
+    // gate; bespoke behaviour code is trusted.
+    eval_all(r#"(trigger-count "num_jokes" "did:ma:bob" 2 #f)"#, &env).unwrap();
+    assert_eq!(
+        eval_int("(counter-value \"did:ma:bob\" \"num_jokes\")", &env),
+        2
+    );
+    eval_all(r#"(trigger-set "karma_points" "did:ma:bob" 200 #f)"#, &env).unwrap();
+    assert_eq!(
+        eval_int("(counter-value \"did:ma:bob\" \"karma_points\")", &env),
+        200
+    );
+    eval_all(r#"(trigger-reset! "num_jokes" "did:ma:bob")"#, &env).unwrap();
+    assert_eq!(
+        eval_int("(counter-value \"did:ma:bob\" \"num_jokes\")", &env),
+        0
+    );
+
+    // A rule watching the counter fires when a direct count crosses it.
+    let content = eval_all(
+        r#"(list :trigger "joke-1" "num_jokes" "count" 1 :narrate "En vits!")"#,
+        &env,
+    )
+    .unwrap();
+    env.define(
+        Rc::from("rule_msg"),
+        sample_msg("did:ma:alice", "did:ma:runtime#room", content),
+    );
+    eval_all("(on-message rule_msg)", &env).unwrap();
+
+    env.define(
+        Rc::from("m"),
+        sample_msg(
+            "did:ma:bob",
+            "did:ma:runtime#room",
+            Value::symbol(":anything"),
+        ),
+    );
+    eval_all(r#"(trigger-count "num_jokes" "did:ma:bob" 1 m)"#, &env).unwrap();
+    assert_eq!(
+        eval_all("(get-prop \"sent-term:1\")", &env).unwrap(),
+        Value::list(vec![Value::symbol(":narrate"), Value::str("En vits!")])
+    );
+}
+
+#[test]
 fn trigger_automatically_counts_room_events() {
     let env = trigger_env();
     let bob_ctx = eval_all(

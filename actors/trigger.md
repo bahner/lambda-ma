@@ -68,6 +68,24 @@ prop "trigger-state" → { <trigger-id>: { <did>: { last-value, fired-at } } }
 The room owner is verified by asking the parent room `:owner?`; the answer is
 cached in the trigger actor's state.
 
+### Codeable Scheme API
+
+The wire verbs are thin wrappers over the same codeable Scheme functions,
+which bespoke trigger behaviour can call directly (composed after
+`trigger.ma`). Every call funnels through `trigger-count`, so a direct
+update evaluates rules exactly like a wire verb:
+
+| Function | Effect |
+| --- | --- |
+| `(trigger-count <counter> <did> <delta> <msg>)` | Add `delta` (positive or negative) to `counters[<did>][<counter>]`, evaluate rules, record the last updater. |
+| `(trigger-set <counter> <did> <value> <msg>)` | Set an absolute value (override a false or unfair value). |
+| `(trigger-reset! <counter> <did>)` | Delete / zero the counter. |
+
+`<msg>` is the message that caused the update: its timestamp is "now" and
+its sender is the causer when the key is the room's own counter. There is
+no wall clock in ma-scheme, so a caller without a message passes `#f`
+(a `within` rule needs a real timestamp to compare).
+
 ## Automatic counting
 
 The trigger actor is a child of the room, so it already receives every room
@@ -76,8 +94,8 @@ with a subject DID increments `counters[<subject-did>][<event-name>]`
 automatically — no room-side wiring. Subject-less events (for example
 `:narrate`) count under the room's own DID, so every event has a subject.
 
-Manual `:count` and automatic counting are the two ways a counter changes;
-both funnel into the same update path.
+Manual `:count`, automatic counting, and direct calls from bespoke trigger
+behaviour are the ways a counter changes; all funnel through `trigger-count`.
 
 ## Trigger rules
 

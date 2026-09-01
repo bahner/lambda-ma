@@ -85,16 +85,29 @@
       (owner-caller? msg)
       (and (equal? did (room-did)) (room-present? (msg-from msg)))))
 
-; ── Counting and trigger evaluation ─────────────────────────────────────────
-; Every counter update funnels through update-counter!: increment, evaluate
-; rules watching that counter name, then record the last updater.
+; ── Public counter API ─────────────────────────────────────────────────────
+; The codeable counter functions. Bespoke trigger behaviour and the wire
+; verbs share one update path, so every change — manual or automatic —
+; evaluates the rules watching that counter. `msg` is the message that
+; caused the update: its timestamp is "now" and its sender is the causer
+; when the key is the room's own counter. There is no wall clock, so a
+; caller without a message passes #f (a `within` rule needs a real
+; timestamp to compare).
 
-(define (update-counter! name key-did delta at causer)
-  (begin
-    (set-counter! key-did name (+ (counter-value key-did name) delta))
-    (evaluate-triggers! name key-did at causer)
-    (set-counter-last! name key-did at)
-    (ma-save-state!)))
+(define (trigger-count counter did delta msg)
+  (let ((at (if msg (msg-created-at msg) 0))
+        (causer (if msg (msg-from msg) did)))
+    (begin
+      (set-counter! did counter (+ (counter-value did counter) delta))
+      (evaluate-triggers! counter did at causer)
+      (set-counter-last! counter did at)
+      (ma-save-state!))))
+
+(define (trigger-set counter did value msg)
+  (trigger-count counter did (- value (counter-value did counter)) msg))
+
+(define (trigger-reset! counter did)
+  (del-counter! did counter))
 
 (define (evaluate-triggers! name key-did at causer)
   (let loop ((rules (trigger-rules)))
@@ -521,11 +534,11 @@
 ; (:narrate — the trigger's own output channel) are deliberately not counted,
 ; which also prevents a fired narration from re-triggering rules.
 
-(define (count-event! name ctx at)
+(define (count-event! name ctx msg)
   (if (map? ctx)
       (let ((subject (event-subject ctx)))
         (if (non-empty-string? subject)
-            (update-counter! name subject 1 at subject)
+            (trigger-count name subject 1 msg)
             #f))
       #f))
 
@@ -537,7 +550,7 @@
 
 (define (count-broadcast! name args msg)
   (if (pair? args)
-      (count-event! name (car args) (msg-created-at msg))
+      (count-event! name (car args) msg)
       #f))
 
 (set-cmd-method! :say
@@ -571,7 +584,7 @@
     (let ((name (normalise-name (arg-at-or-false args 0)))
           (subject (arg-at-or-false args 1)))
       (if (and (non-empty-string? name) (non-empty-string? subject))
-          (update-counter! name subject 1 (msg-created-at msg) subject)
+          (trigger-count name subject 1 msg)
           #f))))
 
 ; ── Counter verbs ───────────────────────────────────────────────────────────
@@ -586,7 +599,7 @@
             ((not (count-caller-authorised? did msg))
              (reply-error msg "not authorised to count that DID"))
             (else
-             (update-counter! name did delta (msg-created-at msg) (msg-from msg))
+             (trigger-count name did delta msg)
              (reply-ok msg))))))
 
 (set-cmd-method! :set
@@ -599,7 +612,7 @@
             ((not (owner-caller? msg))
              (reply-error msg "only this room's owner may set counter values"))
             (else
-             (update-counter! name did (- value (counter-value did name)) (msg-created-at msg) (msg-from msg))
+             (trigger-set name did value msg)
              (reply-ok msg))))))
 
 (set-cmd-method! :reset
@@ -611,7 +624,7 @@
             ((not (count-caller-authorised? did msg))
              (reply-error msg "not authorised to reset that DID"))
             (else
-             (del-counter! did name)
+             (trigger-reset! name did)
              (reply-ok msg))))))
 
 (define (counter-query-authorised? msg)
