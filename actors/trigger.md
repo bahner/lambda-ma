@@ -81,34 +81,35 @@ both funnel into the same update path.
 
 ## Trigger rules
 
-A rule is a declarative map in the `triggers` prop:
+A rule is stored in the `triggers` prop. The wire form is flat and
+positional — no rule map crosses the interface:
 
 ```
-{ id, on <counter-name>, [did], <condition>, <narrate|narrate-to> <text> }
+:trigger <id> <counter> [did <did>] [once|count N|every N|within S] <method> <text...>
 ```
 
 | Field | Meaning |
 | --- | --- |
 | `id` | Unique rule identifier (required). |
-| `on` | Counter name to watch, e.g. `":say"`, `"num_jokes"` (required). Automatic counters use the event name verbatim. |
+| `<counter>` | Counter name to watch, e.g. `:arrive` or `num_jokes` (required). Automatic counters use the event name verbatim. |
 | `did` | Counter scope. Absent = per identity (each DID's own counter, each tracked separately); a DID = that identity only; the room's DID = the room's (general) counter. |
 | `once` | Fire on the first qualifying update. |
 | `count <N>` | Fire once when the counter reaches `N`. |
-| `every <N>` | Fire on every crossing of a new multiple of `N`. |
+| `every <N>` | Fire on every crossing of a new multiple of `N`; an absent condition defaults to `every 1` (fire on every update). |
 | `within <S>` | Fire when a *different* DID updates the same counter within `S` seconds of the previous one (simultaneity). |
-| `narrate <text>` | Ask the room to broadcast the text. |
-| `narrate-to <text>` | Ask the room to send the text to the DID the trigger concerns. |
+| `<method>` | The verb sent to the parent node with the rendered text as its argument, e.g. `:narrate`, `:narrate_to` (sent as `:narrate-to`, targeted at the concerning DID), `:lock`. |
+| `<text...>` | The words: literal strings and `(...)` expression spans (see Template expressions). |
 
-Exactly one condition field and exactly one action field are present. The
-action value is a plain string or a parts list (see Template expressions).
-The automatic counters are keyed by the room's event names verbatim
-(`":say"`, `":arrive"`, `":leave"`, `":emote"`, `":dig"`, `":fill"`);
-`":leave"` prunes the departing DID instead of counting it.
+Counters arrive as symbols (`:arrive`) or strings and are normalised to
+strings; method names are normalised (`_` → `-`). The automatic counters are
+keyed by the room's event names verbatim (`":arrive"`, `":leave"`, `":say"`,
+`":emote"`, `":dig"`, `":fill"`); `":leave"` prunes the departing DID
+instead of counting it.
 
 | Verb | Effect | Gate |
 | --- | --- | --- |
 | `:triggers` | Reply with the rule list (data). | owner |
-| `:trigger <rule-map>` | Add or replace a rule by `id`. | owner |
+| `:trigger <id> <counter> [did <did>] [condition] <method> <text...>` | Add or replace a rule by `id`. | owner |
 | `:trigger <id>` | Remove a rule. | owner |
 
 ### The DID the trigger concerns
@@ -120,13 +121,11 @@ room's own counter it is the actor whose update caused the fire (the causer).
 
 ## Template expressions
 
-The action is either a plain string or a list of parts: literal strings and
-expression forms `(:fn arg ...)` evaluated at fire time in a closed,
-side-effect-free vocabulary (ma-scheme deliberately has no `eval`, so the
-grammar is bounded and structurally validated at setup). The zscheme avatar
-layer owns any human-facing prose syntax with parenthesised spans and
-translates it to this structured form; the actor stores and renders data, not
-text that must be parsed.
+The `<text...>` is a flat word list: literal strings and expression forms
+`(:fn arg ...)`. Words render at fire time (spans evaluated against the
+concerning DID) and are joined with single spaces. The expression vocabulary
+is closed and side-effect-free (ma-scheme deliberately has no `eval`, so the
+grammar is bounded and structurally validated at setup).
 
 | Binding | Meaning |
 | --- | --- |
@@ -138,22 +137,22 @@ text that must be parsed.
 
 The environment has **no side effects**: no `ma-*` primitives, no
 `set-prop!`/`del-prop!`, no `ipfs-*`/`include`. An expression can only compute
-text. There is no room binding — the room may deliver the text verbatim and
-does.
+text. There is no room binding — the room delivers the text verbatim and does.
+Symbol arguments (`:arrive`) read as their string form; glued punctuation
+uses `(:string-append …)`.
 
-Example (structured parts; automatic counters use the room's event names
-verbatim, so an arrival is `":arrive"`):
+Example (automatic counters use the room's event names verbatim, so an
+arrival is `:arrive`):
 
 ```
-{ id: "farvel", on: ":arrive", every: 10,
-  narrate-to: ["Kjære ", (:did-name), ", du har vært her ",
-               (:did-counter ":arrive"), " ganger. Husk å si pent farvel når du drar."] }
+:trigger farvel :arrive every 10 :narrate_to
+  "Kjære" (:did-name) "du" "har" "vært" "her" (:did-counter :arrive) "ganger."
 ```
 
-`:trigger <rule>` validates the rule immediately: spans are parsed and
-dry-run-evaluated so a malformed template is rejected at setup, not at fire
-time. Non-terminating expressions are the owner's responsibility — they are
-the one accepted risk, since only the owner creates rules.
+`:trigger` validates the rule immediately: spans are checked against the known
+vocabulary so a malformed rule is rejected at setup, not at fire time.
+Non-terminating expressions are the owner's responsibility — they are the one
+accepted risk, since only the owner creates rules.
 
 ## Evaluation
 

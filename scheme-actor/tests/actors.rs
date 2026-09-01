@@ -936,18 +936,11 @@ fn trigger_rule_narrates_on_count_threshold() {
     let env = trigger_env();
 
     // The owner installs a rule: on "num_jokes" count 2 → narrate.
-    eval_all(
-        r#"
-        (define joke-rule
-          (make-map "id" "joke-2"
-                    "on" "num_jokes"
-                    "count" 2
-                    "narrate" "To vitser! Haha."))
-        "#,
+    let content = eval_all(
+        r#"(list :trigger "joke-2" "num_jokes" "count" 2 :narrate "To vitser! Haha.")"#,
         &env,
     )
     .unwrap();
-    let content = eval_all("(list :trigger joke-rule)", &env).unwrap();
     env.define(
         Rc::from("rule_msg"),
         sample_msg("did:ma:alice", "did:ma:runtime#room", content),
@@ -994,18 +987,13 @@ fn trigger_rule_narrates_to_scope_did_with_template() {
 
     // Per-identity rule: every 2nd arrival salutes the arriver personally,
     // with the counter value and name substituted into the text.
-    eval_all(
-        r#"
-        (define salute-rule
-          (make-map "id" "salute"
-                    "on" ":arrive"
-                    "every" 2
-                    "narrate-to" (list "Velkommen tilbake, " (list :did-name) "! Du har vært her " (list :did-counter ":arrive") " ganger.")))
-        "#,
+    let content = eval_all(
+        r#"(list :trigger "salute" :arrive "every" 2 :narrate_to
+             "Velkommen" "tilbake," (list :string-append (list :did-name) "!")
+             "Du" "har" "vært" "her" (list :did-counter :arrive) "ganger.")"#,
         &env,
     )
     .unwrap();
-    let content = eval_all("(list :trigger salute-rule)", &env).unwrap();
     env.define(
         Rc::from("rule_msg"),
         sample_msg("did:ma:alice", "did:ma:runtime#room", content),
@@ -1074,15 +1062,11 @@ fn trigger_rejects_invalid_rule() {
     let env = trigger_env();
 
     // A rule with an unknown template function must be rejected at setup.
-    eval_all(
-        r#"
-        (define bad-rule
-          (make-map "id" "bad" "on" "x" "count" 3 "narrate" (list :bogus)))
-        "#,
+    let content = eval_all(
+        r#"(list :trigger "bad" "x" "count" 3 :narrate (list :bogus))"#,
         &env,
     )
     .unwrap();
-    let content = eval_all("(list :trigger bad-rule)", &env).unwrap();
     env.define(
         Rc::from("rule_msg"),
         sample_msg("did:ma:alice", "did:ma:runtime#room", content),

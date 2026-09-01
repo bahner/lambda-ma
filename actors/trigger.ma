@@ -185,14 +185,18 @@
         #f)))
 
 (define (fire-rule! rule concern)
-  (let ((bindings (make-bindings concern)))
-    (if (map-has-key? rule "narrate")
-        (ma-send! (room-did)
-          (list :narrate (render-action (map-ref rule "narrate" #f) bindings)))
-        (if (map-has-key? rule "narrate-to")
-            (ma-send! (room-did)
-              (list :narrate-to concern (render-action (map-ref rule "narrate-to" #f) bindings)))
-            #f))))
+  (let* ((method (normalise-method (map-ref rule "method" #f)))
+         (text (map-ref rule "text" '()))
+         (bindings (make-bindings concern)))
+    (if (equal? method :narrate-to)
+        (ma-send! (node-parent)
+          (if (null? text)
+              (list :narrate-to concern)
+              (list :narrate-to concern (render-words text bindings))))
+        (ma-send! (node-parent)
+          (if (null? text)
+              (list method)
+              (list method (render-words text bindings)))))))
 
 ; ── Template expressions ────────────────────────────────────────────────────
 ; The action text is either a plain string or a list of parts: literal strings
@@ -200,22 +204,22 @@
 ; side-effect-free vocabulary; no eval is available in ma-scheme, so the
 ; grammar is deliberately bounded. Malformed rules are rejected at setup.
 
-(define (render-action action bindings)
-  (if (string? action)
-      action
-      (render-parts action bindings)))
+; The action text is a flat list of words: literal strings and expression
+; forms. Words are rendered (spans evaluated against the bindings) and joined
+; with single spaces.
+(define (render-words words bindings)
+  (cond ((null? words) "")
+        ((null? (cdr words)) (render-word (car words) bindings))
+        (else (string-append (render-word (car words) bindings)
+                             " "
+                             (render-words (cdr words) bindings)))))
 
-(define (render-parts parts bindings)
-  (cond ((null? parts) "")
-        ((null? (cdr parts)) (to-text (render-part (car parts) bindings)))
-        (else (string-append (to-text (render-part (car parts) bindings))
-                             (render-parts (cdr parts) bindings)))))
-
-(define (render-part part bindings)
-  (cond ((string? part) part)
-        ((number? part) part)
-        ((pair? part) (eval-expr part bindings))
-        (else "")))
+(define (render-word word bindings)
+  (to-text (cond ((string? word) word)
+                 ((number? word) word)
+                 ((symbol? word) (symbol->string word))
+                 ((pair? word) (eval-expr word bindings))
+                 (else ""))))
 
 (define (eval-expr form bindings)
   (if (not (and (pair? form) (symbol? (car form))))
@@ -307,6 +311,7 @@
   (cond ((string? arg) arg)
         ((number? arg) arg)
         ((boolean? arg) arg)
+        ((symbol? arg) (symbol->string arg))
         ((pair? arg) (eval-expr arg bindings))
         (else "")))
 
@@ -362,22 +367,22 @@
      (if (map-has-key? rule "every") 1 0)
      (if (map-has-key? rule "within") 1 0)))
 
-(define (rule-action-count rule)
-  (+ (if (map-has-key? rule "narrate") 1 0)
-     (if (map-has-key? rule "narrate-to") 1 0)))
+(define (valid-method? method)
+  (and (not (equal? method #f))
+       (or (string? method) (symbol? method))
+       (not (equal? (word-as-string method) ""))))
 
 (define (valid-rule? rule)
   (and (map? rule)
        (non-empty-string? (map-ref rule "id" #f))
        (non-empty-string? (map-ref rule "on" #f))
        (= (rule-condition-count rule) 1)
-       (= (rule-action-count rule) 1)
-       (valid-action? (map-ref rule "narrate" (map-ref rule "narrate-to" #f)))))
+       (valid-method? (map-ref rule "method" #f))
+       (valid-text? (map-ref rule "text" '()))))
 
-(define (valid-action? action)
-  (cond ((string? action) #t)
-        ((or (null? action) (pair? action)) (valid-parts? action))
-        (else #f)))
+(define (valid-text? words)
+  (or (null? words)
+      (and (valid-part? (car words)) (valid-text? (cdr words)))))
 
 (define (valid-parts? parts)
   (or (null? parts)
@@ -386,6 +391,7 @@
 (define (valid-part? part)
   (cond ((string? part) #t)
         ((number? part) #t)
+        ((symbol? part) #t)
         ((pair? part) (valid-expr? part))
         (else #f)))
 
@@ -415,6 +421,69 @@
 
 (define (upsert-rule rules rule)
   (cons rule (without-rule-id rules (map-ref rule "id" #f))))
+
+; ── Flat rule parsing and name normalisation ────────────────────────────────
+; The wire form is positional: :trigger <id> <counter> [condition] <method>
+; <text...>. Counters arrive as symbols (:arrive) or strings ("num_jokes")
+; and are normalised to strings; methods arrive as :narrate_to and are sent to
+; the parent as :narrate-to (underscores become hyphens).
+
+(define (word-as-string word)
+  (if (symbol? word) (symbol->string word) word))
+
+(define (word=? word text)
+  (equal? (word-as-string word) text))
+
+(define (normalise-name name)
+  (if (symbol? name) (symbol->string name) name))
+
+(define (replace-chars s from to)
+  (let ((len (string-length s)))
+    (let loop ((i 0) (acc ""))
+      (if (>= i len)
+          acc
+          (let ((c (substring s i (+ i 1))))
+            (loop (+ i 1) (string-append acc (if (equal? c from) to c))))))))
+
+(define (normalise-method method)
+  (let ((s (word-as-string method)))
+    (string->symbol (replace-chars s "_" "-"))))
+
+; Condition detection: once, or count/every/within with a number, or none
+; (defaults to every 1 — fire on every update).
+(define (flat-condition tail)
+  (if (pair? tail)
+      (let ((word (car tail)))
+        (cond ((word=? word "once") (list "once" #t (cdr tail)))
+              ((and (pair? (cdr tail))
+                    (number? (cadr tail))
+                    (or (word=? word "count")
+                        (word=? word "every")
+                        (word=? word "within")))
+               (list (word-as-string word) (cadr tail) (cddr tail)))
+              (else #f)))
+      #f))
+
+(define (parse-flat-rule args)
+  (let* ((id (arg-at-or-false args 0))
+         (counter (normalise-name (arg-at-or-false args 1)))
+         (tail (cddr args))
+         (did (if (and (pair? tail) (word=? (car tail) "did") (pair? (cdr tail)))
+                  (normalise-name (cadr tail))
+                  #f))
+         (tail (if did (cddr tail) tail))
+         (cond-result (flat-condition tail))
+         (cond-key (if cond-result (car cond-result) "every"))
+         (cond-value (if cond-result (cadr cond-result) 1))
+         (tail (if cond-result (caddr cond-result) tail))
+         (method (normalise-method (arg-at-or-false tail 0)))
+         (text (if (pair? tail) (cdr tail) '())))
+    (let ((rule (make-map "id" id
+                          "on" counter
+                          "method" method
+                          "text" text)))
+      (let ((rule (map-set rule cond-key cond-value)))
+        (if did (map-set rule "did" did) rule)))))
 
 (define (without-rule-id rules id)
   (cond ((null? rules) '())
@@ -491,12 +560,23 @@
     (let ((subject (event-subject (if (pair? args) (car args) #f))))
       (if (non-empty-string? subject) (prune-did! subject) #f))))
 
+; Generic event notification from a non-broadcasting parent (a chest, an exit,
+; a thing): the parent forwards (:event <name> <subject-did>) and the actor
+; counts it like any other event.
+(set-cmd-method! :event
+  (lambda (args msg)
+    (let ((name (normalise-name (arg-at-or-false args 0)))
+          (subject (arg-at-or-false args 1)))
+      (if (and (non-empty-string? name) (non-empty-string? subject))
+          (update-counter! name subject 1 (msg-created-at msg) subject)
+          #f))))
+
 ; ── Counter verbs ───────────────────────────────────────────────────────────
 
 (set-cmd-method! :count
   (lambda (args msg)
     (let ((did (arg-at-or-false args 0))
-          (name (arg-at-or-false args 1))
+          (name (normalise-name (arg-at-or-false args 1)))
           (delta (arg-at-or-false args 2)))
       (cond ((not (and (string? did) (string? name) (number? delta)))
              (reply-error msg "usage: :count <did> <name> <delta>"))
@@ -509,7 +589,7 @@
 (set-cmd-method! :set
   (lambda (args msg)
     (let ((did (arg-at-or-false args 0))
-          (name (arg-at-or-false args 1))
+          (name (normalise-name (arg-at-or-false args 1)))
           (value (arg-at-or-false args 2)))
       (cond ((not (and (string? did) (string? name) (number? value)))
              (reply-error msg "usage: :set <did> <name> <value>"))
@@ -522,7 +602,7 @@
 (set-cmd-method! :reset
   (lambda (args msg)
     (let ((did (arg-at-or-false args 0))
-          (name (arg-at-or-false args 1)))
+          (name (normalise-name (arg-at-or-false args 1))))
       (cond ((not (and (string? did) (string? name)))
              (reply-error msg "usage: :reset <did> <name>"))
             ((not (count-caller-authorised? did msg))
@@ -537,7 +617,7 @@
 (set-rpc-method! :value
   (lambda (args msg)
     (let ((did (arg-at-or-false args 0))
-          (name (arg-at-or-false args 1)))
+          (name (normalise-name (arg-at-or-false args 1))))
       (cond ((not (counter-query-authorised? msg))
              (reply-error msg "not in room"))
             ((not (and (string? did) (string? name)))
@@ -565,19 +645,19 @@
   (lambda (args msg)
     (cond ((not (owner-caller? msg))
            (reply-error msg "only this room's owner may edit triggers"))
-          ((and (pair? args) (map? (car args)))
-           (let ((rule (car args)))
-             (if (valid-rule? rule)
-                 (begin
-                   (set-prop! "triggers" (upsert-rule (trigger-rules) rule))
-                   (ma-save-state!)
-                   (reply-ok msg))
-                 (reply-error msg "invalid trigger rule"))))
-          ((and (pair? args) (string? (car args)))
+          ((and (pair? args) (string? (car args)) (null? (cdr args)))
            (begin
              (set-prop! "triggers" (remove-rule (trigger-rules) (car args)))
              (set-prop! "trigger-state" (map-delete (trigger-state) (car args)))
              (ma-save-state!)
              (reply-ok msg)))
+          ((< (list-length args) 3)
+           (reply-error msg "usage: :trigger <id> <counter> [once|count N|every N|within S] <method> <text...>"))
           (else
-           (reply-error msg "usage: :trigger <rule-map> | <id>")))))
+           (let ((rule (parse-flat-rule args)))
+             (if (valid-rule? rule)
+                 (begin
+                   (set-prop! "triggers" (upsert-rule (trigger-rules) rule))
+                   (ma-save-state!)
+                   (reply-ok msg))
+                 (reply-error msg "invalid trigger rule")))))))
