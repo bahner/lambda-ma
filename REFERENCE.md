@@ -10,7 +10,7 @@ normative interoperability profile is
 ## Bootstrap
 
 The generated bootstrap contains `#root`, `#scheduler`, and the initial
-`#construct` room. `#root` is the only parentless lambda-ma node.
+`#concourse` room. `#root` is the only parentless lambda-ma node.
 
 `#root :ctx?` returns a root-issued service map:
 

@@ -840,7 +840,7 @@ mod tests {
         config.insert("kind".to_string(), "/ma/container/0.0.1".to_string());
         crate::state::set_config(config);
         eval_all(
-            r#"(set-init-prop! "here" "did:ma:runtime#construct")"#,
+            r#"(set-init-prop! "here" "did:ma:runtime#concourse")"#,
             &env,
         )
         .unwrap();
@@ -873,7 +873,7 @@ mod tests {
         eval_all("(on-message forge_msg)", &env).unwrap();
 
         let init = eval_str("(get-prop \"forge-init\")", &env);
-        assert!(init.contains("(set-init-prop! \"here\" \"did:ma:runtime#construct\")"));
+        assert!(init.contains("(set-init-prop! \"here\" \"did:ma:runtime#concourse\")"));
     }
 
     #[test]
@@ -1004,12 +1004,12 @@ mod tests {
         env.define(
             Rc::from("msg"),
             Value::Msg(sample_term_msg(
-                "did:ma:runtime#construct",
+                "did:ma:runtime#concourse",
                 "did:ma:runtime#duckie",
                 Value::list(vec![
                     Value::symbol(":parent-report"),
                     Value::str("did:ma:runtime#duckie"),
-                    Value::str("did:ma:runtime#construct"),
+                    Value::str("did:ma:runtime#concourse"),
                     Value::Int(1),
                     Value::str("n1"),
                 ]),
@@ -1025,12 +1025,12 @@ mod tests {
         env.define(
             Rc::from("msg"),
             Value::Msg(sample_term_msg(
-                "did:ma:runtime#construct",
+                "did:ma:runtime#concourse",
                 "did:ma:runtime#duckie",
                 Value::list(vec![
                     Value::symbol(":parent-report"),
                     Value::str("did:ma:runtime#duckie"),
-                    Value::str("did:ma:runtime#construct"),
+                    Value::str("did:ma:runtime#concourse"),
                     Value::Int(1),
                     Value::str("n1"),
                 ]),
@@ -1046,7 +1046,7 @@ mod tests {
         env.define(
             Rc::from("msg"),
             Value::Msg(sample_term_msg(
-                "did:ma:runtime#construct",
+                "did:ma:runtime#concourse",
                 "did:ma:runtime#duckie",
                 Value::symbol(":parent-report"),
             )),
@@ -1070,7 +1070,7 @@ mod tests {
 
         eval_all(
             r#"
-            (set-prop! "parent" "did:ma:runtime#construct")
+            (set-prop! "parent" "did:ma:runtime#concourse")
             (on-message msg)
             "#,
             &env,
@@ -1082,7 +1082,7 @@ mod tests {
             eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
             Value::list(vec![
                 Value::symbol(":ok"),
-                Value::str("did:ma:runtime#construct")
+                Value::str("did:ma:runtime#concourse")
             ])
         );
     }
@@ -1102,7 +1102,7 @@ mod tests {
 
         eval_all(
             r#"
-            (set-prop! "parent" "did:ma:runtime#construct")
+            (set-prop! "parent" "did:ma:runtime#concourse")
             (on-message msg)
             "#,
             &env,
@@ -1114,7 +1114,7 @@ mod tests {
             eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
             Value::list(vec![
                 Value::symbol(":ok"),
-                Value::str("did:ma:runtime#construct")
+                Value::str("did:ma:runtime#concourse")
             ])
         );
     }
@@ -1130,7 +1130,7 @@ mod tests {
 
         eval_all(
             r#"
-            (set-prop! "parent" "did:ma:runtime#construct")
+            (set-prop! "parent" "did:ma:runtime#concourse")
             ((find-method :quack) '() msg)
             "#,
             &env,
@@ -1140,7 +1140,7 @@ mod tests {
         assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 1);
         assert_eq!(
             eval_str("(get-prop \"sent-target:1\")", &env),
-            "did:ma:runtime#construct"
+            "did:ma:runtime#concourse"
         );
         assert_eq!(
             eval_all("(get-prop \"sent-term:1\")", &env).unwrap(),
@@ -1164,7 +1164,7 @@ mod tests {
 
         eval_all(
             r#"
-            (set-prop! "parent" "did:ma:runtime#construct")
+            (set-prop! "parent" "did:ma:runtime#concourse")
             ((find-method :duck) '() msg)
             "#,
             &env,
@@ -1174,7 +1174,7 @@ mod tests {
         assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 1);
         assert_eq!(
             eval_str("(get-prop \"sent-target:1\")", &env),
-            "did:ma:runtime#construct"
+            "did:ma:runtime#concourse"
         );
         assert_eq!(
             eval_all("(get-prop \"sent-term:1\")", &env).unwrap(),
@@ -1271,7 +1271,7 @@ mod tests {
 
         eval_all(
             r#"
-            (set-prop! "parent" "did:ma:runtime#construct")
+            (set-prop! "parent" "did:ma:runtime#concourse")
             ((find-method :fortune) '() msg)
             "#,
             &env,
@@ -1281,7 +1281,7 @@ mod tests {
         assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 1);
         assert_eq!(
             eval_str("(get-prop \"sent-target:1\")", &env),
-            "did:ma:runtime#construct"
+            "did:ma:runtime#concourse"
         );
         assert_eq!(eval_int("(get-prop \"reply-count\")", &env), 1);
         assert_eq!(
@@ -1432,13 +1432,13 @@ mod tests {
         install_send_reply_recorders(&env);
         let mut config = std::collections::HashMap::new();
         config.insert("runtime".to_string(), "did:ma:runtime".to_string());
-        config.insert("self".to_string(), "did:ma:runtime#construct".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#concourse".to_string());
         crate::state::set_config(config);
         eval_all(
             r#"
             (test-did-presence! "did:ma:duckie"
               (make-map "did" "did:ma:duckie"
-                        "parent" "did:ma:runtime#construct"
+                        "parent" "did:ma:runtime#concourse"
                         "name" "Duckie"
                         "rev" 5))
             "#,
@@ -1447,7 +1447,7 @@ mod tests {
         .unwrap();
         env.define(
             Rc::from("msg"),
-            Value::Msg(sample_msg("did:ma:caller", "did:ma:runtime#construct")),
+            Value::Msg(sample_msg("did:ma:caller", "did:ma:runtime#concourse")),
         );
 
         eval_all("((find-method :who?) '() msg)", &env).unwrap();
@@ -5412,7 +5412,7 @@ mod tests {
         let mut config = std::collections::HashMap::new();
         config.insert("runtime".to_string(), "did:ma:runtime".to_string());
         config.insert("self".to_string(), "did:ma:runtime#root".to_string());
-        config.insert("start".to_string(), "did:ma:runtime#construct".to_string());
+        config.insert("start".to_string(), "did:ma:runtime#concourse".to_string());
         crate::state::set_config(config);
         env.define(
             Rc::from("msg"),
@@ -5430,7 +5430,7 @@ mod tests {
                 "(ctx-text (car (cdr (get-prop \"reply-term:1\"))) \"parent\")",
                 &env
             ),
-            "did:ma:runtime#construct"
+            "did:ma:runtime#concourse"
         );
     }
 
@@ -6306,7 +6306,7 @@ mod tests {
 
         eval_all(
             r#"
-            (set-prop! "here" "did:ma:new#construct")
+            (set-prop! "here" "did:ma:new#concourse")
             (set-prop! "parent" "did:ma:new#bag")
             (set-prop! "name" "lamp")
             (set-prop! "nick" "lamp")

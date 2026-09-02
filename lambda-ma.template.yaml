@@ -31,7 +31,7 @@ runtime:
       kind: /ma/root/0.0.1
       acl: open
 
-    construct:
+    concourse:
       kind: /ma/room/0.0.1
       attributes:
         genesis: true
@@ -45,6 +45,6 @@ runtime:
       init: |
         (begin
           (duck-defaults!)
-          (enter (string-append (ma-get-config-key "runtime") "#construct"))
+          (enter (string-append (ma-get-config-key "runtime") "#concourse"))
           (duck-schedule-quack!)
           (duck-schedule-duck!))

@@ -41,7 +41,7 @@ room target from root or known bootstrap state and enter it directly:
 
 ```text
 @runtime#root:ctx?
-@runtime#construct:enter {name: "Visitor", nick: "Visitor"}
+@runtime#concourse:enter {name: "Visitor", nick: "Visitor"}
 ```
 
 Without a known room address, ask root instead — it always answers with a
@@ -97,7 +97,7 @@ lingers in the room as a tombstone. A roll-call rebuilds the room's children
 from whoever actually answers:
 
 ```text
-@runtime#construct:roll-call begin 10
+@runtime#concourse:roll-call begin 10
 ```
 
 Every child is asked to re-announce, and ten seconds later the runtime
@@ -106,13 +106,13 @@ context they just sent, and whoever stayed silent is gone. Omit the seconds to
 end it yourself instead:
 
 ```text
-@runtime#construct:roll-call begin
-@runtime#construct:roll-call
-@runtime#construct:roll-call end
+@runtime#concourse:roll-call begin
+@runtime#concourse:roll-call
+@runtime#concourse:roll-call end
 ```
 
 Bare `:roll-call` reports who has answered so far. Only the room's owner or its
-current parent may start one. The bootstrap `#construct` is unowned until
+current parent may start one. The bootstrap `#concourse` is unowned until
 someone claims it, so on a fresh world the owner check fails until you run the
 room's `claim` command first. If nobody answers at all the swap is skipped and
 the existing children are kept, since that is far more likely to be a transport

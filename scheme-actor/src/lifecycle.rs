@@ -459,7 +459,7 @@ mod tests {
             (Cbor::Text("id".into()), Cbor::Text("msg-1".into())),
             (
                 Cbor::Text("from".into()),
-                Cbor::Text("did:ma:runtime#construct".into()),
+                Cbor::Text("did:ma:runtime#concourse".into()),
             ),
             (
                 Cbor::Text("to".into()),
@@ -637,7 +637,7 @@ mod tests {
         on_signal(&data_signal(":set-behaviour", behaviour.as_bytes())).unwrap();
         let msg = decode_cast_input(&sample_cast_input_with_content(Value::list(vec![
             Value::symbol(":report-parent"),
-            Value::str("did:ma:runtime#construct"),
+            Value::str("did:ma:runtime#concourse"),
             Value::str("tick-1"),
             Value::str("nonce-1"),
         ])))

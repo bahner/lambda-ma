@@ -23,6 +23,11 @@ exists.
   gives unqualified-entry discovery: it always replies with a ctx naming a
   room to enter, defaulting to the configured `start` room. Only `#root` is
   required in a runtime.
+- `#concourse` is the conventional entry/`start` room fragment (previously
+  `#construct`). Only the fragment/entity name changed; a freshly-created
+  empty room still defaults to the `Construct` name and the Matrix
+  loading-program description in `actors/room.ma`, and those defaults must
+  not be renamed.
 - A client enters a known room directly with `:enter`; the room stores its
   DID-keyed child ctx and replies with its committed snapshot.
 - Clients route focused room commands directly to the confirmed room DID-URL.

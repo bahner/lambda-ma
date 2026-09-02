@@ -26,7 +26,7 @@ The zscheme repository owns the Zion-side `stdlib.zscheme`, `runtime.zscheme`,
 Lambda-ma owns the actor behaviours and wire contract, not duplicate client-library
 sources.
 
-The bootstrap creates `#root`, `#scheduler`, and `#construct`.
+The bootstrap creates `#root`, `#scheduler`, and `#concourse`.
 `#root :ctx?` exposes the runtime service directory; only `#root` is required
 in a given runtime. A bare DID enters a room directly with `:enter`; the room
 replies with the committed DID ctx.
