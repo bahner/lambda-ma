@@ -7310,4 +7310,62 @@ mod tests {
         ));
         crate::state::dump_to_cbor().unwrap();
     }
+
+    #[test]
+    fn trigger_random_rule_accepts_numeric_string_max_on_a_counter() {
+        // zion sends every RPC argument as CBOR text, so `random 10` delivers
+        // the string "10", not an integer. A random rule is a counter rule
+        // with a random condition: the counter stays in the `on` slot, no
+        // #scheduler schedule is registered, and the rule persists via
+        // ma-save-state!.
+        let env = trigger_env();
+        install_send_reply_recorders(&env);
+        eval_all(r#"(set-prop! "owner" "did:ma:owner")"#, &env).unwrap();
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_msg("did:ma:owner", "did:ma:runtime#trigger-1")),
+        );
+
+        eval_all(
+            r#"
+            ((find-method :trigger)
+              (list "cat-random" :say "random" "10" :narrate "a cat walks past")
+              msg)
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        // The rule is persisted via ma-save-state!, so it must be CBOR-encodable.
+        crate::state::dump_to_cbor().unwrap();
+
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
+            Value::symbol(":ok")
+        );
+        let rule = "(car (get-prop \"triggers\"))";
+        assert_eq!(
+            eval_str(&format!("(map-ref {rule} \"id\")"), &env),
+            "cat-random"
+        );
+        assert_eq!(eval_str(&format!("(map-ref {rule} \"on\")"), &env), ":say");
+        assert_eq!(eval_int(&format!("(map-ref {rule} \"random\")"), &env), 10);
+        // A random rule is not scheduler-driven: nothing is sent at setup.
+        assert_eq!(
+            eval_all("(get-prop \"sent-count\")", &env).unwrap(),
+            Value::Bool(false)
+        );
+
+        // Re-adding the same rule replaces rather than duplicates.
+        eval_all(
+            r#"
+            ((find-method :trigger)
+              (list "cat-random" :say "random" "10" :narrate "a cat walks past")
+              msg)
+            "#,
+            &env,
+        )
+        .unwrap();
+        assert_eq!(eval_int("(list-length (trigger-rules))", &env), 1);
+    }
 }

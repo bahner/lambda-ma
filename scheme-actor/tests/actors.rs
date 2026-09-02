@@ -1797,6 +1797,142 @@ fn trigger_rule_removal_and_listing() {
     );
 }
 
+#[test]
+fn trigger_random_rule_fires_on_every_update_with_max_one() {
+    let env = trigger_env();
+
+    // random 1 is the deterministic floor: the re-rolled gap is always 1, so
+    // the rule fires on every qualifying update, exactly like every 1.
+    let content = eval_all(
+        r#"(list :trigger "cat-every" :say "random" 1 :narrate "A cat walks past the doorway.")"#,
+        &env,
+    )
+    .unwrap();
+    env.define(
+        Rc::from("rule_msg"),
+        sample_msg("did:ma:alice", "did:ma:runtime#room", content),
+    );
+    eval_all("(on-message rule_msg)", &env).unwrap();
+    assert_eq!(
+        eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
+        Value::symbol(":ok")
+    );
+    let rule = "(car (get-prop \"triggers\"))";
+    assert_eq!(eval_str(&format!("(map-ref {rule} \"on\")"), &env), ":say");
+    assert_eq!(eval_int(&format!("(map-ref {rule} \"random\")"), &env), 1);
+    // Installing a counter rule sends nothing — no #scheduler registration.
+    assert_eq!(
+        eval_all("(get-prop \"sent-count\")", &env).unwrap(),
+        Value::Bool(false)
+    );
+
+    // Three say-events by Bob → three narrations to the room.
+    for _ in 0..3 {
+        env.define(
+            Rc::from("c"),
+            count_msg(&env, "did:ma:bob", "did:ma:bob", ":say", 1),
+        );
+        eval_all("(on-message c)", &env).unwrap();
+    }
+    assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 3);
+    assert_eq!(
+        eval_all("(get-prop \"sent-term:1\")", &env).unwrap(),
+        Value::list(vec![
+            Value::symbol(":narrate"),
+            Value::str("A cat walks past the doorway."),
+        ])
+    );
+    assert_eq!(
+        eval_str("(get-prop \"sent-target:1\")", &env),
+        "did:ma:runtime#room"
+    );
+}
+
+#[test]
+fn trigger_random_rule_fires_at_random_points_in_the_update_stream() {
+    let env = trigger_env();
+
+    // random 3 re-rolls a 1..3 gap after every fire, so over 30 updates there
+    // are guaranteed to be at least 10 fires (worst case: every gap is 3) and
+    // at most 30 (never more than one fire per update). The rule therefore
+    // fires at random points in the stream rather than on every update.
+    let content = eval_all(
+        r#"(list :trigger "cat-random" :say "random" 3 :narrate "A cat walks past the doorway.")"#,
+        &env,
+    )
+    .unwrap();
+    env.define(
+        Rc::from("rule_msg"),
+        sample_msg("did:ma:alice", "did:ma:runtime#room", content),
+    );
+    eval_all("(on-message rule_msg)", &env).unwrap();
+    assert_eq!(
+        eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
+        Value::symbol(":ok")
+    );
+
+    // A different counter never fires this rule.
+    for _ in 0..5 {
+        env.define(
+            Rc::from("a"),
+            count_msg(&env, "did:ma:bob", "did:ma:bob", ":arrive", 1),
+        );
+        eval_all("(on-message a)", &env).unwrap();
+    }
+    assert_eq!(
+        eval_all("(get-prop \"sent-count\") ", &env).unwrap(),
+        Value::Bool(false)
+    );
+
+    for _ in 0..30 {
+        env.define(
+            Rc::from("c"),
+            count_msg(&env, "did:ma:bob", "did:ma:bob", ":say", 1),
+        );
+        eval_all("(on-message c)", &env).unwrap();
+    }
+    let fires = eval_int("(get-prop \"sent-count\")", &env);
+    assert!(
+        (10..=30).contains(&fires),
+        "expected 10..=30 fires over 30 updates, got {fires}"
+    );
+    assert_eq!(
+        eval_str("(get-prop \"sent-target:1\")", &env),
+        "did:ma:runtime#room"
+    );
+}
+
+#[test]
+fn trigger_rejects_malformed_random_rules() {
+    let env = trigger_env();
+
+    // A random condition needs a numeric, positive N and a proper method
+    // verb; the counterless random grammar (random where the counter goes) is
+    // likewise invalid — it leaves a number in the method position.
+    let cases = vec![
+        // Non-numeric N falls through to every 1 with `random` as the method.
+        "(list :trigger \"bad\" :say \"random\" \"x\" :narrate \"text\")",
+        // Zero and negative N are rejected by valid-rule?.
+        "(list :trigger \"bad\" :say \"random\" 0 :narrate \"text\")",
+        "(list :trigger \"bad\" :say \"random\" -5 :narrate \"text\")",
+        // The old scheduler-era counterless form: no method after N.
+        "(list :trigger \"bad\" \"random\" 60 :narrate \"text\")",
+    ];
+    for (i, case) in cases.iter().enumerate() {
+        let content = eval_all(case, &env).unwrap();
+        env.define(
+            Rc::from("bad_msg"),
+            sample_msg("did:ma:alice", "did:ma:runtime#room", content),
+        );
+        eval_all("(on-message bad_msg)", &env).unwrap();
+        assert_eq!(
+            eval_all(&format!("(car (get-prop \"reply-term:{}\"))", i + 1), &env).unwrap(),
+            Value::symbol(":error")
+        );
+        assert_eq!(eval_int("(list-length (trigger-rules))", &env), 0);
+    }
+}
+
 // ── Trigger relocation ─────────────────────────────────────────────────────
 
 #[test]

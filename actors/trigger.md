@@ -3,8 +3,10 @@
 Per-identity counters and event-reactive narration. One actor per room
 listens to the room's event stream, keeps per-DID counters, evaluates
 declarative rules on every counter update, and asks the room to narrate when a
-rule fires. The room owns its voice; the trigger actor is a sensor, never a
-mouth.
+rule fires. `random <N>` rules are the counter-space counterpart of a random
+time delay: the fire point is a random one of the next N updates, so a rule
+need not trigger identically on every update. The room owns its voice; the
+trigger actor is a sensor, never a mouth.
 
 ## Kind
 
@@ -51,8 +53,8 @@ All state is authoritative props on the trigger actor, persisted with
 ```
 prop "counters"      → { <did>: { <name>: <int> } }        ; DID is the map key, never a field
 prop "counter-last"  → { <name>: { did, at } }             ; last updater per counter (within)
-prop "triggers"      → [ rule, … ]
-prop "trigger-state" → { <trigger-id>: { <did>: { last-value, fired-at } } }
+prop "triggers"      → [ rule, … ]                          ; { id, on, did?, condition|random: <N>, method, text }
+prop "trigger-state" → { <trigger-id>: { <did>: { last-value, fired-at, next } } }  ; next: target for every/random
 ```
 
 - The room dimension is implicit — it is the trigger actor's parent — so the
@@ -113,8 +115,12 @@ A rule is stored in the `triggers` prop. The wire form is flat and
 positional — no rule map crosses the interface:
 
 ```
-:trigger <id> <counter> [did <did>] [once|count N|every N|within S] <method> <text...>
+:trigger <id> <counter> [did <did>] [once|count N|every N|within S|random N] <method> <text...>
 ```
+
+`random <N>` is one of the mutually exclusive conditions, not a separate rule
+kind: the rule still watches a counter, and its fire point is random (see
+Random rules).
 
 | Field | Meaning |
 | --- | --- |
@@ -125,6 +131,7 @@ positional — no rule map crosses the interface:
 | `count <N>` | Fire once when the counter reaches `N`. |
 | `every <N>` | Fire on every crossing of a new multiple of `N`; an absent condition defaults to `every 1` (fire on every update). |
 | `within <S>` | Fire when a *different* DID updates the same counter within `S` seconds of the previous one (simultaneity). |
+| `random <N>` | Fire at a random one of the next N updates of the counter, then re-roll — the counter-space counterpart of a random time delay. Needs no clock; see Random rules. |
 | `<method>` | The verb sent to the parent node with the rendered text as its argument, e.g. `:narrate`, `:narrate_to` (sent as `:narrate-to`, targeted at the concerning DID), `:lock`. |
 | `<text...>` | The words: literal strings and `(...)` expression spans (see Template expressions). |
 
@@ -150,6 +157,29 @@ A trigger always concerns an actor DID — never the room. For per-identity and
 explicit-DID rules that is the rule's scope DID. For a rule scoped to the
 room's own counter it is the actor whose update caused the fire (the causer).
 `narrate-to` targets that DID.
+
+### Random rules
+
+`random <N>` is a counter rule whose fire point is random: instead of firing
+deterministically on every qualifying update (`every 1`) or on every crossing
+of a fixed multiple (`every N`), it fires at a random one of the next N
+updates of the counter. It is the counter-space counterpart of the runtime
+scheduler's `:random` delay — but the trigger actor has no clock, so the
+randomness is drawn from the update stream itself and no `#scheduler`
+involvement exists here.
+
+- The stored next target is rolled from 1..N the first time a DID's counter
+  is seen and re-rolled from the current value after every fire; a jump past
+  the target fires once and re-rolls, exactly like `every N`.
+- The concerning DID is the rule's scope DID like any other counter rule, so
+  template bindings and `narrate-to` behave identically. No audience check is
+  needed: an update only happens when someone in the room caused it.
+- `random 1` fires on every qualifying update — a deterministic floor for the
+  max gap.
+- The roll uses the actor-local `(random n)` PRNG: deterministic per runtime,
+  no host function, no clock.
+- The ordinary narration gates still apply: the trigger must be the room's
+  designated `trigger` prop, and the room owns its voice.
 
 ## Template expressions
 
@@ -207,6 +237,8 @@ of the message that caused the update. Bookkeeping is keyed per
 - `every N`: fire when `last-value // N < value // N`.
 - `within S`: fire when a different DID updated the same counter within `S`
   seconds (via `counter-last`), then update `counter-last`.
+- `random N`: fire when the counter crosses a random target rolled from 1..N,
+  then re-roll a fresh 1..N gap from the current value.
 
 Trigger-generated narration is marked with the `trigger-notifying?` guard
 (mirroring `ctx-prop-notifying?` in `state.ma`) so it does not re-evaluate
@@ -244,8 +276,10 @@ narration possible without any runtime change.
 ## Deliberately out of scope
 
 - Arbitrary non-per-DID values: plain state, not counters.
-- Time-based scheduling and randomness: the runtime `#scheduler` + room
-  `:narrate`, not counter triggers.
+- Time-based scheduling and randomness: that is the runtime `#scheduler`'s
+  job (`cron` / `interval` / `at` / `in` / `random`), which fires whether or
+  not anyone is present. Counter triggers have no clock, so `random N`
+  randomises over updates, not seconds.
 - Non-narration actions (unlocking, moving, sending verbs): later, and any
   action still flows through the room so the room's gates stay the single
   authority.

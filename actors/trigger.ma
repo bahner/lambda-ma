@@ -6,6 +6,13 @@
 ; every counter update. When a rule fires it asks the room to narrate
 ; (:narrate / :narrate-to); the room owns its voice, so the trigger actor is
 ; a sensor, never a mouth. Only the room's designated trigger may narrate.
+;
+; Random rules are the counter-space counterpart of the runtime
+; scheduler's :random delay: `:trigger <id> <counter> random <N> <method>
+; <text...>` fires at a random one of the next N updates of the counter, so
+; a rule does not trigger identically on every update. The actor has no
+; clock, so the randomness is drawn from the update stream itself — no
+; #scheduler round-trip is involved.
 
 (define TRIGGER_KIND "/ma/trigger/0.0.1")
 
@@ -164,6 +171,8 @@
           ((map-has-key? rule "count")
            (evaluate-threshold-rule! rule rule-id key-did value at concern state
                                      (map-ref rule "count" 1)))
+          ((map-has-key? rule "random")
+           (evaluate-random-rule! rule rule-id key-did value concern state))
           (else #f))))
 
 ; once / count N: fire once when the counter first crosses the threshold.
@@ -194,6 +203,28 @@
 (define (advance-next next value n)
   (let loop ((target next))
     (if (> target value) target (loop (+ target n)))))
+
+; random N: fire at a random one of the next N updates of the counter — the
+; counter-space counterpart of the runtime scheduler's :random delay, which
+; this actor cannot use: there is no clock here, so the randomness is drawn
+; from the update stream itself. The stored next target is rolled from 1..N
+; when the rule first sees the counter and re-rolled from the current value
+; after every fire; a jump past the target fires once and re-rolls, exactly
+; like every N.
+(define (random-gap n)
+  (+ 1 (random (if (and (number? n) (> n 0)) n 1))))
+
+(define (evaluate-random-rule! rule rule-id key-did value concern state)
+  (let* ((n (map-ref rule "random" 1))
+         (stored-next (if (map? state) (map-ref state "next" #f) #f))
+         (next (if (number? stored-next) stored-next (random-gap n))))
+    (if (>= value next)
+        (begin
+          (record-rule-state! rule-id key-did value #f (+ value (random-gap n)))
+          (fire-rule! rule concern))
+        (begin
+          (record-rule-state! rule-id key-did value #f next)
+          #f))))
 
 (define (record-rule-state! rule-id did value fired-at next)
   (set-trigger-state! rule-id
@@ -399,7 +430,8 @@
   (+ (if (map-has-key? rule "once") 1 0)
      (if (map-has-key? rule "count") 1 0)
      (if (map-has-key? rule "every") 1 0)
-     (if (map-has-key? rule "within") 1 0)))
+     (if (map-has-key? rule "within") 1 0)
+     (if (map-has-key? rule "random") 1 0)))
 
 (define (valid-method? method)
   (and (not (equal? method #f))
@@ -410,10 +442,16 @@
 (define (valid-rule? rule)
   (and (map? rule)
        (non-empty-string? (map-ref rule "id" #f))
-       (non-empty-string? (map-ref rule "on" #f))
        (= (rule-condition-count rule) 1)
        (valid-method? (map-ref rule "method" #f))
-       (valid-text? (map-ref rule "text" '()))))
+       (valid-text? (map-ref rule "text" '()))
+       ; Every rule watches a counter name; a random condition also needs a
+       ; positive max gap. A counterless random rule left by an older
+       ; behaviour version fails here and is pruned on the next read.
+       (non-empty-string? (map-ref rule "on" #f))
+       (or (not (map-has-key? rule "random"))
+           (and (number? (map-ref rule "random" #f))
+                (> (map-ref rule "random" #f) 0)))))
 
 (define (valid-text? words)
   (or (null? words)
@@ -499,8 +537,14 @@
             (loop (+ i 1) (string-append acc (if (equal? c from) to c))))))))
 
 (define (normalise-method method)
-  (let ((s (word-as-string method)))
-    (string->symbol (replace-chars s "_" "-"))))
+  (cond ((symbol? method)
+         (string->symbol (replace-chars (symbol->string method) "_" "-")))
+        ((string? method)
+         (string->symbol (replace-chars method "_" "-")))
+        ; A number or other junk in the method position (a malformed rule)
+        ; must yield #f so valid-rule? rejects it instead of crashing the
+        ; string helpers above.
+        (else #f)))
 
 ; Normalise a condition count that arrives as a number or a numeric string
 ; (clients send RPC arguments as CBOR text, so `every 1` delivers "1").
@@ -512,8 +556,8 @@
 (define (number-or-string-number? value)
   (number? (as-number value)))
 
-; Condition detection: once, or count/every/within with a number, or none
-; (defaults to every 1 — fire on every update).
+; Condition detection: once, or count/every/within/random with a number,
+; or none (defaults to every 1 — fire on every update).
 (define (flat-condition tail)
   (if (pair? tail)
       (let ((word (car tail)))
@@ -522,7 +566,8 @@
                     (number-or-string-number? (cadr tail))
                     (or (word=? word "count")
                         (word=? word "every")
-                        (word=? word "within")))
+                        (word=? word "within")
+                        (word=? word "random")))
                (list (word-as-string word) (as-number (cadr tail)) (cddr tail)))
               (else #f)))
       #f))
@@ -530,8 +575,13 @@
 (define (parse-flat-rule args)
   (let* ((id (arg-at-or-false args 0))
          (counter (normalise-name (arg-at-or-false args 1)))
-         (tail (cddr args))
-         (did (if (and (pair? tail) (word=? (car tail) "did") (pair? (cdr tail)))
+         (tail (cddr args)))
+    (parse-counter-rule id counter tail)))
+
+; Counter rules: :trigger <id> <counter> [did <did>] [once|count N|every N|
+; within S|random N] <method> <text...>.
+(define (parse-counter-rule id counter tail)
+  (let* ((did (if (and (pair? tail) (word=? (car tail) "did") (pair? (cdr tail)))
                   (normalise-name (cadr tail))
                   #f))
          (tail (if did (cddr tail) tail))
@@ -698,7 +748,7 @@
              (ma-save-state!)
              (reply-ok msg)))
           ((< (list-length args) 3)
-           (reply-error msg "usage: :trigger <id> <counter> [once|count N|every N|within S] <method> <text...>"))
+           (reply-error msg "usage: :trigger <id> <counter> [once|count N|every N|within S|random N] <method> <text...>"))
           (else
            (let ((rule (parse-flat-rule args)))
              (if (valid-rule? rule)
