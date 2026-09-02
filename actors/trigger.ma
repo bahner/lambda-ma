@@ -12,6 +12,14 @@
 (define (node-kind) "trigger")
 (define (node-protocol) TRIGGER_KIND)
 
+; The trigger is a hidden sensor: invisible in room views and name resolution
+; by default, discoverable only via the room's :trigger?. The owner may
+; override with `:prop visible true`, which surfaces it in look's "Triggers:"
+; section and client-side name resolution.
+(define (node-visible)
+  (let ((value (get-prop "visible")))
+    (if (non-empty-string? value) value "false")))
+
 ; ── Counter store ───────────────────────────────────────────────────────────
 ; counters[did][name] = int. The DID is always the map key, never a stored
 ; field. The room dimension is implicit — the parent is the room — so the
@@ -54,9 +62,19 @@
 
 ; ── Trigger rules and state ─────────────────────────────────────────────────
 
+; Rules are validated at setup (valid-rule?), but a rule that reaches state
+; with a non-atom symbol — a leftover from an older behaviour version, say —
+; must not brick the actor: every counter update re-saves the whole props
+; table via ma-save-state!, and :triggers replies with the raw list. Prune
+; invalid rules on every read and write the cleaned list back, so the first
+; save after a poisoned load succeeds and the actor heals itself.
 (define (trigger-rules)
   (let ((value (get-prop "triggers")))
-    (if (or (null? value) (pair? value)) value '())))
+    (let ((clean (if (or (null? value) (pair? value))
+                     (prune-invalid-rules value)
+                     '())))
+      (set-prop! "triggers" clean)
+      clean)))
 
 (define (trigger-state)
   (let ((value (get-prop "trigger-state")))
@@ -385,7 +403,8 @@
 
 (define (valid-method? method)
   (and (not (equal? method #f))
-       (or (string? method) (symbol? method))
+       (or (string? method)
+           (and (symbol? method) (atom-symbol? method)))
        (not (equal? (word-as-string method) ""))))
 
 (define (valid-rule? rule)
@@ -404,10 +423,19 @@
   (or (null? parts)
       (and (valid-part? (car parts)) (valid-parts? (cdr parts)))))
 
+; A symbol that starts with ':' (a verb atom) — the only symbol kind with a
+; CBOR representation (§6). Rules are persisted via ma-save-state!, so a bare
+; symbol such as `every` or `lock` can never be stored.
+(define (atom-symbol? value)
+  (and (symbol? value)
+       (let ((s (symbol->string value)))
+         (and (not (equal? s ""))
+              (equal? (substring s 0 1) ":")))))
+
 (define (valid-part? part)
   (cond ((string? part) #t)
         ((number? part) #t)
-        ((symbol? part) #t)
+        ((symbol? part) (atom-symbol? part))
         ((pair? part) (valid-expr? part))
         (else #f)))
 
@@ -432,6 +460,15 @@
     (cond ((null? fns) #f)
           ((equal? fn (car fns)) #t)
           (else (loop (cdr fns))))))
+
+; Drop rules that can never be re-saved or fired — a rule whose method is a
+; non-atom symbol, or whose parts are not CBOR-encodable. Idempotent: a clean
+; list passes through unchanged, so this is safe to run on every read.
+(define (prune-invalid-rules rules)
+  (cond ((null? rules) '())
+        ((valid-rule? (car rules))
+         (cons (car rules) (prune-invalid-rules (cdr rules))))
+        (else (prune-invalid-rules (cdr rules)))))
 
 ; ── Rule management ─────────────────────────────────────────────────────────
 
@@ -465,6 +502,16 @@
   (let ((s (word-as-string method)))
     (string->symbol (replace-chars s "_" "-"))))
 
+; Normalise a condition count that arrives as a number or a numeric string
+; (clients send RPC arguments as CBOR text, so `every 1` delivers "1").
+(define (as-number value)
+  (cond ((number? value) value)
+        ((string? value) (string->number value))
+        (else #f)))
+
+(define (number-or-string-number? value)
+  (number? (as-number value)))
+
 ; Condition detection: once, or count/every/within with a number, or none
 ; (defaults to every 1 — fire on every update).
 (define (flat-condition tail)
@@ -472,11 +519,11 @@
       (let ((word (car tail)))
         (cond ((word=? word "once") (list "once" #t (cdr tail)))
               ((and (pair? (cdr tail))
-                    (number? (cadr tail))
+                    (number-or-string-number? (cadr tail))
                     (or (word=? word "count")
                         (word=? word "every")
                         (word=? word "within")))
-               (list (word-as-string word) (cadr tail) (cddr tail)))
+               (list (word-as-string word) (as-number (cadr tail)) (cddr tail)))
               (else #f)))
       #f))
 
@@ -510,23 +557,6 @@
   (cond ((null? rules) '())
         ((equal? (map-ref (car rules) "id" #f) id) (cdr rules))
         (else (cons (car rules) (remove-rule (cdr rules) id)))))
-
-; ── GC: prune a departing DID ───────────────────────────────────────────────
-
-(define (prune-did! did)
-  (begin
-    (set-prop! "counters" (map-delete (counters) did))
-    (set-prop! "trigger-state" (prune-rule-state (trigger-state) did))
-    (ma-save-state!)))
-
-(define (prune-rule-state all did)
-  (let loop ((keys (map-keys all)) (acc (make-map)))
-    (if (null? keys)
-        acc
-        (let* ((id (car keys))
-               (by-did (map-ref all id #f)))
-          (loop (cdr keys)
-                (map-set acc id (map-delete by-did did)))))))
 
 ; ── Automatic counting (room broadcasts) ────────────────────────────────────
 ; The trigger actor is a child of the room, so every room event reaches it
@@ -568,13 +598,13 @@
 (set-cmd-method! :fill
   (lambda (args msg) (count-broadcast! ":fill" args msg)))
 
+; :leave counts like any other event and prunes nothing: per-DID counters are
+; this actor's history, not presence state, so arrival totals survive a
+; departure and "welcome back, N visits" rules keep working across sessions.
+; trigger-state persists too, so a `once` rule fires once ever per DID, not
+; once per visit.
 (set-cmd-method! :leave
-  (lambda (args msg)
-    ; A departing DID's counters are garbage: prune them rather than count
-    ; an event that would be discarded a line later. Departure totals can be
-    ; kept manually on the room's own DID.
-    (let ((subject (event-subject (if (pair? args) (car args) #f))))
-      (if (non-empty-string? subject) (prune-did! subject) #f))))
+  (lambda (args msg) (count-broadcast! ":leave" args msg)))
 
 ; Generic event notification from a non-broadcasting parent (a chest, an exit,
 ; a thing): the parent forwards (:event <name> <subject-did>) and the actor
@@ -593,7 +623,7 @@
   (lambda (args msg)
     (let ((did (arg-at-or-false args 0))
           (name (normalise-name (arg-at-or-false args 1)))
-          (delta (arg-at-or-false args 2)))
+          (delta (as-number (arg-at-or-false args 2))))
       (cond ((not (and (string? did) (string? name) (number? delta)))
              (reply-error msg "usage: :count <did> <name> <delta>"))
             ((not (count-caller-authorised? did msg))
@@ -606,7 +636,7 @@
   (lambda (args msg)
     (let ((did (arg-at-or-false args 0))
           (name (normalise-name (arg-at-or-false args 1)))
-          (value (arg-at-or-false args 2)))
+          (value (as-number (arg-at-or-false args 2))))
       (cond ((not (and (string? did) (string? name) (number? value)))
              (reply-error msg "usage: :set <did> <name> <value>"))
             ((not (owner-caller? msg))
@@ -677,3 +707,40 @@
                    (ma-save-state!)
                    (reply-ok msg))
                  (reply-error msg "invalid trigger rule")))))))
+
+; ── Object relocation and ownership ─────────────────────────────────────────
+; The trigger is an ordinary movable node: forge births it into the forger's
+; hand, and the owner places it in the room with the shared :set-parent/:hold
+; flow (trigger.md). Every body below is the shared node.ma handler; this kind
+; file only registers them.
+(set-rpc-method! :owner handle-node-owner)
+(set-rpc-method! :owner? handle-node-owner?)
+(set-rpc-method! :set-recovery-secret handle-node-set-recovery-secret!)
+(set-cmd-method! :claim handle-node-claim!)
+(set-rpc-method! :put handle-node-put!)
+(set-cmd-method! :take handle-node-take-relay!)
+(set-cmd-method! :set-parent handle-node-set-parent!)
+
+; :hold implicitly targets the caller (msg-from) as new parent - no argument.
+; Shared body lives in node.ma as handle-node-hold!.
+(set-cmd-method! :hold handle-node-hold!)
+
+(define (recycle! msg)
+  (let ((old-parent (node-parent)))
+    (begin
+      (set-node-parent! "")
+      (if (non-empty-string? old-parent)
+          (ma-send! (canonical-actor old-parent) (list :parent (node-ctx-for-parent "")))
+          #f)
+      (ma-end))))
+
+(set-cmd-method! :recycle
+  (lambda (args msg)
+    (let ((did (node-effective-did args msg))
+          (rest (node-effective-args args msg)))
+      (cond ((not (null? rest))
+             (reply-error msg "usage: :recycle <did>"))
+            ((not (node-recycle-caller-authorised? did msg))
+             (reply-error msg "only owner may recycle this trigger"))
+            (else
+             (recycle! msg))))))

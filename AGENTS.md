@@ -89,7 +89,12 @@ at the moment it is needed and never stored separately.
 `register-ctx-props!` is a **change-detection hook only**. It declares which
 prop keys, when changed via `set-prop!`, should trigger `ctx-props-changed!`
 so the ctx can be re-generated and broadcast. It does not create a separate
-"ctx" storage layer.
+"ctx" storage layer. For the node ctx the declared keys come from the single
+ctx declaration (`node-ctx-prop-keys` in `scheme-actor/node.ma`): adding a
+prop-backed attribute to that declaration is sufficient for a `set-prop!`
+change to re-announce. Kind files extend the same global list with their own
+keys — `direction`/`target-room`/`target-name` for exits, `ctx:rev`/`children`
+for rooms and containers — never by duplicating the node keys.
 
 Consequences:
 - Never cache a ctx and mutate it directly — mutate the underlying props and
@@ -189,7 +194,10 @@ being moved (thing/container/agent alike — agents are ordinary
   never a DID-URL) and takes no argument at all; this is the verb `hold`/
   `take`/`take-from` in `avatar.zscheme` actually send. Shared
   implementation: `handle-node-hold!` (`scheme-actor/node.ma`); registered
-  on thing/container/agent only, never `room.ma` (rooms are not holdable).
+  on thing/container/agent/trigger only, never `room.ma` (rooms are not
+  holdable). `:put` (avatar-initiated item move) and the root-relayed item
+  `:take` share `handle-node-put!`/`handle-node-take-relay!` in node.ma,
+  registered the same way by thing/agent/trigger.
 
 `:hold` is deliberately ownership-blind: anyone (or anything) present in the
 same room may hold any item regardless of who owns it, and holding never

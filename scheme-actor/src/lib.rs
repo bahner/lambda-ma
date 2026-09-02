@@ -197,6 +197,12 @@ mod tests {
         env
     }
 
+    fn trigger_env() -> Rc<Env> {
+        let env = node_env();
+        eval_all(include_str!("../../actors/trigger.ma"), &env).unwrap();
+        env
+    }
+
     fn install_send_reply_recorders(env: &Rc<Env>) {
         eval_all(
             r#"
@@ -729,6 +735,7 @@ mod tests {
         install_send_reply_recorders(&env);
         eval_all(
             r#"
+            (define (ma-random n) 42)
             (define (ma-create-actor kind behaviour init fragment)
               (set-prop! "forge-kind" kind)
               (set-prop! "forge-behaviour" (if behaviour behaviour "none"))
@@ -761,7 +768,12 @@ mod tests {
             "/ma/thing/0.0.1"
         );
         assert_eq!(eval_str("(get-prop \"forge-behaviour\")", &env), "none");
-        assert_eq!(eval_str("(get-prop \"forge-fragment\")", &env), "none");
+        // New forge entities carry a kind-prefixed fragment: the short kind
+        // derived from the protocol, a dash, then 8 random bytes as hex.
+        let fragment = eval_str("(get-prop \"forge-fragment\")", &env);
+        assert!(fragment.starts_with("thing-"), "fragment was {fragment}");
+        assert_eq!(fragment.len(), 22);
+        assert!(fragment[6..].chars().all(|c| c.is_ascii_hexdigit()));
         let init = eval_str("(get-prop \"forge-init\")", &env);
         assert!(init.contains("(set-init-prop! \"name\" \"Lamp\")"));
         assert!(init.contains("(set-init-prop! \"owner\" \"did:ma:owner\")"));
@@ -790,6 +802,7 @@ mod tests {
         install_send_reply_recorders(&env);
         eval_all(
             r#"
+            (define (ma-random n) 42)
             (define (ma-create-actor kind behaviour init fragment)
               (set-prop! "forge-init" init)
               "did:ma:runtime#newthing1")
@@ -834,6 +847,7 @@ mod tests {
         install_send_reply_recorders(&env);
         eval_all(
             r#"
+            (define (ma-random n) 42)
             (define (ma-create-actor kind behaviour init fragment)
               (set-prop! "forge-init" init)
               "did:ma:runtime#newthing2")
@@ -3044,6 +3058,121 @@ mod tests {
     }
 
     #[test]
+    fn thing_visible_prop_update_announces_updated_ctx_to_parent() {
+        let env = thing_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#lamp".to_string());
+        crate::state::set_config(config);
+
+        eval_all(
+            r#"
+            (set-prop! "parent" "did:ma:runtime#room")
+            (set-prop! "owner" "did:ma:owner")
+            (set-prop! "name" "lamp")
+            (set-prop! "nick" "lamp")
+            (set-prop! "description" "A brass lamp.")
+            "#,
+            &env,
+        )
+        .unwrap();
+        env.define(
+            Rc::from("prop_msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:owner",
+                "did:ma:runtime#lamp",
+                Value::list(vec![
+                    Value::symbol(":prop"),
+                    Value::str("visible"),
+                    Value::str("false"),
+                ]),
+            )),
+        );
+        eval_all("(on-message prop_msg)", &env).unwrap();
+
+        // The change re-announces to the parent room so its stored child ctx
+        // reflects the new visibility and :look stops publishing the child.
+        assert_eq!(
+            eval_all("(car (get-prop \"sent-term:1\"))", &env).unwrap(),
+            Value::symbol(":parent"),
+        );
+        assert_eq!(
+            eval_str(
+                "(ctx-text (car (cdr (get-prop \"sent-term:1\"))) \"visible\")",
+                &env
+            ),
+            "false"
+        );
+        assert_eq!(
+            eval_all(
+                "(map-ref (car (cdr (get-prop \"sent-term:1\"))) \"fixed\")",
+                &env
+            )
+            .unwrap(),
+            Value::Bool(false)
+        );
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
+            Value::symbol(":ok"),
+        );
+    }
+
+    #[test]
+    fn thing_fixed_prop_update_announces_updated_ctx_to_parent() {
+        let env = thing_env();
+        install_send_reply_recorders(&env);
+        let mut config = std::collections::HashMap::new();
+        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
+        config.insert("self".to_string(), "did:ma:runtime#lamp".to_string());
+        crate::state::set_config(config);
+
+        eval_all(
+            r#"
+            (set-prop! "parent" "did:ma:runtime#room")
+            (set-prop! "owner" "did:ma:owner")
+            (set-prop! "name" "lamp")
+            (set-prop! "nick" "lamp")
+            (set-prop! "description" "A brass lamp.")
+            "#,
+            &env,
+        )
+        .unwrap();
+        env.define(
+            Rc::from("prop_msg"),
+            Value::Msg(sample_term_msg(
+                "did:ma:owner",
+                "did:ma:runtime#lamp",
+                Value::list(vec![
+                    Value::symbol(":prop"),
+                    Value::str("fixed"),
+                    Value::str("true"),
+                ]),
+            )),
+        );
+        eval_all("(on-message prop_msg)", &env).unwrap();
+
+        // The change re-announces to the parent room so its stored child ctx
+        // reflects the new fixed state (relocation gates read it actor-side).
+        assert_eq!(
+            eval_all("(car (get-prop \"sent-term:1\"))", &env).unwrap(),
+            Value::symbol(":parent"),
+        );
+        assert_eq!(
+            eval_all(
+                "(map-ref (car (cdr (get-prop \"sent-term:1\"))) \"fixed\")",
+                &env
+            )
+            .unwrap(),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
+            Value::symbol(":ok"),
+        );
+    }
+
+    #[test]
     fn agent_owner_can_update_name_with_prop() {
         let env = agent_env();
         install_send_reply_recorders(&env);
@@ -5161,13 +5290,15 @@ mod tests {
         crate::state::set_config(config);
 
         let door_frag = eval_str("(room-fragment \"dør\")", &env);
-        assert_eq!(door_frag.len(), 16);
-        assert!(door_frag.chars().all(|c| c.is_ascii_hexdigit()));
+        assert!(door_frag.starts_with("room-"), "fragment was {door_frag}");
+        assert_eq!(door_frag.len(), 21);
+        assert!(door_frag[5..].chars().all(|c| c.is_ascii_hexdigit()));
         assert_eq!(door_frag, eval_str("(room-fragment \"dør\")", &env));
         assert_ne!(door_frag, eval_str("(room-fragment \"vindu\")", &env));
 
         let exit = eval_str("(exit-fragment \"dør\")", &env);
-        assert_eq!(exit.len(), 16);
+        assert!(exit.starts_with("exit-"), "fragment was {exit}");
+        assert_eq!(exit.len(), 21);
         assert_eq!(exit, eval_str("(exit-fragment \"dør\")", &env));
         assert_ne!(exit, door_frag);
     }
@@ -7032,5 +7163,151 @@ mod tests {
             eval_all("(child-ctx \"did:ma:runtime#lamp\")", &env).unwrap(),
             Value::Bool(false)
         );
+    }
+
+    #[test]
+    fn trigger_flat_rule_accepts_numeric_string_condition_from_wire() {
+        // Regression: zion sends every RPC argument as CBOR text, so the count
+        // in `every 1` arrives as the string "1", not an integer. The old
+        // flat-condition parser required a number, failed to consume the
+        // condition, and shifted `every`/`1`/`:narrate_to` into the method and
+        // text — producing a non-atom symbol in the stored rule that blew up
+        // ma-save-state! with "cannot CBOR-encode a non-atom symbol".
+        let env = trigger_env();
+        install_send_reply_recorders(&env);
+        eval_all(r#"(set-prop! "owner" "did:ma:owner")"#, &env).unwrap();
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_msg("did:ma:owner", "did:ma:runtime#trigger-1")),
+        );
+
+        eval_all(
+            r#"
+            ((find-method :trigger)
+              (list "say-every" :say "every" "1" :narrate_to "lars  sa noe")
+              msg)
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        // The rule is persisted via ma-save-state!, so it must be CBOR-encodable.
+        crate::state::dump_to_cbor().unwrap();
+
+        let rule = "(car (get-prop \"triggers\"))";
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
+            Value::symbol(":ok")
+        );
+        assert_eq!(
+            eval_str(&format!("(map-ref {rule} \"id\")"), &env),
+            "say-every"
+        );
+        assert_eq!(eval_str(&format!("(map-ref {rule} \"on\")"), &env), ":say");
+        assert_eq!(eval_int(&format!("(map-ref {rule} \"every\")"), &env), 1);
+        assert_eq!(
+            eval_str(
+                &format!("(symbol->string (map-ref {rule} \"method\"))"),
+                &env
+            ),
+            ":narrate-to"
+        );
+        assert_eq!(
+            eval_str(&format!("(car (map-ref {rule} \"text\"))"), &env),
+            "lars  sa noe"
+        );
+    }
+
+    #[test]
+    fn trigger_listing_heals_poisoned_rule_from_old_behaviour() {
+        // A poisoned rule — a non-atom method symbol left in memory by an
+        // older behaviour version — used to brick the actor: :triggers replies
+        // with the raw stored list, so every reply and every ma-save-state!
+        // failed with "cannot CBOR-encode a non-atom symbol". trigger-rules
+        // now prunes invalid rules and writes the cleaned list back, so the
+        // actor heals itself on the next read.
+        let env = trigger_env();
+        install_send_reply_recorders(&env);
+        eval_all(r#"(set-prop! "owner" "did:ma:owner")"#, &env).unwrap();
+        // Simulate the poisoned state the old parser left behind: the
+        // un-consumed condition word `every` shifted into the method position.
+        eval_all(
+            r#"(set-prop! "triggers"
+                 (list (make-map "id" "say-every"
+                                 "on" ":say"
+                                 "method" 'every
+                                 "text" (list "1" :narrate_to "hello")
+                                 "every" 1)))"#,
+            &env,
+        )
+        .unwrap();
+
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_msg("did:ma:owner", "did:ma:runtime#trigger-1")),
+        );
+        eval_all(r#"((find-method :triggers) '() msg)"#, &env).unwrap();
+
+        // The reply is a clean, CBOR-encodable list — no non-atom symbol.
+        let reply = eval_all("(get-prop \"reply-term:1\")", &env).unwrap();
+        crate::cbor::encode(&reply).unwrap();
+        // The stored state healed: the poisoned rule is gone and the whole
+        // props table saves again.
+        assert_eq!(
+            eval_all("(trigger-rules)", &env).unwrap(),
+            Value::list(vec![])
+        );
+        crate::state::dump_to_cbor().unwrap();
+
+        // A fresh :trigger set also succeeds on the healed state.
+        eval_all(
+            r#"
+            ((find-method :trigger)
+              (list "say-every" :say "every" "1" :narrate_to "lars (did-name) sa noe")
+              msg)
+            "#,
+            &env,
+        )
+        .unwrap();
+        assert_eq!(
+            eval_all("(get-prop \"reply-term:2\")", &env).unwrap(),
+            Value::symbol(":ok")
+        );
+        crate::state::dump_to_cbor().unwrap();
+    }
+
+    #[test]
+    fn trigger_rule_without_verb_atom_is_rejected_not_crashing() {
+        // A method word without a colon (e.g. `lock`) normalises to a bare
+        // symbol with no CBOR representation. Such a rule must be rejected at
+        // setup ("invalid trigger rule"), never stored and crashed on
+        // ma-save-state!.
+        let env = trigger_env();
+        install_send_reply_recorders(&env);
+        eval_all(r#"(set-prop! "owner" "did:ma:owner")"#, &env).unwrap();
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_msg("did:ma:owner", "did:ma:runtime#trigger-1")),
+        );
+
+        eval_all(
+            r#"
+            ((find-method :trigger)
+              (list "bad" :say "once" "lock" "hello")
+              msg)
+            "#,
+            &env,
+        )
+        .unwrap();
+
+        assert_eq!(
+            eval_all("(trigger-rules)", &env).unwrap(),
+            Value::list(vec![])
+        );
+        assert!(eval_bool(
+            "(equal? (car (get-prop \"reply-term:1\")) :error)",
+            &env
+        ));
+        crate::state::dump_to_cbor().unwrap();
     }
 }

@@ -287,6 +287,34 @@ fn room_prop_rejects_non_owner_and_missing_key() {
     );
 }
 
+#[test]
+fn room_prop_unowned_accepts_any_caller() {
+    let env = room_env();
+    ma_scheme_actor::state::set_config(make_config("did:ma:runtime", "did:ma:runtime#room"));
+
+    // An unowned node has no owner to defend it: any caller may set its props
+    // (mirroring the transfer gate's unowned openness).
+    env.define(
+        Rc::from("msg"),
+        sample_msg(
+            "did:ma:stranger",
+            "did:ma:runtime#room",
+            Value::list(vec![
+                Value::symbol(":prop"),
+                Value::str("visible"),
+                Value::str("false"),
+            ]),
+        ),
+    );
+    eval_all("(on-message msg)", &env).unwrap();
+
+    assert_eq!(
+        eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
+        Value::symbol(":ok")
+    );
+    assert_eq!(eval_str("(get-prop \"visible\")", &env), "false");
+}
+
 // ── Room `:emote` ─────────────────────────────────────────────────────────
 
 #[test]
@@ -767,6 +795,329 @@ fn room_trigger_reports_designated_trigger() {
     );
 }
 
+#[test]
+fn room_admits_trigger_child_but_hides_it_from_movable_views() {
+    let env = room_env();
+    ma_scheme_actor::state::set_config(make_config("did:ma:runtime", "did:ma:runtime#room"));
+
+    // A trigger is a room-bound sensor: the room admits it as a child (so it
+    // receives broadcasts and can be designated via the `trigger` prop), but
+    // it must stay invisible to who?/occupants?/things?/exits?, which derive
+    // from movable-children.
+    let content = eval_all(
+        r#"(list :parent
+               (make-map "actor" "did:ma:runtime#trigger"
+                         "did" "did:ma:runtime#trigger"
+                         "kind" "trigger"
+                         "protocol" "/ma/trigger/0.0.1"
+                         "parent" "did:ma:runtime#room"
+                         "name" "staircase-trigger"
+                         "nick" "staircase-trigger"
+                         "description" "A test trigger."))"#,
+        &env,
+    )
+    .unwrap();
+    env.define(
+        Rc::from("msg"),
+        sample_msg("did:ma:runtime#trigger", "did:ma:runtime#room", content),
+    );
+    eval_all("(on-message msg)", &env).unwrap();
+    assert!(has_child(&env, "did:ma:runtime#trigger"));
+    assert_eq!(
+        eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
+        Value::symbol(":ok")
+    );
+    // Admitted, but not a movable child — invisible to the room's views.
+    assert_eq!(
+        eval_all("(movable-kind? \"trigger\")", &env).unwrap(),
+        Value::Bool(false)
+    );
+}
+
+#[test]
+fn room_hides_invisible_children_from_views() {
+    let env = room_env();
+    ma_scheme_actor::state::set_config(make_config("did:ma:runtime", "did:ma:runtime#room"));
+
+    // A normal thing is visible; one with `visible: "false"` stays a room
+    // child (broadcasts and direct RPCs still reach it) but drops out of
+    // every presentation view.
+    eval_all(r#"(test-thing-claim! "did:ma:runtime#lamp" "lamp")"#, &env).unwrap();
+    eval_all(
+        r#"(remember-child! (make-map "actor" "did:ma:runtime#hidden-lamp"
+                                      "kind" "thing"
+                                      "protocol" "/ma/thing/0.0.1"
+                                      "parent" "did:ma:runtime#room"
+                                      "name" "hidden-lamp"
+                                      "nick" "hidden-lamp"
+                                      "description" "A hidden lamp."
+                                      "visible" "false"))"#,
+        &env,
+    )
+    .unwrap();
+
+    assert_eq!(
+        eval_all(r#"(member-string? "lamp" (thing-token-names))"#, &env).unwrap(),
+        Value::Bool(true)
+    );
+    assert_eq!(
+        eval_all(
+            r#"(member-string? "hidden-lamp" (thing-token-names))"#,
+            &env
+        )
+        .unwrap(),
+        Value::Bool(false)
+    );
+    // Still a child — the room's broadcasts and direct RPCs reach it.
+    assert!(has_child(&env, "did:ma:runtime#hidden-lamp"));
+}
+
+// ── Hidden children are never published ───────────────────────────────────
+
+#[test]
+fn room_ctx_publishes_only_visible_children() {
+    let env = room_env();
+    ma_scheme_actor::state::set_config(make_config("did:ma:runtime", "did:ma:runtime#room"));
+
+    eval_all(r#"(test-thing-claim! "did:ma:runtime#lamp" "lamp")"#, &env).unwrap();
+    eval_all(
+        r#"(remember-child! (make-map "actor" "did:ma:runtime#hidden-coin"
+                                      "kind" "thing"
+                                      "protocol" "/ma/thing/0.0.1"
+                                      "parent" "did:ma:runtime#room"
+                                      "name" "hidden-coin"
+                                      "nick" "hidden-coin"
+                                      "description" "A hidden coin."
+                                      "visible" "false"))"#,
+        &env,
+    )
+    .unwrap();
+
+    // The authoritative children map keeps both; only the published :look
+    // children map excludes the hidden child.
+    assert!(has_child(&env, "did:ma:runtime#lamp"));
+    assert!(has_child(&env, "did:ma:runtime#hidden-coin"));
+    assert!(eval_bool(
+        r#"(map-has-key? (map-ref (room-ctx) "children") "did:ma:runtime#lamp")"#,
+        &env
+    ));
+    assert!(eval_bool(
+        r#"(not (map-has-key? (map-ref (room-ctx) "children") "did:ma:runtime#hidden-coin"))"#,
+        &env
+    ));
+}
+
+#[test]
+fn room_hidden_thing_arrival_is_not_broadcast() {
+    let env = room_env();
+    ma_scheme_actor::state::set_config(make_config("did:ma:runtime", "did:ma:runtime#room"));
+    eval_all(
+        r#"
+        (test-did-presence! "did:ma:alice"
+          (make-map "parent" "did:ma:runtime#room"
+                    "name" "Alice"
+                    "nick" "Alice"
+                    "description" "A visitor."
+                    "rev" 1))
+        "#,
+        &env,
+    )
+    .unwrap();
+
+    let content = eval_all(
+        r#"(make-map "actor" "did:ma:runtime#hidden-coin"
+                      "kind" "thing"
+                      "protocol" "/ma/thing/0.0.1"
+                      "parent" "did:ma:runtime#room"
+                      "name" "hidden-coin"
+                      "nick" "hidden-coin"
+                      "description" "A hidden coin."
+                      "visible" "false")"#,
+        &env,
+    )
+    .unwrap();
+    env.define(Rc::from("content"), content);
+    env.define(
+        Rc::from("msg"),
+        sample_msg(
+            "did:ma:runtime#hidden-coin",
+            "did:ma:runtime#room",
+            Value::symbol(":parent"),
+        ),
+    );
+    eval_all("((find-method :parent) (list content) msg)", &env).unwrap();
+
+    // Admitted, but no :arrive reaches Alice — only the room sweep (:child)
+    // and the hidden child's own :here.
+    assert!(has_child(&env, "did:ma:runtime#hidden-coin"));
+    assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 3);
+    assert!(eval_bool(
+        "(equal? (car (get-prop \"sent-term:1\")) :child)",
+        &env
+    ));
+    assert!(eval_bool(
+        "(equal? (car (get-prop \"sent-term:2\")) :child)",
+        &env
+    ));
+    assert!(eval_bool(
+        "(equal? (car (get-prop \"sent-term:3\")) :here)",
+        &env
+    ));
+}
+
+#[test]
+fn room_hidden_child_leave_is_not_broadcast() {
+    let env = room_env();
+    ma_scheme_actor::state::set_config(make_config("did:ma:runtime", "did:ma:runtime#room"));
+    eval_all(
+        r#"
+        (test-did-presence! "did:ma:alice"
+          (make-map "parent" "did:ma:runtime#room"
+                    "name" "Alice"
+                    "nick" "Alice"
+                    "description" "A visitor."
+                    "rev" 1))
+        (remember-child! (make-map "actor" "did:ma:runtime#hidden-coin"
+                                   "kind" "thing"
+                                   "protocol" "/ma/thing/0.0.1"
+                                   "parent" "did:ma:runtime#room"
+                                   "name" "hidden-coin"
+                                   "nick" "hidden-coin"
+                                   "description" "A hidden coin."
+                                   "visible" "false"))
+        "#,
+        &env,
+    )
+    .unwrap();
+
+    env.define(
+        Rc::from("msg"),
+        sample_msg(
+            "did:ma:runtime#hidden-coin",
+            "did:ma:runtime#room",
+            Value::symbol(":leave"),
+        ),
+    );
+    eval_all("((find-method :leave) (list) msg)", &env).unwrap();
+
+    // The child is gone, but no :leave reaches Alice.
+    assert!(!has_child(&env, "did:ma:runtime#hidden-coin"));
+    assert!(eval_bool("(not (has-prop? \"sent-count\"))", &env));
+}
+
+#[test]
+fn room_hidden_child_ctx_change_is_not_broadcast() {
+    let env = room_env();
+    ma_scheme_actor::state::set_config(make_config("did:ma:runtime", "did:ma:runtime#room"));
+    eval_all(
+        r#"
+        (test-did-presence! "did:ma:alice"
+          (make-map "parent" "did:ma:runtime#room"
+                    "name" "Alice"
+                    "nick" "Alice"
+                    "description" "A visitor."
+                    "rev" 1))
+        (remember-child! (make-map "actor" "did:ma:runtime#hidden-coin"
+                                   "kind" "thing"
+                                   "protocol" "/ma/thing/0.0.1"
+                                   "parent" "did:ma:runtime#room"
+                                   "name" "hidden-coin"
+                                   "nick" "hidden-coin"
+                                   "description" "A hidden coin."
+                                   "visible" "false"))
+        "#,
+        &env,
+    )
+    .unwrap();
+
+    // The hidden child re-announces with a changed nick.
+    let content = eval_all(
+        r#"(make-map "actor" "did:ma:runtime#hidden-coin"
+                      "kind" "thing"
+                      "protocol" "/ma/thing/0.0.1"
+                      "parent" "did:ma:runtime#room"
+                      "name" "hidden-coin"
+                      "nick" "renamed-coin"
+                      "description" "A hidden coin."
+                      "visible" "false")"#,
+        &env,
+    )
+    .unwrap();
+    env.define(Rc::from("content"), content);
+    env.define(
+        Rc::from("msg"),
+        sample_msg(
+            "did:ma:runtime#hidden-coin",
+            "did:ma:runtime#room",
+            Value::symbol(":parent"),
+        ),
+    );
+    eval_all("((find-method :parent) (list content) msg)", &env).unwrap();
+
+    // The stored ctx is replaced, but no :child-ctx reaches Alice — only the
+    // ordinary room sweep's :child acks.
+    assert_eq!(
+        eval_str(
+            "(ctx-text (child-ctx \"did:ma:runtime#hidden-coin\") \"nick\")",
+            &env
+        ),
+        "renamed-coin"
+    );
+    assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 2);
+    assert!(eval_bool(
+        "(equal? (car (get-prop \"sent-term:1\")) :child)",
+        &env
+    ));
+    assert!(eval_bool(
+        "(equal? (car (get-prop \"sent-term:2\")) :child)",
+        &env
+    ));
+}
+
+#[test]
+fn room_hidden_child_say_is_not_broadcast() {
+    let env = room_env();
+    ma_scheme_actor::state::set_config(make_config("did:ma:runtime", "did:ma:runtime#room"));
+    eval_all(
+        r#"
+        (test-did-presence! "did:ma:alice"
+          (make-map "parent" "did:ma:runtime#room"
+                    "name" "Alice"
+                    "nick" "Alice"
+                    "description" "A visitor."
+                    "rev" 1))
+        (remember-child! (make-map "actor" "did:ma:runtime#hidden-coin"
+                                   "kind" "thing"
+                                   "protocol" "/ma/thing/0.0.1"
+                                   "parent" "did:ma:runtime#room"
+                                   "name" "hidden-coin"
+                                   "nick" "hidden-coin"
+                                   "description" "A hidden coin."
+                                   "visible" "false"))
+        "#,
+        &env,
+    )
+    .unwrap();
+
+    env.define(
+        Rc::from("msg"),
+        sample_msg(
+            "did:ma:runtime#hidden-coin",
+            "did:ma:runtime#room",
+            Value::list(vec![Value::symbol(":say"), Value::str("hello")]),
+        ),
+    );
+    eval_all("((find-method :say) (list \"hello\") msg)", &env).unwrap();
+
+    // No :say event carries the hidden speaker's ctx to anyone; the speaker
+    // is still acknowledged.
+    assert!(eval_bool("(not (has-prop? \"sent-count\"))", &env));
+    assert_eq!(
+        eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
+        Value::symbol(":ok")
+    );
+}
+
 // ── Trigger actor ──────────────────────────────────────────────────────────
 
 fn trigger_env() -> Rc<ma_scheme_actor::env::Env> {
@@ -789,6 +1140,7 @@ fn trigger_env() -> Rc<ma_scheme_actor::env::Env> {
           (inc-prop! "reply-count" 1)
           (set-prop! (string-append "reply-term:" (number->string (get-prop "reply-count"))) term))
         (define (ma-save-state!) #f)
+        (define (ma-random n) 42)
         (define (test-trigger-env!)
           (set-prop! "parent" "did:ma:runtime#room")
           (set-prop! "owner" "did:ma:alice")
@@ -1182,15 +1534,56 @@ fn trigger_automatically_counts_room_events() {
     )
     .unwrap();
 
+    // Arrival, speech, and departure each count under the subject DID.
+    env.define(
+        Rc::from("arrive_msg"),
+        sample_msg(
+            "did:ma:runtime#room",
+            "did:ma:runtime#room",
+            Value::list(vec![Value::symbol(":arrive"), bob_ctx.clone()]),
+        ),
+    );
+    eval_all("(on-message arrive_msg)", &env).unwrap();
+    assert_eq!(
+        eval_int("(counter-value \"did:ma:bob\" \":arrive\")", &env),
+        1
+    );
+
     env.define(
         Rc::from("say_msg"),
         sample_msg(
             "did:ma:runtime#room",
             "did:ma:runtime#room",
-            Value::list(vec![Value::symbol(":say"), bob_ctx, Value::str("hello")]),
+            Value::list(vec![
+                Value::symbol(":say"),
+                bob_ctx.clone(),
+                Value::str("hello"),
+            ]),
         ),
     );
     eval_all("(on-message say_msg)", &env).unwrap();
+    assert_eq!(eval_int("(counter-value \"did:ma:bob\" \":say\")", &env), 1);
+
+    env.define(
+        Rc::from("leave_msg"),
+        sample_msg(
+            "did:ma:runtime#room",
+            "did:ma:runtime#room",
+            Value::list(vec![Value::symbol(":leave"), bob_ctx.clone()]),
+        ),
+    );
+    eval_all("(on-message leave_msg)", &env).unwrap();
+    assert_eq!(
+        eval_int("(counter-value \"did:ma:bob\" \":leave\")", &env),
+        1
+    );
+
+    // Departure counts but never prunes: the arrival and speech totals
+    // survive, so cross-session visit rules keep their history.
+    assert_eq!(
+        eval_int("(counter-value \"did:ma:bob\" \":arrive\")", &env),
+        1
+    );
     assert_eq!(eval_int("(counter-value \"did:ma:bob\" \":say\")", &env), 1);
 }
 
@@ -1401,6 +1794,167 @@ fn trigger_rule_removal_and_listing() {
     assert_eq!(
         eval_all("(map-has-key? (trigger-state) \"one\")", &env).unwrap(),
         Value::Bool(false)
+    );
+}
+
+// ── Trigger relocation ─────────────────────────────────────────────────────
+
+#[test]
+fn trigger_accepts_set_parent_from_current_parent() {
+    let env = trigger_env();
+    ma_scheme_actor::state::set_config(make_config("did:ma:runtime", "did:ma:runtime#room"));
+
+    // The room (current parent) relocates the trigger with the ordinary
+    // :set-parent flow — the wire verb avatar.zscheme's `drop` sends after
+    // forge birthed the trigger into the forger's hand. Without this
+    // registration the actor silently ignored the verb and the client's RPC
+    // timed out with a cancelled reply channel.
+    env.define(
+        Rc::from("msg"),
+        sample_msg(
+            "did:ma:runtime#room",
+            "did:ma:runtime#room",
+            Value::list(vec![
+                Value::symbol(":set-parent"),
+                Value::str("did:ma:runtime#room2"),
+            ]),
+        ),
+    );
+    eval_all("(on-message msg)", &env).unwrap();
+    assert_eq!(
+        eval_all("(get-prop \"pending-parent\")", &env).unwrap(),
+        Value::Str("did:ma:runtime#room2".to_string().into())
+    );
+    // The ordinary `:ok` ack, not silence.
+    assert_eq!(
+        eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
+        eval_all(r#"(list :ok "set-parent requested")"#, &env).unwrap()
+    );
+}
+
+#[test]
+fn trigger_accepts_hold_from_room_child() {
+    let env = trigger_env();
+    ma_scheme_actor::state::set_config(make_config("did:ma:runtime", "did:ma:runtime#room"));
+
+    // Alice (present in the room) picks the trigger up with the ownership-
+    // blind :hold flow, exactly like any other movable node.
+    env.define(
+        Rc::from("msg"),
+        sample_msg(
+            "did:ma:alice",
+            "did:ma:runtime#room",
+            Value::list(vec![Value::symbol(":hold")]),
+        ),
+    );
+    eval_all("(on-message msg)", &env).unwrap();
+    assert_eq!(
+        eval_all("(get-prop \"pending-parent\")", &env).unwrap(),
+        Value::Str("did:ma:alice".to_string().into())
+    );
+    assert_eq!(
+        eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
+        eval_all(r#"(list :ok "hold requested")"#, &env).unwrap()
+    );
+}
+
+#[test]
+fn trigger_accepts_put_from_current_parent() {
+    let env = trigger_env();
+    ma_scheme_actor::state::set_config(make_config("did:ma:runtime", "did:ma:runtime#room"));
+
+    // `keep` / `put <item> in <container>` send :put to the item. The current
+    // parent may initiate; the reply carries a transfer id and root receives
+    // the :put-request relay.
+    env.define(
+        Rc::from("msg"),
+        sample_msg(
+            "did:ma:runtime#room",
+            "did:ma:runtime#room",
+            Value::list(vec![
+                Value::symbol(":put"),
+                Value::str("did:ma:runtime#vadsek"),
+            ]),
+        ),
+    );
+    eval_all("(on-message msg)", &env).unwrap();
+    let reply = eval_all("(get-prop \"reply-term:1\")", &env).unwrap();
+    env.define(Rc::from("reply"), reply);
+    assert_eq!(eval_all("(car reply)", &env).unwrap(), Value::symbol(":ok"));
+    // The relay went to root as :put-request with the container target.
+    assert_eq!(
+        eval_all("(get-prop \"sent-target:1\")", &env).unwrap(),
+        Value::Str("did:ma:runtime#root".to_string().into())
+    );
+    assert_eq!(
+        eval_all("(car (get-prop \"sent-term:1\"))", &env).unwrap(),
+        Value::symbol(":put-request")
+    );
+}
+
+#[test]
+fn trigger_fixed_blocks_relocation_verbs() {
+    let env = trigger_env();
+    ma_scheme_actor::state::set_config(make_config("did:ma:runtime", "did:ma:runtime#room"));
+    eval_all(r#"(set-prop! "fixed" "true")"#, &env).unwrap();
+
+    // :set-parent from the current parent is refused.
+    env.define(
+        Rc::from("sp_msg"),
+        sample_msg(
+            "did:ma:runtime#room",
+            "did:ma:runtime#room",
+            Value::list(vec![
+                Value::symbol(":set-parent"),
+                Value::str("did:ma:runtime#room2"),
+            ]),
+        ),
+    );
+    eval_all("(on-message sp_msg)", &env).unwrap();
+    assert_eq!(
+        eval_all("(car (get-prop \"reply-term:1\"))", &env).unwrap(),
+        Value::symbol(":error")
+    );
+    assert_eq!(
+        eval_all("(cadr (get-prop \"reply-term:1\"))", &env).unwrap(),
+        Value::Str("fixed node cannot be moved".to_string().into())
+    );
+
+    // :hold from a present child is refused.
+    env.define(
+        Rc::from("hold_msg"),
+        sample_msg(
+            "did:ma:alice",
+            "did:ma:runtime#room",
+            Value::list(vec![Value::symbol(":hold")]),
+        ),
+    );
+    eval_all("(on-message hold_msg)", &env).unwrap();
+    assert_eq!(
+        eval_all("(car (get-prop \"reply-term:2\"))", &env).unwrap(),
+        Value::symbol(":error")
+    );
+    assert_eq!(
+        eval_all("(cadr (get-prop \"reply-term:2\"))", &env).unwrap(),
+        Value::Str("fixed node cannot be held".to_string().into())
+    );
+
+    // :put from the current parent is refused.
+    env.define(
+        Rc::from("put_msg"),
+        sample_msg(
+            "did:ma:runtime#room",
+            "did:ma:runtime#room",
+            Value::list(vec![
+                Value::symbol(":put"),
+                Value::str("did:ma:runtime#vadsek"),
+            ]),
+        ),
+    );
+    eval_all("(on-message put_msg)", &env).unwrap();
+    assert_eq!(
+        eval_all("(car (get-prop \"reply-term:3\"))", &env).unwrap(),
+        Value::symbol(":error")
     );
 }
 

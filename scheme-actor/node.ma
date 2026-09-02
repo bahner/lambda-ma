@@ -7,13 +7,39 @@
   (let ((value (get-prop "parent")))
     (if (non-empty-string? value) (canonical-actor value) "")))
 
+; The general `fixed` prop: when true, the node cannot be relocated at all —
+; :hold, :set-parent, :put, and the item-side :take relay all refuse. Only the
+; owner may set/clear it via :prop, so a fixed node stays put until the owner
+; deliberately unlocks it. Recycling is a destroy, not a move, and remains
+; available to the owner.
+(define (node-fixed?)
+  (let ((value (get-prop "fixed")))
+    (or (equal? value #t) (equal? value "true"))))
+
+; The general `visible` prop: when false, the node remains a room child (it
+; still receives broadcasts and answers direct RPCs) but is hidden from every
+; presentation view (look, who?, occupants?, things?, exits?, and name
+; resolution). Defaults to "true"; the trigger kind overrides the default.
+(define (node-visible)
+  (let ((value (get-prop "visible")))
+    (if (non-empty-string? value) value "true")))
+
+; ── Node ctx declaration ───────────────────────────────────────────────────
+; The prop-backed keys carried in the node ctx. This list is the single
+; declaration: node-ctx-for-parent builds the map from it, and
+; register-ctx-props! consumes the same list — so adding an attribute here is
+; sufficient: a set-prop! change to it automatically re-announces the ctx to
+; the parent.
+(define node-ctx-prop-keys
+  (list "parent" "name" "nick" "description" "visible" "fixed" "here"))
+
+(register-ctx-props! node-ctx-prop-keys)
+
 (define (set-node-parent! actor)
   (if (non-empty-string? actor)
   (set-init-prop! "parent" (canonical-actor actor))
   (del-init-prop! "parent"))
   (ma-save-state!))
-
-(register-ctx-props! (list "parent" "name" "nick" "description" "here"))
 
 (define (node-protocol)
   (let ((value (ma-get-config-key "kind")))
@@ -41,17 +67,32 @@
 
   (define (extend-node-ctx ctx) ctx)
 
+; Per-key ctx value for the prop-backed fields. `parent` is handled by
+; node-ctx-for-parent (its ctx value is the target-parent argument, not the
+; stored prop); the rest read their props with kind-appropriate defaults.
+(define (node-ctx-prop-value key)
+  (cond ((equal? key "name") (node-name))
+        ((equal? key "nick") (node-nick))
+        ((equal? key "description") (node-description))
+        ((equal? key "visible") (node-visible))
+        ((equal? key "fixed") (node-fixed?))
+        ((equal? key "here") (node-here))
+        (else #f)))
+
 (define (node-ctx-for-parent target-parent)
-  (extend-node-ctx
-    (make-map
-      "actor" (canonical-actor (self))
-      "kind" (node-kind)
-      "protocol" (node-protocol)
-      "parent" (canonical-actor target-parent)
-      "name" (node-name)
-      "nick" (node-nick)
-      "description" (node-description)
-      "here" (node-here))))
+  (let ((parent (canonical-actor target-parent)))
+    (extend-node-ctx
+      (let loop ((keys node-ctx-prop-keys)
+                 (ctx (make-map "actor" (canonical-actor (self))
+                                "kind" (node-kind)
+                                "protocol" (node-protocol))))
+        (if (null? keys)
+            ctx
+            (loop (cdr keys)
+                  (map-set ctx (car keys)
+                           (if (equal? (car keys) "parent")
+                               parent
+                               (node-ctx-prop-value (car keys))))))))))
 
 (define (node-ctx)
   (node-ctx-for-parent (node-parent)))
@@ -205,12 +246,14 @@
   (let ((o (owner)))
     (and o (msg-from-owner? o msg))))
 
-; Shared :prop — one gatekeeper for the owner (or kind policy) to set any
-; prop key except the protocol-managed ones. Kinds with a different
-; authorisation contract override `prop-caller-authorised?` instead of
-; re-registering the verb.
+; Shared :prop — the owner may set any prop key except the protocol-managed
+; ones. An unowned node has no owner to defend it, so any caller may set its
+; props (mirroring the transfer gate's unowned openness); once claimed, only
+; the owner may. Kinds with a different authorisation contract override
+; `prop-caller-authorised?` instead of re-registering the verb.
 (define (prop-caller-authorised? msg)
-  (owner-caller? msg))
+  (or (owner-caller? msg)
+      (not (node-owner))))
 
 ; Structural/security props owned by their own protocol verbs (:claim,
 ; :parent/:child, :lock, :here, :ctx, …) — never writable via :prop.
@@ -730,7 +773,9 @@
 (define (handle-node-set-parent! args msg)
   (let ((did (node-effective-did args msg))
         (rest (node-effective-args args msg)))
-    (cond ((handle-stale-parent-drop did rest msg) #t)
+    (cond ((node-fixed?)
+           (reply-error msg "fixed node cannot be moved"))
+          ((handle-stale-parent-drop did rest msg) #t)
           ((not (node-transfer-caller-authorised? did msg))
            (reply-error msg "set-parent must be requested by current parent"))
           ((null? rest)
@@ -763,6 +808,8 @@
            (reply-error msg "usage: :hold"))
           ((not (is-did-url? did))
            (reply-error msg "hold requires a DID-URL caller"))
+          ((node-fixed?)
+           (reply-error msg "fixed node cannot be held"))
           ((not (node-same-room-as-parent? did))
            (begin
              (announce-node-parent!)
@@ -771,6 +818,53 @@
            (begin
              (propose-node-hold! did)
              (reply-ok-with msg "hold requested"))))))
+
+(define (generate-transfer-id)
+  (string-append (number->string (ma-random 9223372036854775807))
+                 "-"
+                 (number->string (ma-random 9223372036854775807))))
+
+; Avatar-initiated item move into a container (`keep`, `put <item> in
+; <container>`). Two callers: avatar/parent initiates (auth-gated, sends
+; :put-request to root, replies with a transfer id), then root → this-as-item
+; drives propose-node-parent! to the target container. Identical for
+; thing/agent/trigger; shared once here instead of duplicated per kind file.
+(define (handle-node-put! args msg)
+  (if (node-fixed?)
+      (reply-error msg "fixed node cannot be moved")
+      (if (node-caller-is-local-root? msg)
+          (if (and (not (null? args)) (map? (car args)))
+              (begin (propose-node-parent! (map-ref (car args) "container" ""))
+                     (reply-ok msg))
+              (reply-error msg "usage: :put <put-ctx>"))
+          (let ((caller (node-effective-did args msg))
+                (rest (node-effective-args args msg)))
+            (cond ((not (node-transfer-caller-authorised? caller msg))
+                   (reply-error msg "not authorised to put this item"))
+                  ((null? rest)
+                   (reply-error msg "usage: :put <container-did-url>"))
+                  ((not (is-did-url? (car rest)))
+                   (reply-error msg ":put requires a container DID-URL"))
+                  (else
+                   (let* ((container (canonical-actor (car rest)))
+                          (id (generate-transfer-id))
+                          (put-ctx (make-map "action" "put"
+                                             "id" id
+                                             "requestor" caller
+                                             "item" (canonical-actor (self))
+                                             "container" container)))
+                     (ma-send! (root) (list :put-request put-ctx))
+                     (reply-ok-with msg id))))))))
+
+; Root relays :take <take-ctx> when this node is itself the item being taken
+; out of a container (take-relay-authorised? in node.ma keeps it cross-runtime
+; safe). The requestor is a bare avatar DID, so hold-admissibility applies.
+(define (handle-node-take-relay! args msg)
+  (when (and (not (node-fixed?))
+             (not (null? args))
+             (map? (car args))
+             (take-relay-authorised? (car args) msg))
+    (propose-node-hold! (map-ref (car args) "requestor" ""))))
 
 (define (handle-node-parent args msg)
   (cond ((null? args)
@@ -1001,6 +1095,25 @@
     "(announce-node-parent!)\n"
     "(ma-save-state!)\n"))
 
+; New forge entities get a kind-prefixed fragment so `@ma/entities` listings
+; group fresh actors by kind (thing-…, container-…, trigger-…) without
+; renaming anything already created. The short kind is the protocol's
+; penultimate segment: "/ma/thing/0.0.1" -> "thing",
+; "/ma/scheme/agent/0.0.1" -> "agent".
+(define (kind-short-name protocol)
+  (let ((parts (string-split protocol "/")))
+    (if (null? (cdr parts))
+        protocol
+        (list-ref-at parts (- (list-length parts) 2)))))
+
+; 8 random bytes as hex — the same shape the runtime's own fragment
+; generator produces. Crypto entropy via ma_random_bytes, never the
+; actor-local PRNG.
+(define (random-fragment-hex)
+  (blake3 (string-append (number->string (ma-random 9223372036854775807))
+                         ":"
+                         (number->string (ma-random 9223372036854775807))) 8))
+
 (define (handle-node-forge args msg)
   (let ((ctx (if (pair? args) (car args) #f)))
     (cond ((not (forge-ctx-valid? ctx))
@@ -1011,10 +1124,13 @@
            (let* ((owner (canonical-actor (msg-from msg)))
                   (behaviour (ctx-text ctx "behaviour"))
                   (here (if (room-node?) (self) (node-here)))
+                  (fragment (string-append (kind-short-name (ctx-text ctx "kind"))
+                                           "-"
+                                           (random-fragment-hex)))
                 (actor (ma-create-actor (ctx-text ctx "kind")
                                 (if (non-empty-string? behaviour) behaviour #f)
                                 (forge-init (ctx-text ctx "name") owner here)
-                                #f)))
+                                fragment)))
              (reply-ok-with msg actor))))))
 
 (set-rpc-method! :forge handle-node-forge)

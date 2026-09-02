@@ -28,11 +28,20 @@ possible without a protocol change and is deliberately not done now (KISS).
   `:prop trigger <trigger-did-url>` — a single full DID-URL. This is the trust
   anchor: only the designated trigger may narrate, so arbitrary trigger-kind
   actors cannot be forged and given a voice in a room.
-- The fragment is ordinary and random; reconnection and orphanhood use the
-  ordinary child lifecycle (`:phone-home` / re-announce).
+- The fragment is ordinary and random, prefixed with its short kind
+  (`trigger-…`, like every newly created entity); reconnection and orphanhood
+  use the ordinary child lifecycle (`:phone-home` / re-announce).
 - The kind is invisible to `who?` / `occupants?` / `things?` / `exits?` —
   those views filter `children` by kind — while the actor still receives every
-  room broadcast like any other child.
+  room broadcast like any other child. The trigger also defaults to
+  `visible: false`, and a child with `visible: false` is never published at
+  all: the room excludes it from `:look`'s children map, from the nested
+  parent-ctx snapshots, and from every broadcast, so no client ever learns of
+  it. The room owner may override with `:prop visible true`, which makes the
+  trigger appear in `look`'s "Triggers:" section and in client-side name
+  resolution while the kind-filtered views above still exclude it. The owner
+  can lock it in place with the general `fixed: true` prop once it is
+  deployed.
 
 ## State
 
@@ -92,7 +101,8 @@ The trigger actor is a child of the room, so it already receives every room
 broadcast (`:arrive`, `:leave`, `:say`, `:emote`, `:dig`, `:fill`). Each event
 with a subject DID increments `counters[<subject-did>][<event-name>]`
 automatically — no room-side wiring. Subject-less events (for example
-`:narrate`) count under the room's own DID, so every event has a subject.
+`:narrate` — the trigger's own output channel) are deliberately not counted,
+which also prevents a fired narration from re-triggering rules.
 
 Manual `:count`, automatic counting, and direct calls from bespoke trigger
 behaviour are the ways a counter changes; all funnel through `trigger-count`.
@@ -119,10 +129,14 @@ positional — no rule map crosses the interface:
 | `<text...>` | The words: literal strings and `(...)` expression spans (see Template expressions). |
 
 Counters arrive as symbols (`:arrive`) or strings and are normalised to
-strings; method names are normalised (`_` → `-`). The automatic counters are
-keyed by the room's event names verbatim (`":arrive"`, `":leave"`, `":say"`,
-`":emote"`, `":dig"`, `":fill"`); `":leave"` prunes the departing DID
-instead of counting it.
+strings; method names are normalised (`_` → `-`). Condition counts (`N`,
+`S`) may arrive as a number or a numeric string — clients send RPC
+arguments as CBOR text, so `every 1` delivers `"1"` — and are normalised
+to numbers. The automatic counters are keyed by the room's event names
+verbatim (`":arrive"`, `":leave"`, `":say"`, `":emote"`, `":dig"`,
+`":fill"`). `:leave` counts like any other event and prunes nothing, so a
+departing DID's counters and rule state persist: arrival totals survive a
+visit and per-DID rules keep their history across sessions.
 
 | Verb | Effect | Gate |
 | --- | --- | --- |
@@ -217,9 +231,12 @@ narration possible without any runtime change.
 
 ## Garbage collection
 
-- `:leave` events prune the leaving DID's counters and trigger state.
 - Rule removal prunes the rule's trigger state.
 - `once` rules prune their own state after firing.
+- Counters and trigger state persist across departures: `:leave` counts like
+  any other event and prunes nothing, so arrival totals and per-DID rule
+  state survive a visit. Stale entries can be removed by hand with
+  `:reset <did> <name>` (owner, or the DID itself).
 - Long-lived DIDs accumulate one entry per counter name; when that becomes a
   real problem the counter encoding can be made denser without a protocol
   change.

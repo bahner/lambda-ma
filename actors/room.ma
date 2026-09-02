@@ -38,10 +38,19 @@
 (define (occupant-kind? kind) (member-string? kind occupant-kinds))
 (define (person-kind? kind) (member-string? kind person-kinds))
 
+; A child with `visible: false` remains a room child (it still receives
+; broadcasts and answers direct RPCs like :trigger?) but is never published:
+; :look's children map, the nested parent-ctx snapshots, and every broadcast
+; (:arrive/:leave/:child-ctx/:dig/:say/:emote) exclude it, and the movable
+; lookup pool never resolves it. No client ever learns of a hidden child.
+(define (room-child-visible? ctx)
+  (not (equal? (ctx-text ctx "visible") "false")))
+
 (define (occupants-by kind-pred)
   (let loop ((ctxs (child-ctxs)) (acc '()))
     (cond ((null? ctxs) (unique-actor-entries (reverse acc)))
-          ((and (room-claim? (car ctxs))
+          ((and (room-child-visible? (car ctxs))
+                (room-claim? (car ctxs))
                 (kind-pred (ctx-text (car ctxs) "kind")))
            (loop (cdr ctxs)
                  (cons (canonical-actor (ctx-text (car ctxs) "actor")) acc)))
@@ -234,8 +243,16 @@
         (loop (cdr xs) (cons (exit-entry-ctx (car xs)) acc)))))
 
 ; Public visible children are the authoritative KV map, keyed by actor DID.
+; Children with `visible: false` are never published — not in :look's children
+; map, not in the nested parent-ctx snapshots, not in any broadcast. They stay
+; room children (broadcasts and direct RPCs still reach them) but no client
+; ever learns of them: hidden means unpublished, never merely unrendered.
 (define (visible-ctx)
-  (children-map))
+  (let loop ((entries (map->alist (children-map))) (acc (make-map)))
+    (cond ((null? entries) acc)
+          ((room-child-visible? (cdr (car entries)))
+           (loop (cdr entries) (map-set acc (car (car entries)) (cdr (car entries)))))
+          (else (loop (cdr entries) acc)))))
 
 (define (room-ctx)
   (make-map
@@ -367,7 +384,9 @@
           (set-label! actor nick)
           (if was-known
               #f
-              (broadcast-term-except actor (list :arrive ctx)))
+              (if (room-child-visible? ctx)
+                  (broadcast-term-except actor (list :arrive ctx))
+                  #f))
           (ma-save-state!)
           (broadcast-room-ctx!)
           (ma-send! actor (list :here (self)))
@@ -397,7 +416,11 @@
            (set-claim! actor ctx)
            (set-label! actor label)
            (set-thing! token actor)
-           (if was-known #f (broadcast-term-except actor (list :arrive ctx)))
+           (if was-known
+               #f
+               (if (room-child-visible? ctx)
+                   (broadcast-term-except actor (list :arrive ctx))
+                   #f))
            (broadcast-room-ctx!)
            (ma-send! actor (list :here (self)))
            (ma-reply! msg (list :ok "entered"))))))
@@ -428,10 +451,12 @@
            (begin
              (forget-child! actor)
              (ma-save-state!)
-             (broadcast-term (list :leave ctx))
+             (if (room-child-visible? ctx)
+                 (broadcast-term (list :leave ctx))
+                 #f)
              (broadcast-room-ctx!)
              (reply-ok msg)))
-          ((not (or (movable-kind? kind) (exit-kind? kind)))
+          ((not (room-admissible-kind? kind))
            (reply-error msg "child ctx must include actor, parent, kind, protocol, name, nick, description"))
           ((exit-kind? kind)
            (handle-node-parent (list ctx) msg))
@@ -449,7 +474,9 @@
            (begin
              (remember-child! ctx)
              (ma-save-state!)
-             (broadcast-term (list :child-ctx ctx))
+             (if (room-child-visible? ctx)
+                 (broadcast-term (list :child-ctx ctx))
+                 #f)
              (broadcast-room-ctx!)
              (reply-ok msg)))
           (else
@@ -457,7 +484,9 @@
            (begin
              (remember-child! ctx)
              (ma-save-state!)
-             (broadcast-term-except actor (list :arrive ctx))
+             (if (room-child-visible? ctx)
+                 (broadcast-term-except actor (list :arrive ctx))
+                 #f)
              (broadcast-room-ctx!)
              (ma-send! actor (list :here (self)))
              (reply-ok msg))))))
@@ -470,10 +499,22 @@
 (define movable-kinds (list "agent" "thing" "container" "h00man"))
 (define (movable-kind? kind) (member-string? kind movable-kinds))
 
+; The room admits a trigger as a child (so it receives the room's broadcasts
+; and can be designated via the `trigger` prop) but deliberately does NOT make
+; it a movable kind: who?/occupants?/things?/exits? derive from
+; movable-children, so the trigger stays out of the movable views. A trigger
+; with `visible: true` is still presented to clients via look's "Triggers:"
+; section, which derives from the same children map.
+(define (room-admissible-kind? kind)
+  (or (movable-kind? kind)
+      (exit-kind? kind)
+      (equal? kind "trigger")))
+
 (define (movable-children)
   (let loop ((ctxs (child-ctxs)) (acc '()))
     (cond ((null? ctxs) (reverse acc))
-          ((movable-kind? (ctx-text (car ctxs) "kind"))
+          ((and (room-child-visible? (car ctxs))
+                (movable-kind? (ctx-text (car ctxs) "kind")))
            (loop (cdr ctxs) (cons (car ctxs) acc)))
           (else (loop (cdr ctxs) acc)))))
 
@@ -599,12 +640,14 @@
     (if ctx (ctx-text ctx "target-room") #f)))
 
 ; Exit and destination fragments are deterministic so repeated dig is idempotent.
-; Paired with exit-fragment: same input + "\ndst" suffix.
+; Paired with exit-fragment: same input + "\ndst" suffix. The kind prefix
+; keeps `@ma/entities` grouped by kind for newly created exits and rooms;
+; fragments of already existing entities are never renamed.
 (define (room-fragment direction)
-  (blake3 (string-append "lambda-ma exit v2\n" (canonical-actor (self)) "\n" direction "\ndst") 8))
+  (string-append "room-" (blake3 (string-append "lambda-ma exit v2\n" (canonical-actor (self)) "\n" direction "\ndst") 8)))
 
 (define (exit-fragment direction)
-  (blake3 (string-append "lambda-ma exit v2\n" (canonical-actor (self)) "\n" direction) 8))
+  (string-append "exit-" (blake3 (string-append "lambda-ma exit v2\n" (canonical-actor (self)) "\n" direction) 8)))
 
 ; Local exits can be recreated from ctx when the entity has disappeared.
 (define (heal-local-exit! direction exit)
@@ -622,7 +665,9 @@
   (let loop ((ctxs (exit-ctxs)) (directions '()))
     (if (null? ctxs)
         (reverse directions)
-        (loop (cdr ctxs) (cons (ctx-text (car ctxs) "direction") directions)))))
+        (if (room-child-visible? (car ctxs))
+            (loop (cdr ctxs) (cons (ctx-text (car ctxs) "direction") directions))
+            (loop (cdr ctxs) directions)))))
 
 (define (random-exit-direction)
   (let ((directions (exit-directions)))
@@ -652,7 +697,9 @@
              (acc '()))
     (if (null? ctxs)
         (reverse acc)
-        (loop (cdr ctxs) (cons (child-label (car ctxs)) acc)))))
+        (if (room-child-visible? (car ctxs))
+            (loop (cdr ctxs) (cons (child-label (car ctxs)) acc))
+            (loop (cdr ctxs) acc)))))
 
 (define (occupants-text)
   (let ((actors (occupants)))
@@ -813,7 +860,9 @@
            (let ((ctx (claim-ctx actor)))
            (forget-child! actor)
            (ma-save-state!)
-           (if (map? ctx) (broadcast-term (list :leave ctx)) #f))))
+           (if (and (map? ctx) (room-child-visible? ctx))
+               (broadcast-term (list :leave ctx))
+               #f))))
         (else #f)))
 
 (define (leave-candidate args msg)
@@ -826,7 +875,9 @@
         (let ((ctx (claim-ctx actor)))
           (forget-child! actor)
           (ma-save-state!)
-          (if (map? ctx) (broadcast-term (list :leave ctx)) #f)
+          (if (and (map? ctx) (room-child-visible? ctx))
+              (broadcast-term (list :leave ctx))
+              #f)
           (reply-ok msg))
         (reply-error msg "usage: :leave"))))
 
@@ -859,7 +910,9 @@
                    (forget-child! actor)
                    (ma-save-state!)
                    (broadcast-room-ctx!)
-                   (if (map? ctx) (broadcast-term (list :leave ctx)) #f)
+                   (if (and (map? ctx) (room-child-visible? ctx))
+                       (broadcast-term (list :leave ctx))
+                       #f)
                    (ma-send! actor (list :report-parent (canonical-actor (self)))))
                    (reply-ok-with msg (string-append "Removed " name " from this room; asked it to reannounce."))))
                    (else
@@ -1065,7 +1118,9 @@
                 (clear-pending-new-room! direction)
                 (ma-save-state!)
                 (let ((ctx (claim-ctx did)))
-                  (if (map? ctx) (broadcast-term (list :dig ctx direction)) #f))
+                  (if (and (map? ctx) (room-child-visible? ctx))
+                      (broadcast-term (list :dig ctx direction))
+                      #f))
                 (enter-dig-target! requester did target-room)))
             #f))))
 
@@ -1093,7 +1148,8 @@
         (let ((leave-ctx ctx))
           (forget-child! requester)
           (ma-save-state!)
-          (when (map? leave-ctx) (broadcast-term (list :leave leave-ctx)))
+          (when (and (map? leave-ctx) (room-child-visible? leave-ctx))
+            (broadcast-term (list :leave leave-ctx)))
           (broadcast-room-ctx!))
         (ma-send! (canonical-actor target-room) (list :enter entry-ctx))))
     #f))
@@ -1284,7 +1340,9 @@
           (ctx (event-subject-ctx (msg-from msg))))
       (if (map? ctx)
           (begin
-            (broadcast-term (list :say ctx text))
+            (if (room-child-visible? ctx)
+                (broadcast-term (list :say ctx text))
+                #f)
             (reply-ok msg))
           (reply-error msg "speaker has no event ctx")))))
 
@@ -1295,7 +1353,9 @@
           (ctx (event-subject-ctx (msg-from msg))))
       (if (map? ctx)
           (begin
-            (broadcast-term (list :emote ctx text))
+            (if (room-child-visible? ctx)
+                (broadcast-term (list :emote ctx text))
+                #f)
             (reply-ok msg))
           (reply-error msg "speaker has no event ctx")))))
 

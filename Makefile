@@ -51,24 +51,30 @@ $(SCHEME_ACTOR_WASM): FORCE
 
 $(SCHEME_ACTOR_CID_FILE): $(SCHEME_ACTOR_WASM) | $(CID_DIR)
 	$(IPFS) add --quieter "$<" > "$@"
+	test -s "$@"
 
 $(SCHEME_STDLIB_CID_FILE): $(SCHEME_STDLIB) | $(CID_DIR)
 	$(IPFS) add --quieter "$<" > "$@"
+	test -s "$@"
 
 $(SCHEME_ACTOR_LIB_CID_FILE): $(SCHEME_STDLIB) $(SCHEME_ACTOR_LIB) | $(CID_DIR)
 	tmp=$$(mktemp); \
-	cat "$(SCHEME_STDLIB)" "$(SCHEME_ACTOR_LIB)" > "$$tmp"; \
-	$(IPFS) add --quieter "$$tmp" > "$@"; \
-	rm -f "$$tmp"
+		cat "$(SCHEME_STDLIB)" "$(SCHEME_ACTOR_LIB)" > "$$tmp"; \
+		$(IPFS) add --quieter "$$tmp" > "$@"; \
+		rm -f "$$tmp"
+	test -s "$@"
 
 $(SCHEME_STATE_CID_FILE): $(SCHEME_STATE) | $(CID_DIR)
 	$(IPFS) add --quieter "$<" > "$@"
+	test -s "$@"
 
 $(SCHEME_NODE_CID_FILE): $(SCHEME_NODE) | $(CID_DIR)
 	$(IPFS) add --quieter "$<" > "$@"
+	test -s "$@"
 
 $(CID_DIR)/%.cid: actors/%.ma | $(CID_DIR)
 	$(IPFS) add --quieter "$<" > "$@"
+	test -s "$@"
 
 $(OUT): lambda-ma.template.yaml Makefile $(BOOTSTRAP_KIND_FILES) $(SCHEME_ACTOR_CID_FILE) $(SCHEME_STDLIB_CID_FILE) $(SCHEME_ACTOR_LIB_CID_FILE) $(SCHEME_STATE_CID_FILE) $(SCHEME_NODE_CID_FILE) $(CID_FILES)
 	mkdir -p "$(dir $@)"
@@ -133,6 +139,7 @@ bootstrap: root-cid
 
 check: $(OUT)
 	@test -z "$$(grep -n '__[A-Z_]*__' "$(OUT)" || true)"
+	@test -z "$$(awk '/^[[:space:]]*"\/":[[:space:]]*$$/ { print NR \": \" $$0 }' "$(OUT)" || true)"
 
 show-cids: $(SCHEME_ACTOR_CID_FILE) $(SCHEME_STDLIB_CID_FILE) $(SCHEME_ACTOR_LIB_CID_FILE) $(SCHEME_STATE_CID_FILE) $(SCHEME_NODE_CID_FILE) $(CID_FILES)
 	@printf '%-14s %s\n' "scheme-actor" "$$(cat "$(SCHEME_ACTOR_CID_FILE)")"

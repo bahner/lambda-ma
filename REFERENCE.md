@@ -75,6 +75,29 @@ forged entity is born into its forger's hand (its genesis proposes itself to
 the forger). Owner-gated actions such as locking a container require a prior
 claim and never claim implicitly.
 
+Two general props modulate relocation and visibility on every node:
+
+- `fixed: true` (set/cleared by the owner via `:prop`) — the node cannot be
+  relocated at all. `:hold`, `:set-parent`, `:put`, and the item-side `:take`
+  relay all refuse with an error; the node's parent cannot change until the
+  owner clears the prop. `:recycle` is a destroy, not a move, and remains
+  available to the owner. An unowned node has no owner to defend it, so any
+  caller may set its props (mirroring the transfer gate's unowned openness);
+  once claimed, only the owner may.
+- `visible: false` — the node remains a room child (it still receives
+  broadcasts and answers direct RPCs such as `:trigger?`) but is never
+  published: the room excludes it from `:look`'s children map, from the
+  nested parent-ctx snapshots, and from every broadcast (`:arrive`,
+  `:leave`, `:child-ctx`, `:dig`, `:say`, `:emote`), so no client ever
+  learns of it. The trigger kind defaults to invisible; absent otherwise.
+
+Newly created entities (forge, dig, healed exits) are born with a
+kind-prefixed fragment — `<short-kind>-<random>`, e.g. `thing-7b75…`,
+`trigger-0cc8…`, `exit-…`, `room-…` — where the short kind is the protocol's
+penultimate segment (`/ma/thing/0.0.1` → `thing`). This groups fresh actors in
+`@ma/entities` listings; fragments of already existing entities are never
+renamed.
+
 An owner may prepare a consent-based transfer with
 `:set-recovery-secret <one-time-secret>`. A later
 `:claim <one-time-secret>` from an authenticated bare DID atomically sets that
@@ -82,6 +105,85 @@ DID as owner and clears the secret; replay therefore fails. Client commands
 such as `give <object> to <person>` may distribute that full claim command in
 an ordinary text message, but no runtime actor changes ownership merely because
 an offer was sent.
+
+## Ctx
+
+A ctx is a plain map, derived fresh from props whenever it is needed — never a
+separately stored structure. Every actor publishes its own ctx; children,
+rooms, and clients read it.
+
+### Node ctx — thing / agent / container / trigger
+
+Built from a single declaration (`node-ctx-prop-keys` in
+`scheme-actor/node.ma`): the identity fields plus every prop-backed attribute.
+`register-ctx-props!` consumes the same declaration, so changing any of the
+prop-backed fields via `set-prop!` automatically re-announces the ctx to the
+parent (`:parent <ctx>`). Adding a new prop-backed attribute to the declaration
+is sufficient — there is no second list to keep in sync.
+
+| Field | Type | Source |
+| --- | --- | --- |
+| `actor` | text (DID-URL) | the node's own address |
+| `kind` | text | `thing` / `agent` / `container` / `trigger` / `exit` / `room` |
+| `protocol` | text | `/ma/…/0.0.1` |
+| `parent` | text (DID-URL) | the proposed or current parent |
+| `name` | text | `node-name` (default: actor) |
+| `nick` | text | `node-nick` (default: name) |
+| `description` | text | `node-description` (default: `"A node."`) |
+| `visible` | text `"true"` / `"false"` | `node-visible` (default `"true"`; trigger defaults `"false"`) |
+| `fixed` | boolean | `node-fixed?` — `#t` blocks all relocation |
+| `here` | text | current room DID-URL, `""` outside a room |
+
+### Exit ctx
+
+The node ctx plus `extend-node-ctx` in `actors/exit.ma`:
+
+| Field | Type | Source |
+| --- | --- | --- |
+| `direction` | text | the exit's direction word |
+| `target-room` | text | destination room DID-URL |
+| `target-name` | text | destination display name |
+
+### Room ctx
+
+`room-ctx` in `actors/room.ma`:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `protocol` | text | `/ma/room/0.0.1` |
+| `kind` | text | `"room"` |
+| `actor` | text | the room's DID-URL |
+| `parent` | text | the root's DID-URL |
+| `rev` | number | ctx revision, bumped on every broadcast |
+| `name` / `nick` / `description` | text | room identity |
+| `children` | map | `actor → child-ctx`, **visible children only** — `visible: false` children are never published |
+
+### h00man / direct-DID ctx
+
+`did-child-ctx` in `actors/room.ma` — a bare DID presence entry:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `actor`, `did` | text | the bare DID |
+| `parent` | text | the room's DID-URL |
+| `kind` | text | `"h00man"` |
+| `protocol` | text | `/ma/agent/0.0.1` |
+| `name`, `nick`, `description` | text | presence identity |
+| `rev` | number | presence revision |
+
+### parent-ctx
+
+Every `:child <ctx>` ack embeds the parent's own ctx as the nested
+`parent-ctx` field (`child-ack-ctx` in `scheme-actor/node.ma`) — the room ctx
+for rooms, the node ctx otherwise. It is a cached snapshot, never a second
+child collection.
+
+### Other small shapes
+
+- `did-exit-ctx` — bare-DID traversal payload: `{ did, parent }`.
+- `presentation-entry` — legacy projected entry for `who?`/`things?` replies
+  when no stored child ctx exists: `actor`, `kind`, `protocol`, `name`, `nick`,
+  `description`.
 
 ## Roll-call
 

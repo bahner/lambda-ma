@@ -84,7 +84,8 @@
       (equal? kind "room")
       (equal? kind "container")
       (equal? kind "exit")
-      (equal? kind "actor")))
+      (equal? kind "actor")
+      (equal? kind "trigger")))
 
 (define (ctx-shape-valid? ctx)
   (and (map? ctx)
