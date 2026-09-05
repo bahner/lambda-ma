@@ -1039,6 +1039,12 @@
 (set-internal-rpc-method! :phone-home handle-node-phone-home!)
 (set-internal-rpc-method! :orphan-root handle-node-root-orphan!)
 (set-rpc-method! :prop handle-node-prop!)
+; Standard read-only node getters required by the /ma/node/0.0.1 base
+; protocol (ma-node-v1): name, nick, and description, with node-kind defaults
+; for missing values.
+(set-rpc-method! :name? (lambda (args msg) (reply-ok-with msg (node-name))))
+(set-rpc-method! :nick? (lambda (args msg) (reply-ok-with msg (node-nick))))
+(set-rpc-method! :description? (lambda (args msg) (reply-ok-with msg (node-description))))
 ; The timed end arrives from the runtime scheduler, which dispatches as
 ; <runtime>#scheduler rather than as this node, so it needs its own clause.
 (define (roll-call-end-caller-authorised? msg)

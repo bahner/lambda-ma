@@ -117,6 +117,13 @@
   (lambda (args msg)
     (reply-ok-with msg (if (non-empty-string? (node-parent)) (node-parent) "(none)"))))
 
+; Standard read-only destination getter. Returns the room this exit leads
+; into, or "(none)" when it is unfilled. The avatar's `delve` composes this
+; with the destination's own `:name?`.
+(set-rpc-method! :to?
+  (lambda (args msg)
+    (reply-ok-with msg (if (target-room) (target-room) "(none)"))))
+
 (set-rpc-method! :owner
   (lambda (args msg)
     (reply-ok-with msg (if (owner) (owner) "(none)"))))

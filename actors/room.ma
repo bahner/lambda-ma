@@ -942,23 +942,14 @@
 (define (event-subject-ctx actor)
   (claim-ctx actor))
 
-; Exit build/link state. Existing-room links handshake across both rooms;
-; new-room digs wait for a child-alive callback before installing the exit.
-(define (pending-link-key direction) (string-append "pending-link:" direction))
-(define (pending-link-did-key direction) (string-append "pending-link-did:" direction))
-(define (pending-link-requester-key direction) (string-append "pending-link-requester:" direction))
-
+; Exit build state. New-room digs wait for a child-alive callback before
+; installing the exit; existing-room links install the exit directly (the
+; destination's :enter is the admission authority, not a link handshake).
 (define (pending-new-room-key direction) (string-append "pending-new-room:" direction))
 (define (pending-new-room-did-key direction) (string-append "pending-new-room-did:" direction))
 (define (pending-new-room-requester-key direction) (string-append "pending-new-room-requester:" direction))
 (define (pending-new-room-target-name-key direction) (string-append "pending-new-room-target-name:" direction))
 (define (pending-new-room-nonce-key direction) (string-append "pending-new-room-nonce:" direction))
-
-(define (clear-pending-link! direction)
-  (begin
-    (del-prop! (pending-link-key direction))
-    (del-prop! (pending-link-did-key direction))
-    (del-prop! (pending-link-requester-key direction))))
 
 (define (clear-pending-new-room! direction)
   (begin
@@ -1051,26 +1042,6 @@
 (define (existing-room-target target)
   (if (and target (is-did-url? target)) target #f))
 
-(define (request-link-authorisation! requester did direction target-room)
-  (begin
-    (ma-send! (canonical-actor target-room) (list :authorise-link did direction (canonical-actor requester)))
-    (ma-send! (canonical-actor requester) (list :print (string-append "Checking ownership of " target-room ".")))))
-
-(define (request-existing-link! msg did direction target-room)
-  (let ((requester (canonical-actor (msg-from msg))))
-    (set-prop! (pending-link-key direction) (canonical-actor target-room))
-    (set-prop! (pending-link-did-key direction) did)
-    (set-prop! (pending-link-requester-key direction) requester)
-    (ma-save-state!)
-    (ma-send! (canonical-actor target-room) (list :ping did direction requester))
-    (reply-to-sender msg (string-append "Checking reachability of " target-room "."))
-    (reply-ok msg)))
-
-(define (pending-link-matches? direction did target-room requester)
-  (and (same-actor? (get-prop (pending-link-key direction)) target-room)
-       (equal? (get-prop (pending-link-did-key direction)) did)
-       (same-actor? (get-prop (pending-link-requester-key direction)) requester)))
-
 (define (pending-new-room-nonce direction requester did target-name)
   (blake3 (string-append "lambda-ma pending room v1\n"
                          (canonical-actor (self)) "\n"
@@ -1123,17 +1094,6 @@
                       #f))
                 (enter-dig-target! requester did target-room)))
             #f))))
-
-(define (delivery-failed-ping? term)
-  (and (pair? term)
-       (equal? (car term) :ping)
-       (pair? (cdr term))
-       (pair? (cdr (cdr term)))
-       (pair? (cdr (cdr (cdr term))))))
-
-(define (ping-did term) (car (cdr term)))
-(define (ping-direction term) (car (cdr (cdr term))))
-(define (ping-requester term) (car (cdr (cdr (cdr term)))))
 
 ; After a successful dig, move the requester into the target room.
 ; Full bare DIDs from claim-ctx are used throughout — msg-from of ma-send! is
@@ -1193,6 +1153,13 @@
 
 (unset-method! :name)
 (unset-method! :description)
+
+; Standard read-only node getters required by the /ma/node/0.0.1 base
+; protocol (ma-node-v1). Rooms override the generic node defaults so an
+; unnamed room reports "Construct" rather than its own address.
+(set-rpc-method! :name? (lambda (args msg) (reply-ok-with msg (room-name))))
+(set-rpc-method! :nick? (lambda (args msg) (reply-ok-with msg (room-nick))))
+(set-rpc-method! :description? (lambda (args msg) (reply-ok-with msg (room-description))))
 
 (set-cmd-method! :exits?
   (lambda (args msg)
@@ -1433,92 +1400,6 @@
                (set-owner! new-owner)
                (reply-command-ok msg mediated (string-append "Owner set to " new-owner "."))))))))
 
-; ── Link handshake callbacks ──────────────────────────────────────────────
-
-(set-internal-rpc-method! :ping
-  (lambda (args msg)
-    (ma-send! (canonical-actor (msg-from msg)) (cons :pong args))))
-
-(set-internal-rpc-method! :pong
-  (lambda (args msg)
-    (if (or (null? args) (null? (cdr args)) (null? (cdr (cdr args))))
-        #f
-        (let ((did (car args))
-              (direction (car (cdr args)))
-              (requester (car (cdr (cdr args))))
-              (target-room (msg-from msg)))
-          (if (pending-link-matches? direction did target-room requester)
-              (request-link-authorisation! requester did direction target-room)
-              #f)))))
-
-(set-internal-rpc-method! :authorise-link
-  (lambda (args msg)
-    (if (or (null? args) (null? (cdr args)) (null? (cdr (cdr args))))
-        #f
-        (let ((did (car args))
-              (direction (car (cdr args)))
-              (requester (car (cdr (cdr args))))
-              (source-room (msg-from msg)))
-          (if (owner? did)
-              (ma-send! (canonical-actor source-room) (list :link-authorised did direction (canonical-actor requester)))
-              (ma-send! (canonical-actor source-room) (list :link-denied did direction (canonical-actor requester) "You must own both rooms to link them.")))))))
-
-(set-internal-rpc-method! :link-denied
-  (lambda (args msg)
-    (if (or (null? args) (null? (cdr args)) (null? (cdr (cdr args))) (null? (cdr (cdr (cdr args)))))
-        #f
-        (let ((did (car args))
-              (direction (car (cdr args)))
-              (requester (car (cdr (cdr args))))
-              (reason (car (cdr (cdr (cdr args)))))
-              (target-room (msg-from msg)))
-          (if (pending-link-matches? direction did target-room requester)
-              (begin
-                (clear-pending-link! direction)
-                (ma-save-state!)
-                (ma-send! (canonical-actor requester) (list :print reason)))
-              #f)))))
-
-(set-internal-rpc-method! :link-authorised
-  (lambda (args msg)
-    (if (or (null? args) (null? (cdr args)) (null? (cdr (cdr args))))
-        #f
-        (let ((did (car args))
-              (direction (car (cdr args)))
-              (requester (car (cdr (cdr args))))
-              (target-room (msg-from msg)))
-          (if (pending-link-matches? direction did target-room requester)
-              (cond ((not (owner? did))
-                     (begin
-                       (clear-pending-link! direction)
-                       (ma-save-state!)
-                       (ma-send! (canonical-actor requester) (list :print "You no longer own this room."))))
-                    (else
-                     (begin
-                       (create-exit! direction target-room #f)
-                       (clear-pending-link! direction)
-                       (ma-save-state!)
-                       (let ((ctx (claim-ctx did)))
-                         (if (map? ctx) (broadcast-term (list :dig ctx direction)) #f))
-                       (enter-dig-target! requester did target-room))))
-              #f)))))
-
-(set-internal-rpc-method! :delivery-failed
-  (lambda (args msg)
-    (if (or (null? args) (null? (cdr args)) (null? (cdr (cdr args))))
-        #f
-        (let ((target-room (car args))
-              (reason (car (cdr args)))
-              (term (car (cdr (cdr args)))))
-          (if (and (delivery-failed-ping? term)
-                   (pending-link-matches? (ping-direction term) (ping-did term) target-room (ping-requester term)))
-              (begin
-                (clear-pending-link! (ping-direction term))
-                (ma-save-state!)
-                (ma-send! (canonical-actor (ping-requester term))
-                          (list :print (string-append "Could not reach " target-room ": " reason))))
-              #f)))))
-
 (set-internal-rpc-method! :child-alive
   (lambda (args msg)
     (handle-child-alive! msg args)))
@@ -1544,7 +1425,13 @@
                 (cond ((and existing-room (or custom-init custom-behaviour))
                        (reply-error msg "Custom room code only applies when digging a new room."))
                       (existing-room
-                       (request-existing-link! msg did direction existing-room))
+                       (begin
+                         (create-exit! direction existing-room #f)
+                         (ma-save-state!)
+                         (let ((ctx (claim-ctx did)))
+                           (if (map? ctx) (broadcast-term (list :dig ctx direction)) #f))
+                         (enter-dig-target! (msg-from msg) did existing-room)
+                         (reply-ok msg)))
                       (remembered-room
                        (begin
                          (reply-to-sender msg (string-append "Exit " direction " already leads to " target "."))

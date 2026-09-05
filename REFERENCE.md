@@ -36,8 +36,14 @@ There is no identity entity. The bare controlling DID is `msg.from`.
 | room | `:say`, `:emote` | Broadcasts an in-world event to present DID identities. |
 | room | `:narrate <text>` | Owner-only ambient narration: the room itself broadcasts a subject-less in-world event. |
 | exit | `:traverse <{ did, parent }>` | Returns `{ did, parent, text, exit, direction }`; client follows with direct room entry. |
+| exit | `:to?` | Returns the destination room DID-URL, or `"(none)"` when the exit is unfilled. |
 | root | `:ctx?`, `:register` | Returns the runtime service ctx; `:register` subscribes `msg.from` and sends it the current ctx. |
 | root | `:enter?` | Unqualified-entry discovery: always replies with a ctx, `{ parent, rev }`, naming a room to enter. Defaults to the configured `start` room. |
+
+Every node answers the standard read-only getters `:name?`, `:nick?`, and
+`:description?` (see the ma-spec `ma-actor-basics-v1` recommendation). Rooms
+override them so an unnamed room reports `Construct` rather than its own
+address.
 
 A client accepts entry context only when the reply corresponds to its newest
 entry request and originates from the requested room. It never accepts an
