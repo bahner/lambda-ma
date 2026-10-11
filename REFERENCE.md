@@ -31,12 +31,16 @@ There is no identity entity. The bare controlling DID is `msg.from`.
 
 | Receiver | Verb | Result |
 | --- | --- | --- |
-| room | `:enter [claim]` | Commits presence and replies with the DID ctx: `did`, `parent`, `name`, `nick`, `description`, and `rev`. |
+| room | `:enter [claim]` / `:enter { secret }` | Commits presence and replies with the DID ctx: `did`, `parent`, `name`, `nick`, `description`, and `rev`. A bare DID enters a free room directly; a keyed room requires `{ secret }` from a blessing. |
+| room | `:bless <exit-ctx>` | An exit asks the room to admit a traveller (`exit-ctx` carries `did` and `src`): the room has final cut and answers the exit `:reply <did> <ticket>` (accept) or `:reply <did> <ctx with nogo_msg>` (deny). |
+| room | `:exit <name> <exit-did-url>` | Registers an exit dug from the far side: binds a local (cosmetic) name to that exit in this room's `exits` map. |
 | room | `:look`, `:who?`, `:occupants?`, `:things?`, `:exits?` | Direct room presentation. |
 | room | `:say`, `:emote` | Broadcasts an in-world event to present DID identities. |
 | room | `:narrate <text>` | Owner-only ambient narration: the room itself broadcasts a subject-less in-world event. |
-| exit | `:traverse <{ did, parent }>` | Returns `{ did, parent, text, exit, direction }`; client follows with direct room entry. |
-| exit | `:to?` | Returns the destination room DID-URL, or `"(none)"` when the exit is unfilled. |
+| exit | `:use <{ did, parent }>` | Authorises traversal: refuses at once when locked or unfilled, else blesses the destination and waits for its `:reply`. Only the traveller or the source room may call it. |
+| exit | `:reply <did> <secret|ctx>` | The destination's answer; the exit then answers the traveller's stored `:use`. |
+| exit | `:to?` | Returns the far endpoint's room DID-URL, or `"(none)"` when the exit is unfilled. |
+| exit | `:message <slot> <text>` | Sets a narration prop by its short slot (`leave`, `oleave`, `arrive`, `oarrive`, `nogo`); owner or source room only. |
 | root | `:ctx?`, `:register` | Returns the runtime service ctx; `:register` subscribes `msg.from` and sends it the current ctx. |
 | root | `:enter?` | Unqualified-entry discovery: always replies with a ctx, `{ parent, rev }`, naming a room to enter. Defaults to the configured `start` room. |
 
@@ -56,6 +60,9 @@ not accepted from other principals.
 
 `/ma/node/0.0.1` provides one persisted `children` map keyed by each node's
 DID or full actor DID-URL. Rooms filter that map for bare-DID clients, agents,
+things, and triggers. Exits are not children: an exit is a top-level node with
+hardcoded `src`/`dst` endpoints, and each room keeps a separate `exits` map of
+local name → exit DID-URL published alongside `children` in its ctx.
 things, containers, and exits. A bare DID has no identity entity, but remains
 a node in the room hierarchy.
 
@@ -142,13 +149,13 @@ is sufficient — there is no second list to keep in sync.
 
 ### Exit ctx
 
-The node ctx plus `extend-node-ctx` in `actors/exit.ma`:
+An exit is a top-level node with two hardcoded endpoints. `extend-node-ctx` in
+`actors/exit.ma` adds:
 
 | Field | Type | Source |
 | --- | --- | --- |
-| `direction` | text | the exit's direction word |
-| `target-room` | text | destination room DID-URL |
-| `target-name` | text | destination display name |
+| `src` | text | one endpoint room's DID-URL |
+| `dst` | text | the other endpoint room's DID-URL |
 
 ### Room ctx
 
@@ -163,6 +170,7 @@ The node ctx plus `extend-node-ctx` in `actors/exit.ma`:
 | `rev` | number | ctx revision, bumped on every broadcast |
 | `name` / `nick` / `description` | text | room identity |
 | `children` | map | `actor → child-ctx`, **visible children only** — `visible: false` children are never published |
+| `exits` | map | local name → exit DID-URL; exits are not children and are always listed |
 
 ### h00man / direct-DID ctx
 
@@ -259,16 +267,53 @@ unlocked by its owner.
 
 ## Exit locks
 
-Exits use the same `:lock <secret>` contract as containers, but only the room
-that owns the exit may lock it: the room owner sends `:exit <direction> lock
-[secret]` and the room forwards the verb to the exit actor as its source room.
-The stored secret lets a traveller unlock the exit with
-`:unlock <secret>` or pass straight through a locked exit by supplying it as
-the second `:traverse` argument (the avatar's `go <direction> <secret>`).
-Without the secret, a locked exit narrates the refusal to the traveller as an
-in-world `:say` event (the `locked-msg-text` prop, default
-`This is not the way.`), replies with the same text, and keeps the traveller
-in the source room.
+An exit is a single top-level node with two hardcoded endpoints, `src` and
+`dst`; each room references it by DID-URL in its own `exits` map, and that local
+name is purely cosmetic. One exit per passage means one lock, never one per
+player.
+
+Exits use the same `:lock <secret>` contract as containers, addressed directly
+to the exit; its owner or its source room (`src`) may lock it. A locked exit
+refuses `:use` at once, narrating the refusal to the traveller as an in-world
+`:say` event (the `nogo_msg` prop, default `This is not the way.`). A lock is
+global, never per-player: a traveller holding the secret presents it with
+`unlock <name> with <secret>`, which sends `:unlock <secret>` straight to the
+exit and opens it for everyone until the owner or source room locks it again.
+
+## Traversal and entry keys
+
+Walking an exit and entering its destination is one protocol,
+`bless → key → enter`:
+
+- exit `:use <{ did, parent }>` — the exit authorises. It refuses when locked
+  or unfilled; otherwise it blesses the destination room with its narration
+  intent and remembers the caller's `:use` message (keyed by the traveller's
+  DID, in memory only) so it can answer once the destination decides.
+- room `:bless <exit-ctx>` — the destination has final cut. The ctx carries the
+  traveller `did` and the source endpoint `src`. On accept it
+  stores a one-time ticket for that DID and answers the exit
+  `:reply <did> <ticket>`; on refusal it answers
+  `:reply <did> <ctx with nogo_msg>`.
+- exit `:reply <did> <secret|ctx>` — the exit answers the stored `:use` with
+  `{ dst, secret }` (accept) or `{ text }` (deny), then tells the source room to
+  narrate the departure (`:leave <{ did, leave_msg, oleave_msg }>`).
+- room `:enter { secret }` — the traveller presents the ticket; the room
+  consumes the blessing, commits presence, and narrates the exit's arrival
+  messages.
+
+A keyless (free) room admits a bare-DID `:enter` directly. A keyed room
+(`free_entry: false`) requires a blessing, so nobody can jump in. The
+`blessed` grant lives in the destination room in memory only.
+
+Exit message props (set with `:message <slot> <text>` or `:prop <key> <text>`):
+
+| Prop | Audience |
+| --- | --- |
+| `leave_msg` | the traveller, on departure |
+| `oleave_msg` | the others in the source room |
+| `arrive_msg` | the traveller, on arrival |
+| `oarrive_msg` | the others in the destination room |
+| `nogo_msg` | the traveller, on refusal |
 
 ## Replies and events
 

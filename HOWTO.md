@@ -36,7 +36,7 @@ actor sources, kinds, or `lambda-ma.template.yaml`, then build again.
 ma --bootstrap dist/lambda-ma.yaml
 ```
 
-Open zion, unlock or create an identity, then discover the runtime. Obtain the
+Open operator, unlock or create an identity, then discover the runtime. Obtain the
 room target from root or known bootstrap state and enter it directly:
 
 ```text
@@ -67,27 +67,29 @@ secret replaces the old one immediately.
 
 ## Lock an exit
 
-A room's owner locks its exits through the room; the exit accepts lock commands
-from no one else. The secret contract is the same as for containers: anyone
-holding it may unlock the exit, and a traveller may pass straight through a
-locked exit with `go <direction> <secret>`.
+An exit is one top-level two-ended node; a room references it by a cosmetic
+local name in its `exits` map. Its owner or its source room may lock it
+directly. The secret contract is the same as for containers: anyone holding the
+secret may unlock the exit, and a lock is global — locked is locked for
+everyone until it is unlocked again.
 
 ```text
-@runtime#room:exit mirror lock supersecret
-@runtime#room:exit mirror unlock supersecret
+lock mirror with supersecret
+unlock mirror with supersecret
 ```
 
-`go mirror supersecret` traverses the locked mirror; without the secret the
-exit blocks the way and narrates the refusal to the traveller as an in-world
-`:say` event. The message defaults to `This is not the way.` and is settable
-with the `locked-msg-text` prop (the `:message blocked <text>` slot is a
-synonym). Exit props follow the shared `:prop` contract: the source room may
-edit them through `:exit`, and the room owner may set them directly with the
-ordinary avatar command:
+`unlock mirror with supersecret` opens a locked exit for everyone; a following
+`go mirror` then walks through. Without the secret the exit blocks the way and
+narrates the refusal to the traveller as an in-world `:say` event, using the
+`nogo_msg` prop (default `This is not the way.`).
+
+Exit narration props use the LambdaCore names (`leave_msg`, `oleave_msg`,
+`arrive_msg`, `oarrive_msg`, `nogo_msg`); the owner or the source room sets
+them with `:message <slot> <text>` or `:prop <key> <text>`. The short slot names
+are `leave`, `oleave`, `arrive`, `oarrive`, and `nogo`:
 
 ```text
-@runtime#room:exit mirror prop locked-msg-text None shall pass!
-prop mirror locked-msg-text None shall pass!
+prop mirror nogo_msg None shall pass!
 ```
 
 ## Clear out disconnected players

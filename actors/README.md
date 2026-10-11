@@ -52,21 +52,22 @@ bare `:lock` is idempotent and preserves an existing stored secret.
 
 ## Exit locks
 
-An exit accepts lock commands only from its source room; the room owner issues
-them through the room's `:exit <direction> <verb>` proxy, which forwards to the
-exit actor as the source room. `:lock <secret>` is the same contract as
-containers: it locks the exit and stores the optional secret. A traveller
-holding the secret may `:unlock <secret>` or pass straight through a locked
-exit with `:traverse <ctx> <secret>`; without it, the exit narrates the
-refusal to the traveller as an in-world `:say` event (the `locked-msg-text`
-prop, default `This is not the way.`), replies with the same text, and the
-traveller stays in the source room.
+An exit is a single top-level node with two hardcoded endpoints, `src` and
+`dst`; each room references it by a cosmetic local name in its own `exits` map.
+Its owner or its source room may lock it directly with `:lock <secret>` — the
+same contract as containers. A traveller holding the secret may `:unlock
+<secret>`, which opens the exit for everyone (a lock is global, never per
+player). Without the secret, a locked exit narrates the refusal to the traveller
+as an in-world `:say` event (the `nogo_msg` prop, default `This is not the
+way.`), replies with the same text, and the traveller stays in the source room.
 
 ## Traversal
 
-A DID asks an exit for `:traverse` with transient `{ did, parent }`. The exit
-returns `{ did, parent, text, exit, direction }`. The DID enters the returned
-parent room with `:enter`.
+Walking an exit is `bless → key → enter`. A DID asks the exit for
+`:use { did, parent }`; the exit blesses the far endpoint, which answers
+`:reply <did> <ticket>` (accept) or `:reply <did> <ctx with nogo_msg>` (deny).
+On accept the exit replies to the traveller with `{ dst, secret }`, and the DID
+enters `dst` with `:enter { secret }`.
 
 ## Replies and events
 

@@ -261,7 +261,7 @@
   (member-string? key
     '("owner" "parent" "parent-ctx" "children" "here"
       "recovery-secret" "lock-secret" "locked" "closed"
-      "ctx" "direction" "target-room" "target-name")))
+      "ctx" "src" "dst")))
 
 ; Handlers registered by bare name are dispatched args-first (`(fn args msg)`),
 ; matching handle-node-owner and handle-node-parent? — keep the parameter order
@@ -793,7 +793,7 @@
 
 ; :hold implicitly targets the caller (a bare avatar DID, msg-from) as new
 ; parent - unlike :set-parent, no argument is accepted at all. This is the
-; wire verb a client's `hold`/`take`/`take-from` send (ma-zion's
+; wire verb a client's `hold`/`take`/`take-from` send (ma-operator's
 ; inbox_poll.rs replies :child to confirm the resulting unsolicited
 ; :parent proposal). Shared body lives in node.ma; registered by thing.ma/
 ; container.ma/agent.ma only — rooms are not holdable.

@@ -610,9 +610,11 @@
 
 ; ── Automatic counting (room broadcasts) ────────────────────────────────────
 ; The trigger actor is a child of the room, so every room event reaches it
-; here. Events with a subject count under that DID. Subject-less events
-; (:narrate — the trigger's own output channel) are deliberately not counted,
-; which also prevents a fired narration from re-triggering rules.
+; here as (:event <name> <args…>) — the one envelope every world event uses.
+; Events with a subject ctx count under that DID. Subject-less events
+; (:narrate — the trigger's own output channel) carry a bare text and are
+; deliberately not counted, which also prevents a fired narration from
+; re-triggering rules.
 
 (define (count-event! name ctx msg)
   (if (map? ctx)
@@ -633,38 +635,18 @@
       (count-event! name (car args) msg)
       #f))
 
-(set-cmd-method! :say
-  (lambda (args msg) (count-broadcast! ":say" args msg)))
-
-(set-cmd-method! :emote
-  (lambda (args msg) (count-broadcast! ":emote" args msg)))
-
-(set-cmd-method! :arrive
-  (lambda (args msg) (count-broadcast! ":arrive" args msg)))
-
-(set-cmd-method! :dig
-  (lambda (args msg) (count-broadcast! ":dig" args msg)))
-
-(set-cmd-method! :fill
-  (lambda (args msg) (count-broadcast! ":fill" args msg)))
-
+; Every world event arrives through this single envelope. The inner event name
+; keys the counter (":arrive", ":leave", ":say", ":emote", ":dig", ":fill").
 ; :leave counts like any other event and prunes nothing: per-DID counters are
 ; this actor's history, not presence state, so arrival totals survive a
 ; departure and "welcome back, N visits" rules keep working across sessions.
 ; trigger-state persists too, so a `once` rule fires once ever per DID, not
 ; once per visit.
-(set-cmd-method! :leave
-  (lambda (args msg) (count-broadcast! ":leave" args msg)))
-
-; Generic event notification from a non-broadcasting parent (a chest, an exit,
-; a thing): the parent forwards (:event <name> <subject-did>) and the actor
-; counts it like any other event.
 (set-cmd-method! :event
   (lambda (args msg)
-    (let ((name (normalise-name (arg-at-or-false args 0)))
-          (subject (arg-at-or-false args 1)))
-      (if (and (non-empty-string? name) (non-empty-string? subject))
-          (trigger-count name subject 1 msg)
+    (let ((name (normalise-name (arg-at-or-false args 0))))
+      (if (non-empty-string? name)
+          (count-broadcast! name (cdr args) msg)
           #f))))
 
 ; ── Counter verbs ───────────────────────────────────────────────────────────

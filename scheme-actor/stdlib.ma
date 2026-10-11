@@ -103,7 +103,8 @@
        (ctx-optional-text-valid? ctx "description")
        (ctx-optional-text-valid? ctx "text")
       (ctx-optional-text-valid? ctx "exit")
-      (ctx-optional-text-valid? ctx "direction")))
+      (ctx-optional-text-valid? ctx "src")
+      (ctx-optional-text-valid? ctx "dst")))
 
 (define (valid-ctx? ctx msg)
   (and (ctx-shape-valid? ctx)

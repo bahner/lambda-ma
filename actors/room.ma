@@ -190,7 +190,7 @@
 (define (room-ctx-parent)
   (canonical-actor (root)))
 
-(register-ctx-props! (list "ctx:rev" "children"))
+(register-ctx-props! (list "ctx:rev" "children" "exits"))
 
 ; Older presentation queries still use projected entries; room-ctx does not.
 (define (presentation-entry kind protocol actor name nick description)
@@ -218,8 +218,9 @@
         ctx
         (presentation-entry "thing" "/ma/thing/0.0.1" actor token token token))))
 
-(define (exit-entry-ctx direction)
-  (exit-ctx direction))
+(define (exit-entry-ctx name)
+  (make-map "actor" (exit-target name) "kind" "exit" "protocol" EXIT_KIND
+            "name" name "nick" name "description" name))
 
 (define (agent-entry-list actors)
   (let loop ((xs actors)
@@ -264,7 +265,8 @@
     "name" (room-name)
     "nick" (room-nick)
     "description" (room-description)
-    "children" (visible-ctx)))
+    "children" (visible-ctx)
+    "exits" (exits-map)))
 
 (define (node-ctx-for-parent target-parent)
   (map-set (room-ctx) "parent" (canonical-actor target-parent)))
@@ -337,6 +339,24 @@
             "description" "A direct DID presence."
             "rev" (next-did-revision did)))
 
+; ── Entry blessings (exit-authorised traversal) ──────────────────────────
+; Memory-only: player DID -> the accepted exit ctx (ticket + narration intent).
+; In-flight grants need not survive reload/reboot; never CBOR-serialised.
+(define blessed (make-map))
+
+; Room policy hook: a room may refuse a blessing (capacity, ban, …). Override
+; this to add policy; the default accepts every exit-authorised entry.
+(define (room-accepts-bless? did xctx msg)
+  #t)
+
+(define (room-deny-text)
+  (let ((t (get-prop "nogo_msg")))
+    (if (non-empty-string? t) t "The room refuses you entry.")))
+
+; A keyless (free) room admits anyone; a keyed room requires a blessing.
+(define (free-entry?)
+  (not (equal? (get-prop "free_entry") "false")))
+
 ; Commit a direct DID entry without creating a separate identity actor.
 (define (commit-did-entry! msg args)
   (let* ((did (msg-from msg))
@@ -348,6 +368,34 @@
           (ma-save-state!)
     (if was-present #f (broadcast-term-except did (list :arrive ctx)))
     (broadcast-room-ctx!)
+    (ma-reply! msg (list :ok ctx))))
+
+; A blessed entry: the exit already authorised, the room committed a ticket,
+; and the traveller presents it. The room narrates the exit's arrival messages
+; (which it may have overridden at :bless time) and consumes the grant.
+(define (handle-blessed-enter! msg extra)
+  (let* ((did (msg-from msg))
+         (b (map-ref blessed did #f)))
+    (if (and (map? b) (equal? (ctx-text b "ticket") (ctx-text extra "secret")))
+        (begin
+          (set! blessed (map-delete blessed did))
+          (commit-blessed-entry! msg b extra))
+        (reply-error msg "invalid or missing entry secret"))))
+
+(define (commit-blessed-entry! msg b extra)
+  (let* ((did (msg-from msg))
+         (name (did-name-from-entry (list extra) did))
+         (nick (did-nick-from-entry (list extra) did))
+         (was-present (member-entry? did (occupants)))
+         (ctx (did-child-ctx did name nick))
+         (arrive  (let ((t (ctx-text b "arrive_msg")))  (if (non-empty-string? t) t "You arrive.")))
+         (oarrive (let ((t (ctx-text b "oarrive_msg"))) (if (non-empty-string? t) t (string-append name " arrives.")))))
+    (remember-child! ctx)
+    (ma-save-state!)
+    (if was-present #f
+        (broadcast-term-except did (list :arrive (map-set ctx "narrate" oarrive))))
+    (broadcast-room-ctx!)
+    (ma-send! (canonical-actor did) (list :event :narrate arrive))
     (ma-reply! msg (list :ok ctx))))
 
 ; Actor entries must carry their own ctx; room only admits or refuses it.
@@ -458,8 +506,6 @@
              (reply-ok msg)))
           ((not (room-admissible-kind? kind))
            (reply-error msg "child ctx must include actor, parent, kind, protocol, name, nick, description"))
-          ((exit-kind? kind)
-           (handle-node-parent (list ctx) msg))
           ((equal? (child-ctx actor) ctx)
            ; Unchanged announcement (prop refresh, roll-call answer): the
            ; replace is a no-op, so just ack the child directly.
@@ -494,7 +540,6 @@
 (define (agent-kind? kind) (equal? kind "agent"))
 (define (thing-kind? kind) (equal? kind "thing"))
 (define (container-kind? kind) (equal? kind "container"))
-(define (exit-kind? kind) (equal? kind "exit"))
 ; A h00man is a movable thing like any other — one shared object namespace.
 (define movable-kinds (list "agent" "thing" "container" "h00man"))
 (define (movable-kind? kind) (member-string? kind movable-kinds))
@@ -504,10 +549,10 @@
 ; it a movable kind: who?/occupants?/things?/exits? derive from
 ; movable-children, so the trigger stays out of the movable views. A trigger
 ; with `visible: true` is still presented to clients via look's "Triggers:"
-; section, which derives from the same children map.
+; section, which derives from the same children map. Exits are not children at
+; all: they are top-level nodes referenced from the `exits` map.
 (define (room-admissible-kind? kind)
   (or (movable-kind? kind)
-      (exit-kind? kind)
       (equal? kind "trigger")))
 
 (define (movable-children)
@@ -622,52 +667,55 @@
                 (else
                  (reply-command-ok msg mediated (string-append "Ambiguous name: " token "\n" (actor-entry-lines lines)))))))))
 
-; Exit state and traversal helpers.
-(define (exit-ctxs) (child-ctxs-by-kind "exit"))
+; ── Exits ─────────────────────────────────────────────────────────
+; Exits are top-level nodes (parented to root), NOT room children. The room
+; keeps a plain `exits` map of local name -> exit DID-URL; the local name is
+; purely cosmetic. One exit per passage means one lock, never per-player.
 
-(define (exit-ctx direction)
-  (let loop ((ctxs (exit-ctxs)))
-    (cond ((null? ctxs) #f)
-          ((equal? (ctx-text (car ctxs) "direction") direction) (car ctxs))
-          (else (loop (cdr ctxs))))))
+(define (exits-map)
+  (let ((value (get-prop "exits")))
+    (if (map? value) value (make-map))))
 
-(define (exit-target direction)
-  (let ((ctx (exit-ctx direction)))
-    (if ctx (ctx-text ctx "actor") #f)))
+(define (set-exits! m)
+  (begin (set-prop! "exits" m) (ma-save-state!)))
 
-(define (exit-room-target direction)
-  (let ((ctx (exit-ctx direction)))
-    (if ctx (ctx-text ctx "target-room") #f)))
-
-; Exit and destination fragments are deterministic so repeated dig is idempotent.
-; Paired with exit-fragment: same input + "\ndst" suffix. The kind prefix
-; keeps `@ma/entities` grouped by kind for newly created exits and rooms;
-; fragments of already existing entities are never renamed.
-(define (room-fragment direction)
-  (string-append "room-" (blake3 (string-append "lambda-ma exit v2\n" (canonical-actor (self)) "\n" direction "\ndst") 8)))
-
-(define (exit-fragment direction)
-  (string-append "exit-" (blake3 (string-append "lambda-ma exit v2\n" (canonical-actor (self)) "\n" direction) 8)))
-
-; Local exits can be recreated from ctx when the entity has disappeared.
-(define (heal-local-exit! direction exit)
-  (let ((target-room (exit-room-target direction)))
-    (if (and (dead-local-actor? exit) target-room)
-        (let ((fragment (exit-fragment direction)))
-          (let ((healed (ma-create-actor EXIT_KIND #f (exit-init direction target-room) fragment)))
-            (remember-child!
-              (map-set (exit-ctx direction) "actor" healed))
-            (ma-save-state!)
-            healed))
-        #f)))
+(define (exit-target name)
+  (let ((did (map-ref (exits-map) name #f)))
+    (if (non-empty-string? did) did #f)))
 
 (define (exit-directions)
-  (let loop ((ctxs (exit-ctxs)) (directions '()))
-    (if (null? ctxs)
-        (reverse directions)
-        (if (room-child-visible? (car ctxs))
-            (loop (cdr ctxs) (cons (ctx-text (car ctxs) "direction") directions))
-            (loop (cdr ctxs) directions)))))
+  (map-keys (exits-map)))
+
+(define (register-exit! name exit-did)
+  (begin
+    (set-exits! (map-set (exits-map) name (canonical-actor exit-did)))
+    (broadcast-room-ctx!)))
+
+(define (unregister-exit! name)
+  (begin
+    (set-exits! (map-delete (exits-map) name))
+    (broadcast-room-ctx!)))
+
+; Drop every local name pointing at this exit (used when the exit ends or is
+; detached from one side).
+(define (drop-exit-ref! exit-did)
+  (let loop ((m (exits-map)) (changed #f))
+    (if (null? (map->alist m))
+        (if changed (broadcast-room-ctx!) #f)
+        (let* ((entry (car (map->alist m)))
+               (name (car entry))
+               (did (cdr entry)))
+          (if (same-actor? did exit-did)
+              (begin (set-exits! (map-delete m name)) (loop (map-delete m name) #t))
+              (loop m changed))))))
+
+; True when this actor is one of the exits this room references. Used to gate
+; relayed departures: only an exit we actually link to may remove a traveller.
+(define (registered-exit? actor)
+  (let loop ((entries (map->alist (exits-map))))
+    (cond ((null? entries) #f)
+          ((same-actor? (cdr (car entries)) actor) #t)
+          (else (loop (cdr entries))))))
 
 (define (random-exit-direction)
   (let ((directions (exit-directions)))
@@ -675,20 +723,26 @@
         #f
         (list-ref-at directions (random (list-length directions))))))
 
-; Bare DID traversal sends only the traveller DID and current room.
+; Bare DID traversal sends only the traveller DID and current room. The exit
+; then authorises and blesses the far endpoint, which answers the exit.
 (define (did-exit-ctx did)
   (make-map "did" did "parent" (canonical-actor (self))))
 
-(define (send-did-traverse! did direction exit)
-  (let* ((healed-exit (heal-local-exit! direction exit))
-         (active-exit (if healed-exit healed-exit exit)))
-    (ma-send! (canonical-actor active-exit) (list :traverse (did-exit-ctx did)))))
+(define (send-did-traverse! did exit-did)
+  (ma-send! (canonical-actor exit-did) (list :use (did-exit-ctx did))))
 
 (define (exits-text)
   (let ((directions (exit-directions)))
     (if (null? directions)
         "Exits: none."
         (string-append "Exits: " (names-of directions)))))
+
+; Exit and destination fragments are deterministic so repeated dig is idempotent.
+(define (room-fragment direction)
+  (string-append "room-" (blake3 (string-append "lambda-ma exit v2\n" (canonical-actor (self)) "\n" direction "\ndst") 8)))
+
+(define (exit-fragment direction)
+  (string-append "exit-" (blake3 (string-append "lambda-ma exit v2\n" (canonical-actor (self)) "\n" direction) 8)))
 
 ; Room-facing text surfaces.
 (define (thing-token-names)
@@ -734,9 +788,9 @@
     "  move              move through one available exit\n"
     "  claim             claim this room if it is unowned\n"
     "  owner [did]       show or transfer ownership\n"
-    "  dig <dir> [to name] [with code] create an exit\n"
+    "  dig <dir> [to name] [with code] create a two-ended exit\n"
     "  fill <dir>        remove an exit\n"
-    "  :exit <dir> <verb> [args] forward a command to an exit\n"
+    "  :exit <name> <did> register an exit dug from the far side\n"
     "  :dids?            owner lists occupants, things, and exits with DIDs\n"
     "  :thing <name> [did] set/list local occupant alias\n"
     "  :behaviour /ipfs/<cid> add or replace this actor's own code\n"
@@ -870,16 +924,47 @@
 
   ; Leave is idempotent: absent occupants still receive an ok.
 (define (handle-leave! msg args)
-  (let ((actor (leave-candidate args msg)))
-    (if actor
-        (let ((ctx (claim-ctx actor)))
-          (forget-child! actor)
+  (cond
+    ((and (not (null? args)) (map? (car args))
+          (non-empty-string? (ctx-text (car args) "did")))
+     (handle-relayed-leave! msg (car args)))
+    (else
+     (let ((actor (leave-candidate args msg)))
+       (if actor
+           (let ((ctx (claim-ctx actor)))
+             (forget-child! actor)
+             (ma-save-state!)
+             (if (and (map? ctx) (room-child-visible? ctx))
+                 (broadcast-term (list :leave ctx))
+                 #f)
+             (reply-ok msg))
+           (reply-error msg "usage: :leave"))))))
+
+; A local exit relays a departure it authorised: it removes the traveller and
+; narrates the exit's leave messages. Only a child exit we own may do this.
+(define (handle-relayed-leave! msg lctx)
+  (let* ((did (ctx-text lctx "did"))
+         (relay (msg-from msg))
+         (ctx (claim-ctx did)))
+    (if (not (registered-exit? relay))
+        (reply-error msg "only a local exit may relay a departure")
+        (let ((nick (let ((n (if (map? ctx) (ctx-text ctx "nick") #f)))
+                      (if (non-empty-string? n) n did))))
+          (forget-child! did)
           (ma-save-state!)
           (if (and (map? ctx) (room-child-visible? ctx))
-              (broadcast-term (list :leave ctx))
+              (begin
+                (broadcast-term-except did
+                  (list :leave (map-set ctx "narrate"
+                    (let ((t (ctx-text lctx "oleave_msg")))
+                      (if (non-empty-string? t) t (string-append nick " leaves."))))))
+                (ma-send! (canonical-actor did)
+                  (list :event :narrate
+                    (let ((t (ctx-text lctx "leave_msg")))
+                      (if (non-empty-string? t) t "You leave.")))))
               #f)
-          (reply-ok msg))
-        (reply-error msg "usage: :leave"))))
+          (broadcast-room-ctx!)
+          (reply-ok msg)))))
 
   ; Owner removal accepts exact actor refs or a unique visible child label.
 (define (remove-candidate token)
@@ -921,12 +1006,17 @@
 ; Room events are broadcast to every actor present in the room — every child,
 ; regardless of kind. Each receiving actor decides what to do: a human client
 ; renders it, an agent may remember or react, and any actor may ignore it.
+;
+; Every world event travels in a single :event envelope (:event <name> <args…>)
+; so a room broadcast never collides with a direct term addressed to the same
+; actor (:say <text> is direct speech; :event :say <ctx> <text> is a broadcast).
 (define (broadcast-term term)
   (let loop ((ctxs (child-ctxs)))
     (cond ((null? ctxs) #f)
           (else
            (begin
-             (ma-send! (canonical-actor (ctx-text (car ctxs) "actor")) term)
+             (ma-send! (canonical-actor (ctx-text (car ctxs) "actor"))
+                       (cons :event term))
              (loop (cdr ctxs)))))))
 
 (define (broadcast-term-except excluded term)
@@ -936,7 +1026,8 @@
            (loop (cdr ctxs)))
           (else
            (begin
-             (ma-send! (canonical-actor (ctx-text (car ctxs) "actor")) term)
+             (ma-send! (canonical-actor (ctx-text (car ctxs) "actor"))
+                       (cons :event term))
              (loop (cdr ctxs)))))))
 
 (define (event-subject-ctx actor)
@@ -959,17 +1050,12 @@
     (del-prop! (pending-new-room-target-name-key direction))
     (del-prop! (pending-new-room-nonce-key direction))))
 
-(define (remembered-new-room-target direction target-name)
-  (let ((ctx (exit-ctx direction)))
-    (if (and ctx
-             (or (not target-name)
-                 (equal? (ctx-text ctx "target-name") target-name)))
-        (ctx-text ctx "target-room")
-        #f)))
+(define (remembered-new-room-target direction)
+  (exit-target direction))
 
-(define (create-exit! direction target-room target-name)
-  (let ((exit (ma-create-actor EXIT_KIND #f (exit-init direction target-room target-name) (exit-fragment direction))))
-    (ma-send! exit (list :report-parent (canonical-actor (self))))
+(define (create-exit! direction target-room)
+  (let ((exit (ma-create-actor EXIT_KIND #f (exit-init direction (canonical-actor (self)) target-room) (exit-fragment direction))))
+    (ma-send! exit (list :report-parent (root)))
     exit))
 
 (define (room-init name owner-did custom-init ready-init)
@@ -998,13 +1084,12 @@
         (ma-send! parent (list :child-alive (config-actor (self)) ROOM_KIND nonce direction))
         #f)))
 
-(define (exit-init direction target-room target-name)
+(define (exit-init direction src dst)
   (string-append
-    "(set-init-prop! \"direction\" \"" direction "\")\n"
     (if (owner) (string-append "(set-init-prop! \"owner\" \"" (owner) "\")\n") "")
-    "(set-init-prop! \"parent\" \"" (canonical-actor (self)) "\")\n"
-    "(set-init-prop! \"target-room\" \"" (canonical-actor target-room) "\")\n"
-    (if target-name (string-append "(set-init-prop! \"target-name\" \"" target-name "\")\n") "")
+    "(set-init-prop! \"src\" \"" (canonical-actor src) "\")\n"
+    "(set-init-prop! \"dst\" \"" (canonical-actor dst) "\")\n"
+    "(set-init-prop! \"parent\" \"" (root) "\")\n"
     "(ma-save-state!)\n"))
 
 (define (dig-target-args args)
@@ -1082,10 +1167,11 @@
                  (same-actor? actor target-room)
                  (pending-new-room-matches? direction nonce target-room))
             (let ((requester (get-prop (pending-new-room-requester-key direction)))
-                  (did (get-prop (pending-new-room-did-key direction)))
-                  (target-name (get-prop (pending-new-room-target-name-key direction))))
+                  (did (get-prop (pending-new-room-did-key direction))))
               (begin
-                (create-exit! direction target-room target-name)
+                (let ((exit (create-exit! direction target-room)))
+                  (register-exit! direction exit)
+                  (ma-send! (canonical-actor target-room) (list :exit direction exit)))
                 (clear-pending-new-room! direction)
                 (ma-save-state!)
                 (let ((ctx (claim-ctx did)))
@@ -1262,38 +1348,20 @@
             (else
              (reply-to-sender msg (string-append "Unknown agent or thing: " token)))))))
 
-(define (normalise-exit-verb verb)
-  (cond ((symbol? verb) verb)
-        ((and (string? verb) (string-prefix? ":" verb)) (string->symbol verb))
-        ((string? verb) (string->symbol (string-append ":" verb)))
-        (else verb)))
-
-(define (proxy-exit-command! msg direction term)
-  (require-valid-owner (owner) msg
-    (lambda ()
-      (require-owner msg
-        (lambda ()
-          (let ((exit (exit-target direction)))
-            (if exit
-                (begin
-                  (ma-send! (canonical-actor exit) term)
-                  (reply-to-sender msg "Exit command queued.")
-                  (reply-ok msg))
-                (begin
-                  (reply-to-sender msg (string-append "No exit " direction "."))
-                  (reply-error msg (string-append "No exit " direction "."))))))))))
-
+; Register an exit dug from the far side. An exit is a top-level node with hardcoded
+; src/dst; each room keeps only its own `exits` map of local name -> exit DID-URL,
+; and that local name is purely cosmetic. `dig` mirrors a new passage into the
+; destination room with this verb, so a non-owner may link a public room to a new
+; passage without owning it.
 (set-rpc-method! :exit
   (lambda (args msg)
-    (let ((exit-args (command-args args msg)))
-      (if (or (null? exit-args) (null? (cdr exit-args)))
-          (begin
-            (reply-to-sender msg "Usage: exit <direction> <verb> [args]")
-            (reply-error msg "Usage: exit <direction> <verb> [args]"))
-          (let ((direction (car exit-args))
-                (verb (normalise-exit-verb (car (cdr exit-args))))
-                (verb-args (cdr (cdr exit-args))))
-            (proxy-exit-command! msg direction (cons verb verb-args)))))))
+    (let ((name (if (null? args) #f (car args)))
+          (exit-did (if (or (null? args) (null? (cdr args))) #f (cadr args))))
+      (cond ((not (and (non-empty-string? name) (is-did-url? exit-did)))
+             (reply-error msg "usage: :exit <name> <exit-did-url>"))
+            (else
+             (register-exit! name exit-did)
+             (reply-ok msg))))))
 
 (set-cmd-method! :help
   (lambda (args msg)
@@ -1354,7 +1422,7 @@
              (reply-error msg "no such child in this room"))
             ((non-empty-string? text)
              (begin
-               (ma-send! target (list :narrate text))
+               (ma-send! target (list :event :narrate text))
                (reply-ok msg)))
             (else
              (reply-error msg "usage: :narrate-to <did> <words...>"))))))
@@ -1421,21 +1489,19 @@
                      (existing-room (existing-room-target target))
                      (remembered-room (if (or existing-room custom-init custom-behaviour)
                                           #f
-                                          (remembered-new-room-target direction target))))
-                (cond ((and existing-room (or custom-init custom-behaviour))
+                                          (remembered-new-room-target direction))))
+                (cond ((exit-target direction)
+                       (reply-error msg (string-append "An exit " direction " already exists here.")))
+                      ((and existing-room (or custom-init custom-behaviour))
                        (reply-error msg "Custom room code only applies when digging a new room."))
                       (existing-room
                        (begin
-                         (create-exit! direction existing-room #f)
-                         (ma-save-state!)
+                         (let ((exit (create-exit! direction existing-room)))
+                           (register-exit! direction exit)
+                           (ma-send! (canonical-actor existing-room) (list :exit direction exit)))
                          (let ((ctx (claim-ctx did)))
                            (if (map? ctx) (broadcast-term (list :dig ctx direction)) #f))
                          (enter-dig-target! (msg-from msg) did existing-room)
-                         (reply-ok msg)))
-                      (remembered-room
-                       (begin
-                         (reply-to-sender msg (string-append "Exit " direction " already leads to " target "."))
-                         (enter-dig-target! (msg-from msg) did remembered-room)
                          (reply-ok msg)))
                       (else
                        (request-new-room! msg did direction target custom-init custom-behaviour)))))))))))
@@ -1455,9 +1521,7 @@
                     (if exit
                         (begin
                           (ma-send! (canonical-actor exit) (list :fill))
-                          (forget-child! exit)
-                          (ma-save-state!)
-                          (broadcast-room-ctx!)
+                          (unregister-exit! direction)
                           (let ((ctx (claim-ctx did)))
                             (if (map? ctx) (broadcast-term (list :fill ctx direction)) #f))
                           (reply-ok msg))
@@ -1471,7 +1535,7 @@
                (direction (random-exit-direction)))
           (if (and did direction)
               (begin
-                (send-did-traverse! did direction (exit-target direction))
+                (send-did-traverse! did (exit-target direction))
                 (reply-ok msg))
               (begin
                 (reply-error msg "No exits or direct bare DID." )
@@ -1513,9 +1577,34 @@
 
 (set-cmd-method! :enter
   (lambda (args msg)
-    (if (enter-ctx-args? args)
-        (handle-enter-ctx! msg (car args))
-        (commit-did-entry! msg args))))
+    (cond ((and (not (null? args)) (map? (car args))
+                (non-empty-string? (ctx-text (car args) "secret")))
+           (handle-blessed-enter! msg (car args)))
+          ((enter-ctx-args? args)
+           (handle-enter-ctx! msg (car args)))
+          ((free-entry?)
+           (commit-did-entry! msg args))
+          (else
+           (reply-error msg "this room requires an entry key")))))
+
+; An exit asks the room to admit a traveller. The room has final cut: it may
+; accept (issue a one-time ticket and answer `:reply <did> <ticket>`) or refuse
+; (answer `:reply <did> <ctx with nogo_msg>`). The exit ctx carries the traveller
+; `did`, the sending endpoint as `src`, and the narration it proposes; the room
+; stores it and may override before narrating.
+(set-cmd-method! :bless
+  (lambda (args msg)
+    (let* ((xctx (if (null? args) #f (car args)))
+           (did (if (map? xctx) (ctx-text xctx "did") #f)))
+      (cond ((not (and (non-empty-string? did) (map? xctx)
+                       (is-did-url? (ctx-text xctx "src"))))
+             (reply-error msg "usage: :bless <exit-ctx>"))
+            ((room-accepts-bless? did xctx msg)
+             (let ((ticket (number->string (ma-random 1000000000000))))
+               (set! blessed (map-set blessed did (map-set xctx "ticket" ticket)))
+               (ma-reply! msg (list :reply did ticket))))
+            (else
+             (ma-reply! msg (list :reply did (make-map "nogo_msg" (room-deny-text)))))))))
 
 ; Lifecycle signals from the runtime.
 (define (on-signal term)

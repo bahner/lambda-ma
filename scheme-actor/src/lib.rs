@@ -219,31 +219,14 @@ mod tests {
         .unwrap();
     }
 
-    fn remember_exit(
-        env: &Rc<Env>,
-        actor: &str,
-        direction: &str,
-        target_room: &str,
-        target_name: &str,
-    ) {
+    // An exit is a top-level node, not a room child. A room references it only
+    // through its `exits` map (local name -> exit DID-URL); the local name is
+    // purely cosmetic. Setting the map directly keeps `ctx:rev` untouched.
+    fn remember_exit(env: &Rc<Env>, actor: &str, direction: &str) {
         env.define(Rc::from("exit-actor"), Value::str(actor));
         env.define(Rc::from("exit-direction"), Value::str(direction));
-        env.define(Rc::from("exit-target-room"), Value::str(target_room));
-        env.define(Rc::from("exit-target-name"), Value::str(target_name));
         eval_all(
-            r#"
-            (remember-child!
-              (make-map "actor" exit-actor
-                        "kind" "exit"
-                        "protocol" "/ma/exit/0.0.1"
-                        "parent" "did:ma:runtime#room"
-                        "name" exit-direction
-                        "nick" exit-direction
-                        "description" "An exit."
-                        "direction" exit-direction
-                        "target-room" exit-target-room
-                        "target-name" exit-target-name))
-            "#,
+            "(set-exits! (map-set (exits-map) exit-direction exit-actor))",
             env,
         )
         .unwrap();
@@ -1497,12 +1480,16 @@ mod tests {
 
         assert_eq!(eval_str("(get-prop \"sent-target:1\")", &env), "did:ma:bob");
         assert!(eval_bool(
-            "(equal? (car (get-prop \"sent-term:1\")) :arrive)",
+            "(equal? (car (get-prop \"sent-term:1\")) :event)",
+            &env
+        ));
+        assert!(eval_bool(
+            "(equal? (car (cdr (get-prop \"sent-term:1\"))) :arrive)",
             &env
         ));
         assert_eq!(
             eval_str(
-                "(ctx-text (car (cdr (get-prop \"sent-term:1\"))) \"did\")",
+                "(ctx-text (car (cdr (cdr (get-prop \"sent-term:1\")))) \"did\")",
                 &env
             ),
             "did:ma:alice"
@@ -1703,16 +1690,7 @@ mod tests {
 
         eval_all(
             r#"
-                        (remember-child!
-                            (make-map "actor" "did:ma:runtime#north-exit"
-                                                "kind" "exit"
-                                                "protocol" "/ma/exit/0.0.1"
-                                                "parent" "did:ma:runtime#room"
-                                                "name" "north"
-                                                "nick" "north"
-                                                "description" "An exit leading north."
-                                                "direction" "north"
-                                                "target-room" "did:ma:runtime#kitchen"))
+                        (set-exits! (map-set (exits-map) "north" "did:ma:runtime#north-exit"))
                         "#,
             &env,
         )
@@ -1720,10 +1698,10 @@ mod tests {
 
         assert_eq!(
             eval_str(
-                "(ctx-text (map-ref (map-ref (room-ctx) \"children\" (make-map)) \"did:ma:runtime#north-exit\" (make-map)) \"direction\")",
+                "(map-ref (map-ref (room-ctx) \"exits\" (make-map)) \"north\" \"\")",
                 &env
             ),
-            "north"
+            "did:ma:runtime#north-exit"
         );
     }
 
@@ -1798,18 +1776,22 @@ mod tests {
 
         assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 1);
         assert!(eval_bool(
-            "(equal? (car (get-prop \"sent-term:1\")) :say)",
+            "(equal? (car (get-prop \"sent-term:1\")) :event)",
+            &env
+        ));
+        assert!(eval_bool(
+            "(equal? (car (cdr (get-prop \"sent-term:1\"))) :say)",
             &env
         ));
         assert_eq!(
             eval_str(
-                "(ctx-text (car (cdr (get-prop \"sent-term:1\"))) \"did\")",
+                "(ctx-text (car (cdr (cdr (get-prop \"sent-term:1\")))) \"did\")",
                 &env
             ),
             "did:ma:alice"
         );
         assert_eq!(
-            eval_str("(car (cdr (cdr (get-prop \"sent-term:1\"))))", &env),
+            eval_str("(car (cdr (cdr (cdr (get-prop \"sent-term:1\")))))", &env),
             "hello"
         );
         assert_eq!(eval_int("(get-prop \"reply-count\")", &env), 1);
@@ -1866,12 +1848,16 @@ mod tests {
 
         assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 2);
         assert!(eval_bool(
-            "(equal? (car (get-prop \"sent-term:1\")) :leave)",
+            "(equal? (car (get-prop \"sent-term:1\")) :event)",
+            &env
+        ));
+        assert!(eval_bool(
+            "(equal? (car (cdr (get-prop \"sent-term:1\"))) :leave)",
             &env
         ));
         assert_eq!(
             eval_str(
-                "(ctx-text (car (cdr (get-prop \"sent-term:1\"))) \"actor\")",
+                "(ctx-text (car (cdr (cdr (get-prop \"sent-term:1\")))) \"actor\")",
                 &env
             ),
             "did:ma:runtime#duckie"
@@ -1930,12 +1916,16 @@ mod tests {
         // Alice's direct DID entry and duckie both receive one :child; duckie also gets :here.
         assert_eq!(eval_int("(get-prop \"sent-count\")", &env), 4);
         assert!(eval_bool(
-            "(equal? (car (get-prop \"sent-term:1\")) :arrive)",
+            "(equal? (car (get-prop \"sent-term:1\")) :event)",
+            &env
+        ));
+        assert!(eval_bool(
+            "(equal? (car (cdr (get-prop \"sent-term:1\"))) :arrive)",
             &env
         ));
         assert_eq!(
             eval_str(
-                "(ctx-text (car (cdr (get-prop \"sent-term:1\"))) \"actor\")",
+                "(ctx-text (car (cdr (cdr (get-prop \"sent-term:1\")))) \"actor\")",
                 &env
             ),
             "did:ma:runtime#duckie"
@@ -2035,13 +2025,7 @@ mod tests {
             &env,
         )
         .unwrap();
-        remember_exit(
-            &env,
-            "did:ma:runtime#north-exit",
-            "north",
-            "did:ma:runtime#kitchen",
-            "Kitchen",
-        );
+        remember_exit(&env, "did:ma:runtime#north-exit", "north");
 
         assert_eq!(
             eval_str("(ctx-text (room-ctx) \"protocol\")", &env),
@@ -2056,7 +2040,7 @@ mod tests {
             "(not (map-has-key? (room-ctx) \"things\"))",
             &env
         ));
-        assert!(eval_bool("(not (map-has-key? (room-ctx) \"exits\"))", &env));
+        assert!(eval_bool("(map? (map-ref (room-ctx) \"exits\" #f))", &env));
         assert!(eval_bool(
             r#"(let loop ((ctxs (map-values (map-ref (room-ctx) "children" (make-map)))))
                  (cond ((null? ctxs) #f)
@@ -2064,13 +2048,14 @@ mod tests {
                        (else (loop (cdr ctxs)))))"#,
             &env
         ));
-        assert!(eval_bool(
-            r#"(let loop ((ctxs (map-values (map-ref (room-ctx) "children" (make-map)))))
-                 (cond ((null? ctxs) #f)
-                       ((equal? (ctx-text (car ctxs) "direction") "north") #t)
-                       (else (loop (cdr ctxs)))))"#,
-            &env
-        ));
+        // The exit lives in the exits map, not among the children.
+        assert_eq!(
+            eval_str(
+                "(map-ref (map-ref (room-ctx) \"exits\" (make-map)) \"north\" \"\")",
+                &env
+            ),
+            "did:ma:runtime#north-exit"
+        );
     }
 
     #[test]
@@ -2556,15 +2541,16 @@ mod tests {
         );
         eval_all("(on-message renamed_msg)", &env).unwrap();
 
-        // The changed announcement also broadcasts a :child-ctx event to the
-        // room's actors, so clients can refresh exactly this child's key.
+        // The changed announcement also broadcasts an :event :child-ctx event
+        // to the room's actors, so clients can refresh exactly this child's key.
         assert!(eval_bool(
             "(let loop ((i 1))
                 (if (> i (get-prop \"sent-count\"))
                     #f
                     (let ((term (get-prop (string-append \"sent-term:\" (number->string i)))))
-                      (if (equal? (car term) :child-ctx)
-                          (equal? (ctx-text (car (cdr term)) \"nick\") \"Lamp v2\")
+                      (if (and (equal? (car term) :event)
+                               (equal? (car (cdr term)) :child-ctx))
+                          (equal? (ctx-text (car (cdr (cdr term))) \"nick\") \"Lamp v2\")
                           (loop (+ i 1))))))",
             &env
         ));
@@ -4893,26 +4879,14 @@ mod tests {
     fn room_move_selects_an_available_exit() {
         let env = room_env();
         assert!(eval_bool("(not (random-exit-direction))", &env));
-        remember_exit(
-            &env,
-            "did:ma:runtime#north-exit",
-            "north",
-            "did:ma:runtime#kitchen",
-            "Kitchen",
-        );
+        remember_exit(&env, "did:ma:runtime#north-exit", "north");
         assert_eq!(eval_str("(random-exit-direction)", &env), "north");
     }
 
     #[test]
     fn room_exit_lookup_accepts_non_ascii_direction() {
         let env = room_env();
-        remember_exit(
-            &env,
-            "did:ma:runtime#door-exit",
-            "dør",
-            "did:ma:runtime#kitchen",
-            "Kitchen",
-        );
+        remember_exit(&env, "did:ma:runtime#door-exit", "dør");
 
         assert_eq!(eval_str("(exits-text)", &env), "Exits: dør");
         assert_eq!(
@@ -4929,13 +4903,7 @@ mod tests {
         config.insert("self".to_string(), "did:ma:runtime#room".to_string());
         crate::state::set_config(config);
 
-        remember_exit(
-            &env,
-            "did:ma:runtime#north-exit",
-            "north",
-            "did:ma:runtime#kitchen",
-            "Kitchen",
-        );
+        remember_exit(&env, "did:ma:runtime#north-exit", "north");
 
         assert_eq!(eval_str("(exits-text)", &env), "Exits: north");
         assert_eq!(
@@ -4953,8 +4921,8 @@ mod tests {
         crate::state::set_config(config);
 
         assert_eq!(
-            eval_str("(exit-init \"dør\" \"did:ma:runtime#kitchen\" #f)", &env),
-            "(set-init-prop! \"direction\" \"dør\")\n(set-init-prop! \"parent\" \"did:ma:runtime#source\")\n(set-init-prop! \"target-room\" \"did:ma:runtime#kitchen\")\n(ma-save-state!)\n"
+            eval_str("(exit-init \"dør\" \"did:ma:runtime#source\" \"did:ma:runtime#kitchen\")", &env),
+            "(set-init-prop! \"src\" \"did:ma:runtime#source\")\n(set-init-prop! \"dst\" \"did:ma:runtime#kitchen\")\n(set-init-prop! \"parent\" \"did:ma:runtime#root\")\n(ma-save-state!)\n"
         );
     }
 
@@ -4975,96 +4943,64 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            eval_str("(exit-init \"north\" \"did:ma:runtime#kitchen\" #f)", &env),
-            "(set-init-prop! \"direction\" \"north\")\n(set-init-prop! \"owner\" \"did:ma:owner\")\n(set-init-prop! \"parent\" \"did:ma:runtime#source\")\n(set-init-prop! \"target-room\" \"did:ma:runtime#kitchen\")\n(ma-save-state!)\n"
+            eval_str("(exit-init \"north\" \"did:ma:runtime#source\" \"did:ma:runtime#kitchen\")", &env),
+            "(set-init-prop! \"owner\" \"did:ma:owner\")\n(set-init-prop! \"src\" \"did:ma:runtime#source\")\n(set-init-prop! \"dst\" \"did:ma:runtime#kitchen\")\n(set-init-prop! \"parent\" \"did:ma:runtime#root\")\n(ma-save-state!)\n"
         );
     }
 
     #[test]
-    fn room_exit_command_forwards_to_exit_actor() {
+    fn room_exit_command_registers_exit() {
         let env = room_env();
         let mut config = std::collections::HashMap::new();
         config.insert("runtime".to_string(), "did:ma:runtime".to_string());
         config.insert("self".to_string(), "did:ma:runtime#room".to_string());
         crate::state::set_config(config);
 
-        eval_all(
-            r#"
-            (set-prop! "owner" "did:ma:owner")
-            (define (ma-send! target term)
-              (inc-prop! "sent-count" 1)
-              (set-prop! (string-append "sent-target:" (number->string (get-prop "sent-count"))) target)
-              (set-prop! (string-append "sent-term:" (number->string (get-prop "sent-count"))) term))
-            "#,
-            &env,
-        )
-        .unwrap();
-        remember_exit(
-            &env,
-            "did:ma:runtime#north-exit",
-            "north",
-            "did:ma:runtime#kitchen",
-            "Kitchen",
-        );
-
+        // :exit registers a passage dug from the far side: a local name bound to
+        // the exit's DID-URL in this room's exits map.
         env.define(
             Rc::from("msg"),
             Value::Msg(sample_term_msg(
-                "did:ma:owner",
+                "did:ma:runtime#kitchen",
                 "did:ma:runtime#room",
                 Value::list(vec![
                     Value::symbol(":exit"),
-                    Value::str("north"),
-                    Value::symbol(":lock"),
+                    Value::str("south"),
+                    Value::str("did:ma:runtime#south-exit"),
                 ]),
             )),
         );
         eval_all("(on-message msg)", &env).unwrap();
-
         assert_eq!(
-            eval_str("(get-prop \"sent-target:1\")", &env),
-            "did:ma:runtime#north-exit"
-        );
-        assert_eq!(
-            eval_all("(get-prop \"sent-term:1\")", &env).unwrap(),
-            Value::list(vec![Value::symbol(":lock")]),
+            eval_str("(exit-target \"south\")", &env),
+            "did:ma:runtime#south-exit"
         );
 
+        // A non-DID argument is refused and leaves the map untouched.
         env.define(
             Rc::from("msg"),
             Value::Msg(sample_term_msg(
-                "did:ma:owner",
+                "did:ma:runtime#kitchen",
                 "did:ma:runtime#room",
                 Value::list(vec![
                     Value::symbol(":exit"),
-                    Value::str("north"),
-                    Value::symbol(":unlock"),
+                    Value::str("south"),
+                    Value::str("not-a-did"),
                 ]),
             )),
         );
         eval_all("(on-message msg)", &env).unwrap();
-
         assert_eq!(
-            eval_str("(get-prop \"sent-target:3\")", &env),
-            "did:ma:runtime#north-exit"
-        );
-        assert_eq!(
-            eval_all("(get-prop \"sent-term:3\")", &env).unwrap(),
-            Value::list(vec![Value::symbol(":unlock")]),
+            eval_str("(exit-target \"south\")", &env),
+            "did:ma:runtime#south-exit"
         );
     }
 
     #[test]
-    fn room_removes_exit_from_children() {
+    fn room_unregister_exit_clears_local_name() {
         let env = room_env();
-        remember_exit(
-            &env,
-            "did:ma:runtime#north-exit",
-            "north",
-            "did:ma:runtime#kitchen",
-            "Kitchen",
-        );
-        eval_all("(forget-child! \"did:ma:runtime#north-exit\")", &env).unwrap();
+        remember_exit(&env, "did:ma:runtime#north-exit", "north");
+        eval_all("(unregister-exit! \"north\")", &env).unwrap();
 
         assert_eq!(eval_str("(exits-text)", &env), "Exits: none.");
         assert!(eval_bool("(not (exit-target \"north\"))", &env));
@@ -5077,7 +5013,7 @@ mod tests {
         config.insert("runtime".to_string(), "did:ma:runtime".to_string());
         config.insert("self".to_string(), "did:ma:runtime#north-exit".to_string());
         crate::state::set_config(config);
-        eval_all("(set-prop! \"parent\" \"did:ma:runtime#room\")", &env).unwrap();
+        eval_all("(set-prop! \"src\" \"did:ma:runtime#room\")", &env).unwrap();
 
         env.define(
             Rc::from("msg"),
@@ -5103,7 +5039,7 @@ mod tests {
     }
 
     #[test]
-    fn exit_traverse_accepts_any_mover_kind() {
+    fn exit_use_blesses_for_any_mover_kind() {
         let env = exit_env();
         install_send_reply_recorders(&env);
         let mut config = std::collections::HashMap::new();
@@ -5112,9 +5048,8 @@ mod tests {
         crate::state::set_config(config);
         eval_all(
             r#"
-            (set-prop! "parent" "did:ma:runtime#room")
-            (set-prop! "target-room" "did:ma:runtime#elsewhere")
-            (set-prop! "direction" "north")
+            (set-prop! "src" "did:ma:runtime#room")
+            (set-prop! "dst" "did:ma:runtime#elsewhere")
             "#,
             &env,
         )
@@ -5136,37 +5071,35 @@ mod tests {
                 Value::Msg(sample_term_msg(
                     did,
                     "did:ma:runtime#north-exit",
-                    Value::symbol(":traverse"),
+                    Value::symbol(":use"),
                 )),
             );
             eval_all(
                 &format!(
-                    "((find-method :traverse) (list (make-map \"did\" \"{did}\" \"parent\" \"did:ma:runtime#room\")) msg)"
+                    "((find-method :use) (list (make-map \"did\" \"{did}\" \"parent\" \"did:ma:runtime#room\")) msg)"
                 ),
                 &env,
             )
             .unwrap();
 
-            let reply = format!("reply-term:{}", i + 1);
+            // No reply yet: a bless carrying the traveller's DID went to the target.
+            let sent = format!("sent-term:{}", i + 1);
             assert_eq!(
-                eval_all(&format!("(car (get-prop \"{reply}\"))"), &env).unwrap(),
-                Value::symbol(":ok")
+                eval_all(&format!("(car (get-prop \"{sent}\"))"), &env).unwrap(),
+                Value::symbol(":bless")
             );
             assert_eq!(
                 eval_str(
-                    &format!("(ctx-text (car (cdr (get-prop \"{reply}\"))) \"did\")"),
+                    &format!("(ctx-text (car (cdr (get-prop \"{sent}\"))) \"did\")"),
                     &env
                 ),
                 *did
             );
-            assert_eq!(
-                eval_str(
-                    &format!("(ctx-text (car (cdr (get-prop \"{reply}\"))) \"parent\")"),
-                    &env
-                ),
-                "did:ma:runtime#elsewhere"
-            );
         }
+        assert_eq!(
+            eval_all("(get-prop \"reply-count\")", &env).unwrap(),
+            Value::Bool(false)
+        );
     }
 
     #[test]
@@ -5198,13 +5131,7 @@ mod tests {
             &env,
         )
         .unwrap();
-        remember_exit(
-            &env,
-            "did:ma:runtime#north-exit",
-            "north",
-            "did:ma:runtime#kitchen",
-            "Kitchen",
-        );
+        remember_exit(&env, "did:ma:runtime#north-exit", "north");
         env.define(
             Rc::from("msg"),
             Value::Msg(sample_msg("did:ma:owner", "did:ma:runtime#room")),
@@ -5222,10 +5149,12 @@ mod tests {
               (if (> index (get-prop "sent-count"))
                   #f
                   (let ((term (get-prop (string-append "sent-term:" (number->string index)))))
-                                        (if (and (pair? term)
-                                                         (equal? (car term) :fill)
-                                                         (pair? (cdr term))
-                                                         (map? (car (cdr term))))
+                    (if (and (pair? term)
+                             (equal? (car term) :event)
+                             (pair? (cdr term))
+                             (equal? (car (cdr term)) :fill)
+                             (pair? (cdr (cdr term)))
+                             (map? (car (cdr (cdr term)))))
                         term
                         (fill-event-term (+ index 1))))))
             "#,
@@ -5233,15 +5162,18 @@ mod tests {
         )
         .unwrap();
         assert!(eval_bool(
-            "(let ((term (fill-event-term 1))) (and term (map? (car (cdr term)))))",
+            "(let ((term (fill-event-term 1))) (and term (map? (car (cdr (cdr term))))))",
             &env
         ));
         assert_eq!(
-            eval_str("(ctx-text (car (cdr (fill-event-term 1))) \"did\")", &env),
+            eval_str(
+                "(ctx-text (car (cdr (cdr (fill-event-term 1)))) \"did\")",
+                &env
+            ),
             "did:ma:owner"
         );
         assert_eq!(
-            eval_str("(car (cdr (cdr (fill-event-term 1))))", &env),
+            eval_str("(car (cdr (cdr (cdr (fill-event-term 1)))))", &env),
             "north"
         );
     }
@@ -5249,19 +5181,13 @@ mod tests {
     #[test]
     fn room_remembers_named_dig_target_for_idempotency() {
         let env = room_env();
-        remember_exit(
-            &env,
-            "did:ma:runtime#door-exit",
-            "dør",
-            "did:ma:runtime#kitchen",
-            "køkken",
-        );
+        remember_exit(&env, "did:ma:runtime#door-exit", "dør");
         assert_eq!(
-            eval_str("(remembered-new-room-target \"dør\" \"køkken\")", &env),
-            "did:ma:runtime#kitchen"
+            eval_str("(remembered-new-room-target \"dør\")", &env),
+            "did:ma:runtime#door-exit"
         );
         assert!(eval_bool(
-            "(not (remembered-new-room-target \"dør\" \"stue\"))",
+            "(not (remembered-new-room-target \"stue\"))",
             &env
         ));
     }
@@ -7167,7 +7093,7 @@ mod tests {
 
     #[test]
     fn trigger_flat_rule_accepts_numeric_string_condition_from_wire() {
-        // Regression: zion sends every RPC argument as CBOR text, so the count
+        // Regression: operator sends every RPC argument as CBOR text, so the count
         // in `every 1` arrives as the string "1", not an integer. The old
         // flat-condition parser required a number, failed to consume the
         // condition, and shifted `every`/`1`/`:narrate_to` into the method and
@@ -7313,7 +7239,7 @@ mod tests {
 
     #[test]
     fn trigger_random_rule_accepts_numeric_string_max_on_a_counter() {
-        // zion sends every RPC argument as CBOR text, so `random 10` delivers
+        // operator sends every RPC argument as CBOR text, so `random 10` delivers
         // the string "10", not an integer. A random rule is a counter rule
         // with a random condition: the counter stays in the `on` slot, no
         // #scheduler schedule is registered, and the rule persists via

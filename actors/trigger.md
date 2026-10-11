@@ -100,11 +100,13 @@ no wall clock in ma-scheme, so a caller without a message passes `#f`
 ## Automatic counting
 
 The trigger actor is a child of the room, so it already receives every room
-broadcast (`:arrive`, `:leave`, `:say`, `:emote`, `:dig`, `:fill`). Each event
-with a subject DID increments `counters[<subject-did>][<event-name>]`
-automatically — no room-side wiring. Subject-less events (for example
-`:narrate` — the trigger's own output channel) are deliberately not counted,
-which also prevents a fired narration from re-triggering rules.
+broadcast as `(:event <name> <ctx> [args…])` — the one envelope every world
+event uses. Automatic counters key on the inner event name verbatim
+(`:arrive`, `:leave`, `:say`, `:emote`, `:dig`, `:fill`); each event with a
+subject ctx increments `counters[<subject-did>][<event-name>]` automatically —
+no room-side wiring. Subject-less events (for example `:narrate` — the
+trigger's own output channel) carry a bare text and are deliberately not
+counted, which also prevents a fired narration from re-triggering rules.
 
 Manual `:count`, automatic counting, and direct calls from bespoke trigger
 behaviour are the ways a counter changes; all funnel through `trigger-count`.
@@ -189,7 +191,7 @@ at fire time (spans evaluated against the concerning DID) and are
 **concatenated**, so prose like `"…room, " (:did-name) "!"` glues naturally.
 The expression vocabulary is closed and side-effect-free (ma-scheme
 deliberately has no `eval`, so the grammar is bounded and structurally
-validated at setup). Zion never evaluates the text — it only translates the
+validated at setup). Operator never evaluates the text — it only translates the
 human prose-with-spans into parts; the actor has the counters.
 
 | Binding | Meaning |
@@ -251,15 +253,15 @@ the parent room, which delivers:
 
 | Verb | Delivery |
 | --- | --- |
-| `:narrate <words...>` | `(join-words words)` → broadcast `(:narrate <text>)` to every child. |
-| `:narrate-to <did> <words...>` | First argument is the target DID, the rest are joined → send `(:narrate <text>)` to that one child. |
+| `:narrate <words...>` | `(join-words words)` → broadcast `(:event :narrate <text>)` to every child. |
+| `:narrate-to <did> <words...>` | First argument is the target DID, the rest are joined → send `(:event :narrate <text>)` to that one child. |
 
-Both are subject-less ambient events (`(:narrate <text>)`, rendered verbatim
-by zscheme's `event-narrate`), so no actor name ever appears. The `:narrate`
-gate accepts: the room owner, the runtime `#scheduler`, or the designated
-trigger — the actor named by the room's `trigger` prop, provided it is still
-present as a child of the room. The scheduler entry also makes time-based
-narration possible without any runtime change.
+Both are subject-less ambient events (`(:event :narrate <text>)`, rendered
+verbatim by zscheme's `event-narrate`), so no actor name ever appears. The
+`:narrate` gate accepts: the room owner, the runtime `#scheduler`, or the
+designated trigger — the actor named by the room's `trigger` prop, provided it
+is still present as a child of the room. The scheduler entry also makes
+time-based narration possible without any runtime change.
 
 ## Garbage collection
 

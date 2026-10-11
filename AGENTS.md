@@ -41,9 +41,17 @@ exists.
   second source of truth invites divergence in parentage, ctx updates,
   persistence, and removal and is an interoperability risk.
 
-  Query functions such as `who?`, `occupants?`, `things?`, and `exits?` are
-  presentation views, not stored collections. They must derive their results
-  lazily by filtering or iterating over `children`.
+  Query functions such as `who?`, `occupants?`, and `things?` are presentation
+  views, not stored collections. They must derive their results lazily by
+  filtering or iterating over `children`.
+
+  Exits are the deliberate structural exception. An exit is a top-level node
+  with two hardcoded endpoints, `src` and `dst`; it has no parent and is a child
+  of neither room. Each room keeps a separate `exits` map (local name → exit
+  DID-URL), published in its ctx as `exits`. That local name is purely cosmetic:
+  it is the word a player types, not authoritative room membership. `exits?`
+  derives from this map, never from `children`. One exit per passage means one
+  lock, never one per player.
 
   `roll-call-children` is the deliberate transient exception. While a
   roll-call is active it is a temporary working map containing children that
@@ -98,8 +106,8 @@ so the ctx can be re-generated and broadcast. It does not create a separate
 ctx declaration (`node-ctx-prop-keys` in `scheme-actor/node.ma`): adding a
 prop-backed attribute to that declaration is sufficient for a `set-prop!`
 change to re-announce. Kind files extend the same global list with their own
-keys — `direction`/`target-room`/`target-name` for exits, `ctx:rev`/`children`
-for rooms and containers — never by duplicating the node keys.
+keys — `src`/`dst` for exits, `ctx:rev`/`children`/`exits` for rooms and
+containers — never by duplicating the node keys.
 
 Consequences:
 - Never cache a ctx and mutate it directly — mutate the underlying props and
@@ -111,7 +119,9 @@ Consequences:
 
 `parent-ctx` is only a cached snapshot received in a parent acknowledgement;
 it is not a second local child collection. In particular, a node must not
-derive or persist `who`, `occupants`, `things`, or `exits` from separate props.
+derive or persist `who`, `occupants`, or `things` from separate props. A room's
+owned `exits` map is the one deliberate room-owned collection beside `children`
+(see the child-collection rule above); it is not a parent-ctx derivative.
 When a parent snapshot contains `children`, consumers may inspect that nested
 map as a snapshot for protocol checks, but authoritative child state remains
 the parent's own `children` map.
@@ -128,7 +138,7 @@ they are not a second claim store.
 Use `ma-reply!` for getters, setters, configuration, introspection, metadata,
 validation, and errors. The runtime is an authoritative actor/data layer; it
 never promises a client-side presentation surface. `:print` and other eventy
-traffic are a Zion/visualisation concern: they are the client-side stream that a
+traffic are a Operator/visualisation concern: they are the client-side stream that a
 human workstation consumes to show an in-world event such as arrival,
 departure, speech, emotes, movement, and transfer. A runtime actor may answer a
 technical RPC with `:ok`, but the user-visible event shape is not part of the
@@ -168,7 +178,7 @@ the resolved child ctx locally rather than calling the target actor.
 ## Data over presentation (descriptive, not normative)
 
 Actors do not print or format prose for query replies — that is a client's
-job (zion or otherwise). An actor's job is to hand back quality data: a plain
+job (operator or otherwise). An actor's job is to hand back quality data: a plain
 ctx-map, built from the same simple DID/text/number attributes the spec
 already uses for ctx. A curious teenager should be able to look at any reply
 and understand its contents without decoding an ad hoc text format. Nothing
@@ -288,11 +298,11 @@ duplication is exactly the kind of thing the DRY rule above exists to catch.
 
 Transfer is carried by actor-provided `ctx` values and the ordinary
 `:parent`/`:child` handshake. Transfer state is carried by the actor ctx, not
-by a client-side queue. Zion only forwards typed events;
+by a client-side queue. Operator only forwards typed events;
 the composed zscheme layer acknowledges `:parent` with the received ctx and
 issues ordinary `:hold` or `:set-parent` requests. `hold`/`take`/`take-from`,
 `drop`/`put`, and `recycle-from` remain zscheme policy and must not gain a
-hardcoded Zion dispatch path.
+hardcoded Operator dispatch path.
 
 An avatar may request any object transfer directly. The actor ctx and
 parent/child handshake carry the authoritative relationship; no local hand
