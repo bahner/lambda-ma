@@ -67,17 +67,17 @@
               (reply-error msg "root service ctx is not configured with full DID-URLs")))
         (reply-error msg "usage: :ctx?"))))
 
-; Unqualified entry always gets a ctx from root, even if it is a dumb default
-; (the configured "start" room). A richer root may return a DID-specific ctx
-; instead; that is an implementation detail invisible to the caller.
-(set-rpc-method! :enter?
+; Root is not a place a traveller can be: it has no children, never commits
+; presence, and never answers `:ok`. Every entry is redirected to the configured
+; "start" room. A runtime with no start room refuses rather than inventing one.
+(set-rpc-method! :enter
   (lambda (args msg)
-    (if (not (null? args))
-        (reply-error msg "usage: :enter?")
+    (if (or (null? args) (not (map? (car args))))
+        (reply-error msg "enter requires a movement ctx")
         (let ((room (root-service-ref "start")))
           (if room
-              (reply-ok-with msg (make-map "parent" room "rev" 1))
-              (reply-error msg "root has no start room configured"))))))
+              (ma-reply! msg (list :entrance room))
+              (ma-reply! msg (list :deny "root has no start room configured")))))))
 
 (set-internal-rpc-method! :register
   (lambda (args msg)

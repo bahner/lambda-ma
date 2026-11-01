@@ -44,12 +44,15 @@ room target from root or known bootstrap state and enter it directly:
 @runtime#concourse:enter {name: "Visitor", nick: "Visitor"}
 ```
 
-Without a known room address, ask root instead — it always answers with a
-room to enter:
+Without a known room address, enter root instead — it always redirects to a
+room:
 
 ```text
-@runtime#root:enter?
+@runtime#root:enter
 ```
+
+Root replies `[:entrance, <room>]`; enter that room with the same traversal. The
+client supplies `did` and a fresh `traverseId` for you.
 
 The room's reply is the current DID ctx. Plain focused commands and direct
 methods both address that confirmed room; there is no intermediate actor.

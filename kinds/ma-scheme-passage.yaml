@@ -1,0 +1,4 @@
+protocol: /ma/passage/0.0.1
+extends: /ma/node/0.0.1
+behaviour:
+  "/": __PASSAGE_BEHAVIOUR_CID__

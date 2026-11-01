@@ -264,7 +264,7 @@ mod tests {
         eval_all(include_str!("../actor.ma"), &env).unwrap();
         eval_all(include_str!("../state.ma"), &env).unwrap();
         eval_all(include_str!("../node.ma"), &env).unwrap();
-        eval_all(include_str!("../../actors/exit.ma"), &env).unwrap();
+        eval_all(include_str!("../../actors/passage.ma"), &env).unwrap();
         eval_all(
             "(define (ma-send! target term) #f) (define (ma-end) (set-prop! \"ended\" \"yes\"))",
             &env,
@@ -1369,36 +1369,39 @@ mod tests {
         assert_eq!(eval_int("(get-prop \"reply-count\")", &env), 1);
     }
 
-    #[test]
-    fn room_enter_dispatch_uses_argument_shape_not_sender() {
+    fn room_enter_dispatch_classifies_by_sender_not_argument_shape() {
         let env = room_env();
         install_send_reply_recorders(&env);
         let mut config = std::collections::HashMap::new();
         config.insert("runtime".to_string(), "did:ma:runtime".to_string());
         config.insert("self".to_string(), "did:ma:runtime#room".to_string());
         crate::state::set_config(config);
+
+        let duckie = r#"(make-map "actor" "did:ma:runtime#duckie"
+                                  "kind" "agent"
+                                  "protocol" "/ma/agent/0.0.1"
+                                  "parent" "did:ma:runtime#room"
+                                  "name" "Duckie"
+                                  "nick" "Duckie"
+                                  "description" "A duckie.")"#;
+
+        // A delegate authorises but never commits presence.
         env.define(
             Rc::from("msg"),
             Value::Msg(sample_msg("did:ma:alice", "did:ma:runtime#room")),
         );
-        eval_all(
-            r#"
-            ((find-method :enter)
-             (list (make-map "actor" "did:ma:runtime#duckie"
-                             "kind" "agent"
-                             "protocol" "/ma/agent/0.0.1"
-                             "parent" "did:ma:runtime#room"
-                             "name" "Duckie"
-                             "nick" "Duckie"
-                             "description" "A duckie."))
-             msg)
-            "#,
-            &env,
-        )
-        .unwrap();
+        eval_all(&format!("((find-method :enter) (list {duckie}) msg)"), &env).unwrap();
+        assert!(!eval_bool(
+            "(map-has-key? (children-map) \"did:ma:runtime#duckie\")",
+            &env
+        ));
 
-        // The ctx-map's actor (a full DID-URL) was admitted, not the sender's
-        // bare DID — dispatch follows argument shape, not msg.from's string.
+        // The traveller itself commits.
+        env.define(
+            Rc::from("msg"),
+            Value::Msg(sample_msg("did:ma:runtime#duckie", "did:ma:runtime#room")),
+        );
+        eval_all(&format!("((find-method :enter) (list {duckie}) msg)"), &env).unwrap();
         assert!(eval_bool(
             "(map-has-key? (children-map) \"did:ma:runtime#duckie\")",
             &env
@@ -2679,7 +2682,10 @@ mod tests {
         eval_all("((find-method :cmds?) '() msg)", &exit).unwrap();
         assert_eq!(
             eval_all("(get-prop \"reply-term:1\")", &exit).unwrap(),
-            Value::list(vec![Value::symbol(":ok"), Value::Nil])
+            Value::list(vec![
+                Value::symbol(":ok"),
+                Value::list(vec![Value::symbol(":move")]),
+            ])
         );
     }
 
@@ -2722,7 +2728,7 @@ mod tests {
             &env,
         ));
         assert!(eval_bool(
-            "(not (method-member? :go (car (cdr (get-prop \"reply-term:1\")))))",
+            "(method-member? :move (car (cdr (get-prop \"reply-term:1\"))))",
             &env,
         ));
         assert!(eval_bool(
@@ -4921,8 +4927,11 @@ mod tests {
         crate::state::set_config(config);
 
         assert_eq!(
-            eval_str("(exit-init \"dør\" \"did:ma:runtime#source\" \"did:ma:runtime#kitchen\")", &env),
-            "(set-init-prop! \"src\" \"did:ma:runtime#source\")\n(set-init-prop! \"dst\" \"did:ma:runtime#kitchen\")\n(set-init-prop! \"parent\" \"did:ma:runtime#root\")\n(ma-save-state!)\n"
+            eval_str(
+                "(exit-init \"dør\" \"did:ma:runtime#source\" \"did:ma:runtime#kitchen\" \"\")",
+                &env
+            ),
+            "(set-init-prop! \"entrance\" \"did:ma:runtime#source\")\n(set-init-prop! \"exit\" \"did:ma:runtime#kitchen\")\n(set-init-prop! \"parent\" \"did:ma:runtime#root\")\n(ma-save-state!)\n"
         );
     }
 
@@ -4943,8 +4952,20 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            eval_str("(exit-init \"north\" \"did:ma:runtime#source\" \"did:ma:runtime#kitchen\")", &env),
-            "(set-init-prop! \"owner\" \"did:ma:owner\")\n(set-init-prop! \"src\" \"did:ma:runtime#source\")\n(set-init-prop! \"dst\" \"did:ma:runtime#kitchen\")\n(set-init-prop! \"parent\" \"did:ma:runtime#root\")\n(ma-save-state!)\n"
+            eval_str(
+                "(exit-init \"north\" \"did:ma:runtime#source\" \"did:ma:runtime#kitchen\" \"\")",
+                &env
+            ),
+            "(set-init-prop! \"owner\" \"did:ma:owner\")\n(set-init-prop! \"entrance\" \"did:ma:runtime#source\")\n(set-init-prop! \"exit\" \"did:ma:runtime#kitchen\")\n(set-init-prop! \"parent\" \"did:ma:runtime#root\")\n(ma-save-state!)\n"
+        );
+
+        // A dug passage carries its minted lock key as `lock-secret`.
+        assert_eq!(
+            eval_str(
+                "(exit-init \"north\" \"did:ma:runtime#source\" \"did:ma:runtime#kitchen\" \"424242\")",
+                &env
+            ),
+            "(set-init-prop! \"owner\" \"did:ma:owner\")\n(set-init-prop! \"entrance\" \"did:ma:runtime#source\")\n(set-init-prop! \"exit\" \"did:ma:runtime#kitchen\")\n(set-init-prop! \"lock-secret\" \"424242\")\n(set-init-prop! \"parent\" \"did:ma:runtime#root\")\n(ma-save-state!)\n"
         );
     }
 
@@ -5013,7 +5034,7 @@ mod tests {
         config.insert("runtime".to_string(), "did:ma:runtime".to_string());
         config.insert("self".to_string(), "did:ma:runtime#north-exit".to_string());
         crate::state::set_config(config);
-        eval_all("(set-prop! \"src\" \"did:ma:runtime#room\")", &env).unwrap();
+        eval_all("(set-prop! \"entrance\" \"did:ma:runtime#room\")", &env).unwrap();
 
         env.define(
             Rc::from("msg"),
@@ -5036,70 +5057,6 @@ mod tests {
         );
         eval_all("(on-message msg)", &env).unwrap();
         assert_eq!(eval_str("(get-prop \"ended\")", &env), "yes");
-    }
-
-    #[test]
-    fn exit_use_blesses_for_any_mover_kind() {
-        let env = exit_env();
-        install_send_reply_recorders(&env);
-        let mut config = std::collections::HashMap::new();
-        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
-        config.insert("self".to_string(), "did:ma:runtime#north-exit".to_string());
-        crate::state::set_config(config);
-        eval_all(
-            r#"
-            (set-prop! "src" "did:ma:runtime#room")
-            (set-prop! "dst" "did:ma:runtime#elsewhere")
-            "#,
-            &env,
-        )
-        .unwrap();
-
-        // A human (bare DID), a duckie (agent DID-URL), and a wandering kiste
-        // (container DID-URL) are all equally valid travellers — the exit keys
-        // on the traveller's address and current parent, never on its kind.
-        for (i, did) in [
-            "did:ma:alice",
-            "did:ma:runtime#duckie",
-            "did:ma:runtime#kiste",
-        ]
-        .iter()
-        .enumerate()
-        {
-            env.define(
-                Rc::from("msg"),
-                Value::Msg(sample_term_msg(
-                    did,
-                    "did:ma:runtime#north-exit",
-                    Value::symbol(":use"),
-                )),
-            );
-            eval_all(
-                &format!(
-                    "((find-method :use) (list (make-map \"did\" \"{did}\" \"parent\" \"did:ma:runtime#room\")) msg)"
-                ),
-                &env,
-            )
-            .unwrap();
-
-            // No reply yet: a bless carrying the traveller's DID went to the target.
-            let sent = format!("sent-term:{}", i + 1);
-            assert_eq!(
-                eval_all(&format!("(car (get-prop \"{sent}\"))"), &env).unwrap(),
-                Value::symbol(":bless")
-            );
-            assert_eq!(
-                eval_str(
-                    &format!("(ctx-text (car (cdr (get-prop \"{sent}\"))) \"did\")"),
-                    &env
-                ),
-                *did
-            );
-        }
-        assert_eq!(
-            eval_all("(get-prop \"reply-count\")", &env).unwrap(),
-            Value::Bool(false)
-        );
     }
 
     #[test]
@@ -5222,11 +5179,11 @@ mod tests {
         assert_eq!(door_frag, eval_str("(room-fragment \"dør\")", &env));
         assert_ne!(door_frag, eval_str("(room-fragment \"vindu\")", &env));
 
-        let exit = eval_str("(exit-fragment \"dør\")", &env);
-        assert!(exit.starts_with("exit-"), "fragment was {exit}");
-        assert_eq!(exit.len(), 21);
-        assert_eq!(exit, eval_str("(exit-fragment \"dør\")", &env));
-        assert_ne!(exit, door_frag);
+        let passage = eval_str("(passage-fragment \"dør\")", &env);
+        assert!(passage.starts_with("passage-"), "fragment was {passage}");
+        assert_eq!(passage.len(), 24);
+        assert_eq!(passage, eval_str("(passage-fragment \"dør\")", &env));
+        assert_ne!(passage, door_frag);
     }
 
     #[test]
@@ -5345,23 +5302,24 @@ mod tests {
             Value::Msg(sample_msg("did:ma:caller", "did:ma:runtime#root")),
         );
 
-        eval_all("((find-method :enter?) '() msg)", &env).unwrap();
+        eval_all(
+            "((find-method :enter) (list (make-map \"traverseId\" \"t1\")) msg)",
+            &env,
+        )
+        .unwrap();
 
         assert_eq!(
             eval_all("(car (get-prop \"reply-term:1\"))", &env).unwrap(),
-            Value::symbol(":ok")
+            Value::symbol(":entrance")
         );
         assert_eq!(
-            eval_str(
-                "(ctx-text (car (cdr (get-prop \"reply-term:1\"))) \"parent\")",
-                &env
-            ),
+            eval_str("(car (cdr (get-prop \"reply-term:1\")))", &env),
             "did:ma:runtime#concourse"
         );
     }
 
     #[test]
-    fn root_enter_errors_without_a_configured_start_room() {
+    fn root_enter_denies_without_a_configured_start_room() {
         let env = root_actor_env();
         install_send_reply_recorders(&env);
         let mut config = std::collections::HashMap::new();
@@ -5373,11 +5331,15 @@ mod tests {
             Value::Msg(sample_msg("did:ma:caller", "did:ma:runtime#root")),
         );
 
-        eval_all("((find-method :enter?) '() msg)", &env).unwrap();
+        eval_all(
+            "((find-method :enter) (list (make-map \"traverseId\" \"t1\")) msg)",
+            &env,
+        )
+        .unwrap();
 
         assert_eq!(
             eval_all("(car (get-prop \"reply-term:1\"))", &env).unwrap(),
-            Value::symbol(":error")
+            Value::symbol(":deny")
         );
     }
 

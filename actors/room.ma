@@ -3,7 +3,7 @@
 
 ; Kinds.
 (define ROOM_KIND "/ma/room/0.0.1")
-(define EXIT_KIND "/ma/exit/0.0.1")
+(define PASSAGE_KIND "/ma/passage/0.0.1")
 (define (node-kind) "room")
 (define (node-protocol) ROOM_KIND)
 
@@ -219,7 +219,7 @@
         (presentation-entry "thing" "/ma/thing/0.0.1" actor token token token))))
 
 (define (exit-entry-ctx name)
-  (make-map "actor" (exit-target name) "kind" "exit" "protocol" EXIT_KIND
+  (make-map "actor" (exit-target name) "kind" "passage" "protocol" PASSAGE_KIND
             "name" name "nick" name "description" name))
 
 (define (agent-entry-list actors)
@@ -339,23 +339,39 @@
             "description" "A direct DID presence."
             "rev" (next-did-revision did)))
 
-; ── Entry blessings (exit-authorised traversal) ──────────────────────────
-; Memory-only: player DID -> the accepted exit ctx (ticket + narration intent).
-; In-flight grants need not survive reload/reboot; never CBOR-serialised.
-(define blessed (make-map))
+; ── Traversal (exit-routed movement) ─────────────────────────────────────
+; Memory-only: traveller DID -> the authorisation this room issued for one
+; traversal. In-flight grants need not survive reload/reboot.
+(define move-grants (make-map))
 
-; Room policy hook: a room may refuse a blessing (capacity, ban, …). Override
-; this to add policy; the default accepts every exit-authorised entry.
-(define (room-accepts-bless? did xctx msg)
-  #t)
+; Memory-only: traverseId -> traveller DID, for a walk this room is driving.
+(define move-owners (make-map))
 
 (define (room-deny-text)
   (let ((t (get-prop "nogo_msg")))
     (if (non-empty-string? t) t "The room refuses you entry.")))
 
-; A keyless (free) room admits anyone; a keyed room requires a blessing.
-(define (free-entry?)
-  (not (equal? (get-prop "free_entry") "false")))
+; A room is public (a bare DID may `:enter`) unless `public` is present and
+; falsy. A private room admits a traversal grant key or the runtime's global
+; (owner) key.
+(define (public?)
+  (let ((value (get-prop "public")))
+    (cond ((not (has-prop? "public")) #t)
+          ((equal? value #f) #f)
+          ((equal? value "false") #f)
+          (else #t))))
+
+; The runtime-wide break-glass key. It admits the admin to any private room and
+; opens any locked exit. It is daemon-local: set `global_key` in the runtime's
+; `ma.yaml`; it is never exposed or writable over CRUD. Shared by every room
+; and exit on this runtime. Absent or empty disables it.
+(define (global-key)
+  (let ((k (ma-get-config-key "global_key")))
+    (if (non-empty-string? k) k #f)))
+
+; A fresh 6-digit lock key for a newly dug passage.
+(define (generate-lock-key)
+  (number->string (ma-random 1000000)))
 
 ; Commit a direct DID entry without creating a separate identity actor.
 (define (commit-did-entry! msg args)
@@ -370,33 +386,76 @@
     (broadcast-room-ctx!)
     (ma-reply! msg (list :ok ctx))))
 
-; A blessed entry: the exit already authorised, the room committed a ticket,
-; and the traveller presents it. The room narrates the exit's arrival messages
-; (which it may have overridden at :bless time) and consumes the grant.
-(define (handle-blessed-enter! msg extra)
-  (let* ((did (msg-from msg))
-         (b (map-ref blessed did #f)))
-    (if (and (map? b) (equal? (ctx-text b "ticket") (ctx-text extra "secret")))
-        (begin
-          (set! blessed (map-delete blessed did))
-          (commit-blessed-entry! msg b extra))
-        (reply-error msg "invalid or missing entry secret"))))
+; The traveller of a movement ctx, with msg.from as the last resort.
+(define (move-traveller ctx msg)
+  (let ((did (ctx-text ctx "did")))
+    (if (non-empty-string? did)
+        did
+        (let ((actor (ctx-text ctx "actor")))
+          (if (non-empty-string? actor) actor (msg-from msg))))))
 
-(define (commit-blessed-entry! msg b extra)
+(define (self-entry? ctx msg)
+  (let ((t (move-traveller ctx msg)))
+    (or (same-actor? (msg-from msg) t) (equal? (msg-from msg) t))))
+
+; A delegate (an exit) asks this room to authorise one traveller. The room never
+; commits presence here: it answers with the key the traveller must present.
+(define (handle-delegated-enter! msg ctx)
+  (let* ((did (ctx-text ctx "did"))
+         (tid (ctx-text ctx "traverseId"))
+         (exit (canonical-actor (msg-from msg)))
+         (issued (number->string (ma-random 1000000000000))))
+    (if (and (non-empty-string? did) (non-empty-string? tid))
+        (begin
+          (set! move-grants
+            (map-set move-grants did
+              (make-map "traverseId" tid
+                        "key" issued
+                        "arrive" (let ((t (ctx-text ctx "arrive")))
+                                   (if (non-empty-string? t) t "You arrive."))
+                        "oarrive" (let ((t (ctx-text ctx "oarrive")))
+                                    (if (non-empty-string? t) t "arrives.")))))
+          (ma-send! exit (list :move
+                               (make-map "traverseId" tid "exit" (canonical-actor (self)) "key" issued)))
+          (reply-ok msg))
+        (ma-send! exit (list :move
+                             (make-map "traverseId" (if (non-empty-string? tid) tid "")
+                                       "exit" (canonical-actor (self))
+                                       "deny" "enter requires did and traverseId"))))))
+
+; Commit the arrival the room already authorised. The narration is the room's
+; own choice: the exit's proposal, or the room default.
+(define (commit-move-entry! msg grant ctx)
   (let* ((did (msg-from msg))
-         (name (did-name-from-entry (list extra) did))
-         (nick (did-nick-from-entry (list extra) did))
+         (name (did-name-from-entry (list ctx) did))
+         (nick (did-nick-from-entry (list ctx) did))
          (was-present (member-entry? did (occupants)))
-         (ctx (did-child-ctx did name nick))
-         (arrive  (let ((t (ctx-text b "arrive_msg")))  (if (non-empty-string? t) t "You arrive.")))
-         (oarrive (let ((t (ctx-text b "oarrive_msg"))) (if (non-empty-string? t) t (string-append name " arrives.")))))
-    (remember-child! ctx)
+         (child (did-child-ctx did name nick))
+         (arrive  (let ((t (ctx-text grant "arrive")))  (if (non-empty-string? t) t "You arrive.")))
+         (oarrive (let ((t (ctx-text grant "oarrive"))) (if (non-empty-string? t) t (string-append name " arrives.")))))
+    (remember-child! child)
     (ma-save-state!)
     (if was-present #f
-        (broadcast-term-except did (list :arrive (map-set ctx "narrate" oarrive))))
+        (broadcast-term-except did (list :arrive (map-set child "narrate" oarrive))))
     (broadcast-room-ctx!)
     (ma-send! (canonical-actor did) (list :event :narrate arrive))
-    (ma-reply! msg (list :ok ctx))))
+    (ma-reply! msg (list :ok child))))
+
+; The traveller presents the key this room issued for its own traversal.
+(define (handle-move-enter! msg ctx)
+  (let* ((did (msg-from msg))
+         (tid (ctx-text ctx "traverseId"))
+         (key (ctx-text ctx "key"))
+         (grant (map-ref move-grants did #f)))
+    (cond ((and (map? grant) (equal? (ctx-text grant "traverseId") tid))
+           (set! move-grants (map-delete move-grants did))
+           (commit-move-entry! msg grant ctx))
+          ((and (global-key) (equal? key (global-key)))
+           (commit-did-entry! msg (list ctx)))
+          ((public?)
+           (commit-did-entry! msg (list ctx)))
+          (else
+           (reply-error msg "invalid or missing entry key")))))
 
 ; Actor entries must carry their own ctx; room only admits or refuses it.
 (define (handle-enter-ctx! msg ctx)
@@ -723,13 +782,61 @@
         #f
         (list-ref-at directions (random (list-length directions))))))
 
-; Bare DID traversal sends only the traveller DID and current room. The exit
-; then authorises and blesses the far endpoint, which answers the exit.
-(define (did-exit-ctx did)
-  (make-map "did" did "parent" (canonical-actor (self))))
+; A move ctx arriving here is either a walk request from a present traveller
+; (no live traversal yet) or the passage relaying the destination's answer
+; (a live traversal, and this room is its `entrance`).
+(define (handle-walk-request! ctx msg)
+  (let* ((did (msg-from msg))
+         (tid (ctx-text ctx "traverseId"))
+         (key (ctx-text ctx "key"))
+         (named (ctx-text ctx "direction"))
+         (direction (if (non-empty-string? named) named (random-exit-direction)))
+         (passage (if (non-empty-string? direction) (exit-target direction) #f)))
+    (cond ((not (and (non-empty-string? tid) passage))
+           (reply-error msg "move requires a direction, a traverseId and a known passage"))
+          ((not (member-entry? did (occupants)))
+           (reply-error msg "only a present traveller may walk a passage"))
+          (else
+           (set! move-owners (map-set move-owners tid did))
+           (ma-send! (canonical-actor passage)
+                     (list :move (make-map
+                                   "did" did
+                                   "traverseId" tid
+                                   "key" key
+                                   "name" (speaker-name did)
+                                   "nick" (speaker-name did)
+                                   "entrance" (canonical-actor (self)))))
+           (reply-ok msg)))))
 
-(define (send-did-traverse! did exit-did)
-  (ma-send! (canonical-actor exit-did) (list :use (did-exit-ctx did))))
+(define (handle-move-result! ctx tid did msg)
+  (let* ((child (claim-ctx did))
+         (deny (ctx-text ctx "deny"))
+         (dest (ctx-text ctx "exit"))
+         (key (ctx-text ctx "key"))
+         (nogo (ctx-text ctx "nogo")))
+    (set! move-owners (map-delete move-owners tid))
+    (if (non-empty-string? deny)
+        (begin
+          (if (map? child)
+              (broadcast-term (list :nogo (map-set child "narrate"
+                                                   (if (non-empty-string? nogo) nogo deny))))
+              #f)
+          (ma-send! (canonical-actor did)
+                    (list :move (make-map "traverseId" tid "deny" deny)))
+          (reply-ok msg))
+        (begin
+          (if (map? child)
+              (begin
+                (forget-child! did)
+                (ma-save-state!)
+                (if (room-child-visible? child)
+                    (broadcast-term (list :leave child))
+                    #f)
+                (broadcast-room-ctx!))
+              #f)
+          (ma-send! (canonical-actor did)
+                    (list :move (make-map "traverseId" tid "exit" dest "key" key)))
+          (reply-ok msg)))))
 
 (define (exits-text)
   (let ((directions (exit-directions)))
@@ -741,8 +848,8 @@
 (define (room-fragment direction)
   (string-append "room-" (blake3 (string-append "lambda-ma exit v2\n" (canonical-actor (self)) "\n" direction "\ndst") 8)))
 
-(define (exit-fragment direction)
-  (string-append "exit-" (blake3 (string-append "lambda-ma exit v2\n" (canonical-actor (self)) "\n" direction) 8)))
+(define (passage-fragment direction)
+  (string-append "passage-" (blake3 (string-append "lambda-ma exit v2\n" (canonical-actor (self)) "\n" direction) 8)))
 
 ; Room-facing text surfaces.
 (define (thing-token-names)
@@ -1041,6 +1148,7 @@
 (define (pending-new-room-requester-key direction) (string-append "pending-new-room-requester:" direction))
 (define (pending-new-room-target-name-key direction) (string-append "pending-new-room-target-name:" direction))
 (define (pending-new-room-nonce-key direction) (string-append "pending-new-room-nonce:" direction))
+(define (pending-new-room-lock-key-key direction) (string-append "pending-new-room-lock-key:" direction))
 
 (define (clear-pending-new-room! direction)
   (begin
@@ -1048,13 +1156,14 @@
     (del-prop! (pending-new-room-did-key direction))
     (del-prop! (pending-new-room-requester-key direction))
     (del-prop! (pending-new-room-target-name-key direction))
-    (del-prop! (pending-new-room-nonce-key direction))))
+    (del-prop! (pending-new-room-nonce-key direction))
+    (del-prop! (pending-new-room-lock-key-key direction))))
 
 (define (remembered-new-room-target direction)
   (exit-target direction))
 
-(define (create-exit! direction target-room)
-  (let ((exit (ma-create-actor EXIT_KIND #f (exit-init direction (canonical-actor (self)) target-room) (exit-fragment direction))))
+(define (create-exit! direction target-room lock-key)
+  (let ((exit (ma-create-actor PASSAGE_KIND #f (exit-init direction (canonical-actor (self)) target-room lock-key) (passage-fragment direction))))
     (ma-send! exit (list :report-parent (root)))
     exit))
 
@@ -1063,6 +1172,10 @@
     "(set-init-prop! \"root\" \"" (root) "\")\n"
     (if name (string-append "(set-init-prop! \"name\" \"" name "\")\n") "")
     "(set-init-prop! \"owner\" \"" owner-did "\")\n"
+    ; A newly dug room starts under construction: only a key-holder (a passage
+    ; ticket or the break-glass global key) may enter until its builder makes
+    ; it public. `custom-init` runs after this and may override the prop.
+    "(set-init-prop! \"public\" \"false\")\n"
     "(ma-save-state!)\n"
     (if custom-init custom-init "")
     (if ready-init ready-init "")))
@@ -1084,11 +1197,14 @@
         (ma-send! parent (list :child-alive (config-actor (self)) ROOM_KIND nonce direction))
         #f)))
 
-(define (exit-init direction src dst)
+(define (exit-init direction src dst lock-key)
   (string-append
     (if (owner) (string-append "(set-init-prop! \"owner\" \"" (owner) "\")\n") "")
-    "(set-init-prop! \"src\" \"" (canonical-actor src) "\")\n"
-    "(set-init-prop! \"dst\" \"" (canonical-actor dst) "\")\n"
+    "(set-init-prop! \"entrance\" \"" (canonical-actor src) "\")\n"
+    "(set-init-prop! \"exit\" \"" (canonical-actor dst) "\")\n"
+    (if (non-empty-string? lock-key)
+        (string-append "(set-init-prop! \"lock-secret\" \"" lock-key "\")\n")
+        "")
     "(set-init-prop! \"parent\" \"" (root) "\")\n"
     "(ma-save-state!)\n"))
 
@@ -1135,7 +1251,7 @@
                          did "\n"
                          (if target-name target-name "")) 16))
 
-(define (remember-pending-new-room! direction target-room requester did target-name nonce)
+(define (remember-pending-new-room! direction target-room requester did target-name nonce lock-key)
   (begin
     (set-prop! (pending-new-room-key direction) (canonical-actor target-room))
     (set-prop! (pending-new-room-did-key direction) did)
@@ -1144,6 +1260,7 @@
         (set-prop! (pending-new-room-target-name-key direction) target-name)
         (del-prop! (pending-new-room-target-name-key direction)))
     (set-prop! (pending-new-room-nonce-key direction) nonce)
+    (set-prop! (pending-new-room-lock-key-key direction) lock-key)
     (ma-save-state!)))
 
 (define (pending-new-room-matches? direction nonce target-room)
@@ -1167,9 +1284,10 @@
                  (same-actor? actor target-room)
                  (pending-new-room-matches? direction nonce target-room))
             (let ((requester (get-prop (pending-new-room-requester-key direction)))
-                  (did (get-prop (pending-new-room-did-key direction))))
+                  (did (get-prop (pending-new-room-did-key direction)))
+                  (lock-key (get-prop (pending-new-room-lock-key-key direction))))
               (begin
-                (let ((exit (create-exit! direction target-room)))
+                (let ((exit (create-exit! direction target-room lock-key)))
                   (register-exit! direction exit)
                   (ma-send! (canonical-actor target-room) (list :exit direction exit)))
                 (clear-pending-new-room! direction)
@@ -1181,24 +1299,16 @@
                 (enter-dig-target! requester did target-room)))
             #f))))
 
-; After a successful dig, move the requester into the target room.
-; Full bare DIDs from claim-ctx are used throughout — msg-from of ma-send! is
-; always a DID-URL so the bare-DID `:enter` path is unreachable from here.
+; After a dig the digger moves itself. A room MUST NOT commit another actor's
+; presence by delegation, so it reports the destination it created and the
+; traveller performs the move.
 (define (enter-dig-target! requester did target-room)
   (if (member-entry? requester (occupants))
-    (let* ((ctx (claim-ctx requester))
-           (entry-ctx (if (map? ctx)
-                          (map-set ctx "parent" (canonical-actor target-room))
-                          #f)))
-      (when entry-ctx
-        (let ((leave-ctx ctx))
-          (forget-child! requester)
-          (ma-save-state!)
-          (when (and (map? leave-ctx) (room-child-visible? leave-ctx))
-            (broadcast-term (list :leave leave-ctx)))
-          (broadcast-room-ctx!))
-        (ma-send! (canonical-actor target-room) (list :enter entry-ctx))))
-    #f))
+      (ma-send! (canonical-actor requester)
+                (list :move-result
+                      (make-map "traverseId" (string-append "dig-" (canonical-actor target-room))
+                                "entrance" (canonical-actor target-room))))
+      #f))
 
 ; Start a new-room dig and persist pending state until the child-alive callback
 ; arrives from the freshly created room.
@@ -1206,12 +1316,15 @@
   (let* ((target-fragment (room-fragment direction))
          (requester (canonical-actor (msg-from msg)))
          (nonce (pending-new-room-nonce direction requester did target))
+         ; The new passage's lock key is minted now and reported to the digger;
+         ; it becomes the exit's `lock-secret` when the exit is installed.
+         (lock-key (generate-lock-key))
          (target-room (ma-create-actor ROOM_KIND
                                        custom-behaviour
                                        (room-init target did custom-init (child-alive-init nonce direction))
                                        target-fragment)))
-    (remember-pending-new-room! direction target-room requester did target nonce)
-    (reply-to-sender msg (string-append "Digging " direction "..."))
+    (remember-pending-new-room! direction target-room requester did target nonce lock-key)
+    (reply-to-sender msg (string-append "Dug " direction " to " target-fragment " with key " lock-key))
     (reply-ok msg)))
 
 ; ── Presence and presentation methods ─────────────────────────────────────
@@ -1495,13 +1608,14 @@
                       ((and existing-room (or custom-init custom-behaviour))
                        (reply-error msg "Custom room code only applies when digging a new room."))
                       (existing-room
-                       (begin
-                         (let ((exit (create-exit! direction existing-room)))
-                           (register-exit! direction exit)
-                           (ma-send! (canonical-actor existing-room) (list :exit direction exit)))
+                       (let* ((lock-key (generate-lock-key))
+                              (exit (create-exit! direction existing-room lock-key)))
+                         (register-exit! direction exit)
+                         (ma-send! (canonical-actor existing-room) (list :exit direction exit))
                          (let ((ctx (claim-ctx did)))
                            (if (map? ctx) (broadcast-term (list :dig ctx direction)) #f))
                          (enter-dig-target! (msg-from msg) did existing-room)
+                         (reply-to-sender msg (string-append "Dug " direction " to " existing-room " with key " lock-key))
                          (reply-ok msg)))
                       (else
                        (request-new-room! msg did direction target custom-init custom-behaviour)))))))))))
@@ -1526,20 +1640,6 @@
                             (if (map? ctx) (broadcast-term (list :fill ctx direction)) #f))
                           (reply-ok msg))
                         (reply-error msg (string-append "No exit " direction "."))))))))))))
-
-(set-cmd-method! :move
-  (lambda (args msg)
-    (if (reject-foreign-delegated-go? args msg)
-      (reply-ok msg)
-        (let* ((did (go-caller-did args msg))
-               (direction (random-exit-direction)))
-          (if (and did direction)
-              (begin
-                (send-did-traverse! did (exit-target direction))
-                (reply-ok msg))
-              (begin
-                (reply-error msg "No exits or direct bare DID." )
-                (reply-ok msg)))))))
 
 (set-meta-method! :child
   (lambda (args msg)
@@ -1577,34 +1677,35 @@
 
 (set-cmd-method! :enter
   (lambda (args msg)
-    (cond ((and (not (null? args)) (map? (car args))
-                (non-empty-string? (ctx-text (car args) "secret")))
-           (handle-blessed-enter! msg (car args)))
-          ((enter-ctx-args? args)
-           (handle-enter-ctx! msg (car args)))
-          ((free-entry?)
-           (commit-did-entry! msg args))
-          (else
-           (reply-error msg "this room requires an entry key")))))
-
-; An exit asks the room to admit a traveller. The room has final cut: it may
-; accept (issue a one-time ticket and answer `:reply <did> <ticket>`) or refuse
-; (answer `:reply <did> <ctx with nogo_msg>`). The exit ctx carries the traveller
-; `did`, the sending endpoint as `src`, and the narration it proposes; the room
-; stores it and may override before narrating.
-(set-cmd-method! :bless
-  (lambda (args msg)
-    (let* ((xctx (if (null? args) #f (car args)))
-           (did (if (map? xctx) (ctx-text xctx "did") #f)))
-      (cond ((not (and (non-empty-string? did) (map? xctx)
-                       (is-did-url? (ctx-text xctx "src"))))
-             (reply-error msg "usage: :bless <exit-ctx>"))
-            ((room-accepts-bless? did xctx msg)
-             (let ((ticket (number->string (ma-random 1000000000000))))
-               (set! blessed (map-set blessed did (map-set xctx "ticket" ticket)))
-               (ma-reply! msg (list :reply did ticket))))
+    (let ((ctx (if (null? args) #f (car args))))
+      (cond ((and (map? ctx) (non-empty-string? (ctx-text ctx "traverseId"))
+                  (not (self-entry? ctx msg)))
+             (handle-delegated-enter! msg ctx))
+            ((and (map? ctx) (non-empty-string? (ctx-text ctx "traverseId")))
+             (handle-move-enter! msg ctx))
+            ((enter-ctx-args? args)
+             (if (self-entry? (car args) msg)
+                 (handle-enter-ctx! msg (car args))
+                 (reply-error msg "agent, h00man and thing entries must be self-sent")))
+            ((public?)
+             (commit-did-entry! msg args))
             (else
-             (ma-reply! msg (list :reply did (make-map "nogo_msg" (room-deny-text)))))))))
+             (reply-error msg "this room is not public; a key is required"))))))
+
+(set-cmd-method! :move
+  (lambda (args msg)
+    (let* ((ctx (if (null? args) #f (car args)))
+           (tid (if (map? ctx) (ctx-text ctx "traverseId") #f))
+           (owner (if (non-empty-string? tid) (map-ref move-owners tid #f) #f)))
+      (cond ((not (map? ctx))
+             (reply-error msg "move requires a move ctx"))
+            ((and (same-actor? (ctx-text ctx "exit") (self))
+                  (not (same-actor? (msg-from msg) (self))))
+             (handle-delegated-enter! msg ctx))
+            ((and owner (same-actor? (ctx-text ctx "entrance") (self)))
+             (handle-move-result! ctx tid owner msg))
+            (else
+             (handle-walk-request! ctx msg))))))
 
 ; Lifecycle signals from the runtime.
 (define (on-signal term)

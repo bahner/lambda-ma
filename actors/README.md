@@ -7,9 +7,9 @@ Lambda-ma is a direct-DID world profile.
 - `#root` and `#scheduler` are metanames in this document. Actor messages
   always use their configured full DID-URLs.
 - Root is the local trust anchor. Its `:ctx?` reply is the runtime service
-  directory and contains full DID-URLs only. `:enter?` gives unqualified-entry
-  discovery, always replying with a ctx naming a room to enter. Only `#root`
-  is required in a given runtime.
+  directory and contains full DID-URLs only. `:enter` on root always replies
+  `[:entrance, <room>]`, naming a room to enter; root never admits anyone
+  itself. Only `#root` is required in a given runtime.
 - Rooms own local bare-DID presence, exits, presentation, and room policy.
 - Exits return direct DID traversal results; the DID then enters the target
   room directly.
@@ -25,8 +25,8 @@ only the reply matching its active request from that addressed room.
 DID presence is room-local state. It is not an entity and is not a node child.
 Node `children` remains the single actor ctx map keyed by full actor DID-URL.
 
-A client with no known room address asks `#root :enter?` instead. Root always
-replies with a ctx, `{ parent, rev }`, naming a room to enter — the configured
+A client with no known room address sends `:enter` to `#root` instead. Root
+always replies `[:entrance, <room>]`, naming a room to enter — the configured
 `start` room by default.
 
 ## Authority and transfer
@@ -54,20 +54,35 @@ bare `:lock` is idempotent and preserves an existing stored secret.
 
 An exit is a single top-level node with two hardcoded endpoints, `src` and
 `dst`; each room references it by a cosmetic local name in its own `exits` map.
-Its owner or its source room may lock it directly with `:lock <secret>` — the
-same contract as containers. A traveller holding the secret may `:unlock
+Its owner or its source room may lock it directly with `:lock <secret>`. Any
+caller holding that secret, or the runtime global owner key, may `:unlock
 <secret>`, which opens the exit for everyone (a lock is global, never per
-player). Without the secret, a locked exit narrates the refusal to the traveller
-as an in-world `:say` event (the `nogo_msg` prop, default `This is not the
-way.`), replies with the same text, and the traveller stays in the source room.
+player). Exits have no owner bypass: the owner and the source room present a
+key too, so the gate is testable. A locked passage answers a move with
+`[:deny, reason]`; the source room fires the `nogo` event (the `nogo_msg` prop,
+default `This is not the way.`), and the traveller stays in the source room.
 
 ## Traversal
 
-Walking an exit is `bless → key → enter`. A DID asks the exit for
-`:use { did, parent }`; the exit blesses the far endpoint, which answers
-`:reply <did> <ticket>` (accept) or `:reply <did> <ctx with nogo_msg>` (deny).
-On accept the exit replies to the traveller with `{ dst, secret }`, and the DID
-enters `dst` with `:enter { secret }`.
+Walking a passage is `:move` → `:move` → `:enter` → `:ok`. The traveller sends
+`:move { direction, traverseId }` to the room, which sends `:move <move-ctx>` to
+the exit. The exit routes and authorises: it sends `:enter <move-ctx>` to the
+destination, follows `[:entrance, <room>]` redirects, and answers the source
+room. The source room then hands the traveller `{ entrance, key }`, and the
+traveller enters the destination with `:enter <move-ctx>`. The exit never moves
+anyone; it orchestrates.
+
+A room is public unless `public` is `false`. A room created by `:dig` starts
+`public: false` (under construction), so travellers need a key until its
+builder makes it public. A private room always needs a key for `:enter` — a
+room key, a key issued for a live traversal, or the runtime's break-glass
+`global_key` — for owner and traveller alike (there is no bypass by owner
+identity, so gating is testable). `:dig` mints the new room's admission key and
+reports it. Registration and admission are separate: a room's `exits` map
+decides only what it shows, never who may enter. The `global_key` is
+daemon-local: set it in the runtime's `ma.yaml`, where it is protected from
+CRUD, and it is injected into the actor config map read by
+`(ma-get-config-key "global_key")`.
 
 ## Replies and events
 

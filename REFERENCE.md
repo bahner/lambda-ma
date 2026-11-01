@@ -29,32 +29,33 @@ The root itself is a hardcoded local DID-URL and is not an entry in this map.
 
 There is no identity entity. The bare controlling DID is `msg.from`.
 
+Every `:enter` carries a movement ctx; there is no bare or argument-free form.
+
 | Receiver | Verb | Result |
 | --- | --- | --- |
-| room | `:enter [claim]` / `:enter { secret }` | Commits presence and replies with the DID ctx: `did`, `parent`, `name`, `nick`, `description`, and `rev`. A bare DID enters a free room directly; a keyed room requires `{ secret }` from a blessing. |
-| room | `:bless <exit-ctx>` | An exit asks the room to admit a traveller (`exit-ctx` carries `did` and `src`): the room has final cut and answers the exit `:reply <did> <ticket>` (accept) or `:reply <did> <ctx with nogo_msg>` (deny). |
-| room | `:exit <name> <exit-did-url>` | Registers an exit dug from the far side: binds a local (cosmetic) name to that exit in this room's `exits` map. |
+| room | `:enter <move-ctx>` | Commits presence when `msg.from` equals `ctx.did` and replies with the DID ctx: `did`, `parent`, `name`, `nick`, `description`, `rev`. A delegated form authorises only and never commits. A public room admits directly; a private room requires a `key` equal to a room key, to `pending[did].key` for the same `traverseId`, or to `global_key`. |
+| room | `:move <move-ctx>` | Movement. A walk request from a present traveller is forwarded to the passage; the passage's answer removes the traveller and hands it the move ctx; a delegated `:move` (`exit` names this room) issues a key and commits nothing. |
+| room | `:dig <ctx>` | Owner-only. Creates a passage and, when the ctx names no `dst`, a new room. Replies `[:ok, { passage, room?, key? }]`. |
+| room | `:exit <name> <passage-did-url>` | Owner-only. Binds a local (cosmetic) name to an existing passage in this room's `exits` map. |
 | room | `:look`, `:who?`, `:occupants?`, `:things?`, `:exits?` | Direct room presentation. |
 | room | `:say`, `:emote` | Broadcasts an in-world event to present DID identities. |
-| room | `:narrate <text>` | Owner-only ambient narration: the room itself broadcasts a subject-less in-world event. |
-| exit | `:use <{ did, parent }>` | Authorises traversal: refuses at once when locked or unfilled, else blesses the destination and waits for its `:reply`. Only the traveller or the source room may call it. |
-| exit | `:reply <did> <secret|ctx>` | The destination's answer; the exit then answers the traveller's stored `:use`. |
-| exit | `:to?` | Returns the far endpoint's room DID-URL, or `"(none)"` when the exit is unfilled. |
-| exit | `:message <slot> <text>` | Sets a narration prop by its short slot (`leave`, `oleave`, `arrive`, `oarrive`, `nogo`); owner or source room only. |
-| root | `:ctx?`, `:register` | Returns the runtime service ctx; `:register` subscribes `msg.from` and sends it the current ctx. |
-| root | `:enter?` | Unqualified-entry discovery: always replies with a ctx, `{ parent, rev }`, naming a room to enter. Defaults to the configured `start` room. |
+| room | `:narrate <text>` | Owner-only ambient narration. |
+| passage | `:move <move-ctx>` | Routes a movement and relays the destination's answer to `entrance`. Only the `entrance` room may start one. |
+| passage | `:to?` | The far end relative to the caller, or `"(none)"`. |
+| passage | `:locked?`, `:lock [secret]`, `:unlock [secret]` | Lock state. |
+| passage | `:message <slot> <text>` | Sets a narration proposal by short slot. |
+| root | `:ctx?`, `:register` | Runtime service ctx and subscriber registration. |
+| root | `:enter <move-ctx>` | Redirects: replies `[:entrance, <start-room>]`, or `[:deny, reason]` when no start room is configured. Never `[:ok, …]`. |
 
 Every node answers the standard read-only getters `:name?`, `:nick?`, and
-`:description?` (see the ma-spec `ma-actor-basics-v1` recommendation). Rooms
-override them so an unnamed room reports `Construct` rather than its own
-address.
+`:description?`. Rooms override them so an unnamed room reports `Construct`.
 
 A client accepts entry context only when the reply corresponds to its newest
-entry request and originates from the requested room. It never accepts an
-unsolicited ctx push as a routing update.
+entry request and originates from the requested room. It also accepts a `:move`
+carrying a live `traverseId`, and `[:narrate, { traverseId, text }]` from a
+passage in the current room's `exits` map.
 
-Clients leave a room with argument-free `:leave`; a targeted `:leave <did>` is
-not accepted from other principals.
+Clients leave a room with argument-free `:leave`.
 
 ## Actor hierarchy
 
@@ -106,7 +107,7 @@ Two general props modulate relocation and visibility on every node:
 
 Newly created entities (forge, dig, healed exits) are born with a
 kind-prefixed fragment — `<short-kind>-<random>`, e.g. `thing-7b75…`,
-`trigger-0cc8…`, `exit-…`, `room-…` — where the short kind is the protocol's
+`trigger-0cc8…`, `passage-…`, `room-…` — where the short kind is the protocol's
 penultimate segment (`/ma/thing/0.0.1` → `thing`). This groups fresh actors in
 `@ma/entities` listings; fragments of already existing entities are never
 renamed.
@@ -150,7 +151,7 @@ is sufficient — there is no second list to keep in sync.
 ### Exit ctx
 
 An exit is a top-level node with two hardcoded endpoints. `extend-node-ctx` in
-`actors/exit.ma` adds:
+`actors/passage.ma` adds:
 
 | Field | Type | Source |
 | --- | --- | --- |
@@ -194,7 +195,10 @@ child collection.
 
 ### Other small shapes
 
-- `did-exit-ctx` — bare-DID traversal payload: `{ did, parent }`.
+- `move-ctx` — traversal payload: `did`, `traverseId`, `name`, `nick`, and the
+  optional `key`, `source`, `entrance`.
+- `pending[did]` — in-memory entry grant: `traverseId`, `key`, `arrive`,
+  `oarrive`.
 - `presentation-entry` — legacy projected entry for `who?`/`things?` replies
   when no stored child ctx exists: `actor`, `kind`, `protocol`, `name`, `nick`,
   `description`.
@@ -267,53 +271,84 @@ unlocked by its owner.
 
 ## Exit locks
 
-An exit is a single top-level node with two hardcoded endpoints, `src` and
-`dst`; each room references it by DID-URL in its own `exits` map, and that local
-name is purely cosmetic. One exit per passage means one lock, never one per
-player.
+A passage is a single top-level node with ends `entrance` and `exit`; each
+endpoint room registers the same object in its own `exits` map under its own
+local name. One passage is one object, and therefore one lock — never one per
+end, never one per player.
 
-Exits use the same `:lock <secret>` contract as containers, addressed directly
-to the exit; its owner or its source room (`src`) may lock it. A locked exit
-refuses `:use` at once, narrating the refusal to the traveller as an in-world
-`:say` event (the `nogo_msg` prop, default `This is not the way.`). A lock is
-global, never per-player: a traveller holding the secret presents it with
-`unlock <name> with <secret>`, which sends `:unlock <secret>` straight to the
-exit and opens it for everyone until the owner or source room locks it again.
+Passages use the same `:lock <secret>` contract as containers, addressed
+directly to the passage; its owner or its `entrance` room may lock it. A locked
+passage answers a move with `deny` at once, and the `entrance` room fires the
+`nogo` event. A lock is global: a traveller holding the secret presents it with
+`unlock <name> with <secret>`, which sends `:unlock <secret>` to the passage.
+The runtime `global_key` also opens any locked passage.
+
+A locked passage is a door, not a wall. It stops this route only.
 
 ## Traversal and entry keys
 
-Walking an exit and entering its destination is one protocol,
-`bless → key → enter`:
+A walk is `:move` to the room, `:move` to the passage, `:move` to the
+destination, then `:enter` by the traveller.
 
-- exit `:use <{ did, parent }>` — the exit authorises. It refuses when locked
-  or unfilled; otherwise it blesses the destination room with its narration
-  intent and remembers the caller's `:use` message (keyed by the traveller's
-  DID, in memory only) so it can answer once the destination decides.
-- room `:bless <exit-ctx>` — the destination has final cut. The ctx carries the
-  traveller `did` and the source endpoint `src`. On accept it
-  stores a one-time ticket for that DID and answers the exit
-  `:reply <did> <ticket>`; on refusal it answers
-  `:reply <did> <ctx with nogo_msg>`.
-- exit `:reply <did> <secret|ctx>` — the exit answers the stored `:use` with
-  `{ dst, secret }` (accept) or `{ text }` (deny), then tells the source room to
-  narrate the departure (`:leave <{ did, leave_msg, oleave_msg }>`).
-- room `:enter { secret }` — the traveller presents the ticket; the room
-  consumes the blessing, commits presence, and narrates the exit's arrival
-  messages.
+```text
+traveller → source room    [:move, { traverseId, direction, key? }]
+source room → passage      [:move, { did, traverseId, name, nick, key?, entrance }]
+passage → destination      [:move, { …, exit }]
+destination → passage      [:move, { traverseId, exit, key }]  |  [ … "deny" … ]
+passage → source room      [:move, { traverseId, exit, key }]  |  [ … "deny" … ]
+source room → traveller    [:move, { traverseId, exit, key }]  |  [ … "deny" … ]
+traveller → exit room      [:enter, { did, traverseId, name, nick, key }]
+```
 
-A keyless (free) room admits a bare-DID `:enter` directly. A keyed room
-(`free_entry: false`) requires a blessing, so nobody can jump in. The
-`blessed` grant lives in the destination room in memory only.
+`traverseId` is minted by the traveller, is ephemeral, and identifies one
+intended movement. Every hop carries it unchanged and ignores anything else.
+`key` is an admission credential, opaque to forwarders and read only by the
+destination. `entrance` names the room the traveller leaves; `exit` names the
+room it enters.
 
-Exit message props (set with `:message <slot> <text>` or `:prop <key> <text>`):
+**Pending state.** A destination that accepts a delegated `:move` records
+`pending[did] = { traverseId, key, arrive, oarrive }`, in memory only, and the
+traveller's `:enter` consumes it. A passage keeps one in-flight record per
+`traverseId` so it can match the destination's answer and bound redirects.
 
-| Prop | Audience |
+**Registration is not admission.** A room's `exits` map decides only what the
+room shows. A passage is two-way when both endpoint rooms have registered it;
+the far side does that with `:exit <name> <passage-did-url>`.
+
+**Redirects.** An answer whose `exit` names a different room is a redirect. It
+must stay on the destination's own runtime, and a traversal follows at most
+three.
+
+The break-glass `global_key` is daemon-local: it is set in the runtime's
+`ma.yaml`, is never exposed or writable over CRUD, and is injected into the
+actor config map that `(ma-get-config-key "global_key")` reads.
+
+## Narration
+
+Presence narration is proposed by the passage and fired by a room as a world
+event to all of its children:
+
+| Field | Audience |
 | --- | --- |
-| `leave_msg` | the traveller, on departure |
-| `oleave_msg` | the others in the source room |
-| `arrive_msg` | the traveller, on arrival |
-| `oarrive_msg` | the others in the destination room |
-| `nogo_msg` | the traveller, on refusal |
+| `leave` | the traveller, on departure |
+| `oleave` | the others in the `entrance` room |
+| `arrive` | the traveller, on arrival |
+| `oarrive` | the others in the `exit` room |
+| `nogo` | the traveller, on refusal |
+| `onogo` | the others in the `entrance` room |
+
+Each recipient renders the traveller-facing text when the subject is itself,
+otherwise the others-facing text. The passage's text beats the room default, and
+the room may override either. Presence narration is one-way.
+
+The props are `leave_msg`, `oleave_msg`, `arrive_msg`, `oarrive_msg`,
+`nogo_msg`, and `onogo_msg`, set with `:message <slot> <text>` or
+`:prop <key> <text>`.
+
+Passage narration is free-form text describing the journey itself. The passage
+sends it directly to the traveller, carrying the movement id. A client accepts
+it only from a passage in its current room's `exits` map with a matching live
+`traverseId`.
 
 ## Replies and events
 

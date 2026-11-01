@@ -13,7 +13,7 @@ map; agents, things, and containers use full DID-URLs as their child keys.
 ```text
 actors/root.ma          local trust anchor and runtime service directory
 actors/room.ma          room presence, exits, presentation, and room policy
-actors/exit.ma          direct DID traversal policy
+actors/passage.ma          direct DID traversal policy
 actors/trigger.ma      trigger actor — per-DID counters and narration rules
 actors/trigger.md       trigger actor protocol — per-DID counters and narration rules
 kinds/                  kinds used by the generated bootstrap
@@ -31,9 +31,9 @@ The bootstrap creates `#root`, `#scheduler`, and `#concourse`.
 in a given runtime. A bare DID enters a room directly with `:enter`; the room
 replies with the committed DID ctx.
 
-A client that has no room address yet asks `#root :enter?`, which always
-replies with a ctx naming a room to enter — the configured `start` room by
-default.
+A client that has no room address yet sends `:enter` to `#root`, which always
+replies `[:entrance, <room>]` naming a room to enter — the configured `start`
+room by default. Root never admits anyone itself.
 
 Claimed containers support owner-controlled locks. An owner may use `:lock` or
 `:unlock`; `:lock <secret>` additionally grants anyone with that secret access
@@ -46,10 +46,13 @@ traveller holding the secret presents it with `unlock <direction> with <secret>`
 to open the exit (a lock is global: locked is locked, unlocked is unlocked, for
 everyone).
 
-Walking an exit, `go <direction>`, runs the `bless → key → enter` protocol: the
-exit blesses the destination, which issues a one-time key, and the traveller
-enters with it. A free room also admits a bare DID directly; a room with
-`free_entry: false` requires a key, so nobody can jump in.
+Walking a passage, `go <direction>`, sends `:move` to the room, which sends `:move`
+to the exit. The exit routes and authorises; the destination answers with a key
+and the traveller enters with it. Every movement carries a `traverseId` minted
+by the traveller, so a late answer to an abandoned move is ignored. A public
+room admits directly; a room with `public: false` requires a key, so nobody can
+jump in. One passage is one exit object: registering it in both endpoint rooms
+is what makes it two-way.
 
 The normative contract is
 [ma-lambda-ma-v1.md](../ma-spec/runtime/ma-lambda-ma-v1.md). Local actor APIs

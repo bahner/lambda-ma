@@ -19,9 +19,9 @@ A bare DID in `msg.from` is the authenticated identity; no identity entity
 exists.
 
 - `#root` is the hardcoded local trust anchor. `:ctx?` publishes dynamic full
-  DID-URL service references such as `#scheduler`. `:enter?`
-  gives unqualified-entry discovery: it always replies with a ctx naming a
-  room to enter, defaulting to the configured `start` room. Only `#root` is
+  DID-URL service references such as `#scheduler`. `:enter` on root always
+  replies `[:entrance, <room>]`, naming a room to enter and defaulting to the
+  configured `start` room; root never admits anyone itself. Only `#root` is
   required in a runtime.
 - `#concourse` is the conventional entry/`start` room fragment (previously
   `#construct`). Only the fragment/entity name changed; a freshly-created
@@ -53,6 +53,25 @@ exists.
   derives from this map, never from `children`. One exit per passage means one
   lock, never one per player.
 
+  Walking a passage is `:move` → `:move` → `:enter` → `:ok`. The traveller sends
+  `:move` to its room, which sends `:move <move-ctx>` to the passage. The passage routes
+  and authorises only — the traveller performs the move. Every movement carries
+  a `traverseId` minted by the traveller, and every hop ignores a result whose
+  `traverseId` does not match its live movement. A delegated `:enter`
+  (`msg.from` is the exit) authorises but MUST NOT commit presence; only
+  `msg.from` equal to `ctx.did` may commit. `:entrance` redirects are followed
+  only within the destination's own runtime and only within the hop limit.
+
+  Registration and admission are separate. A room's `exits` map decides what it
+  shows; its keys decide who enters. One passage is one exit object, so it has
+  one lock. A room's `public` prop decides whether it admits directly or
+  requires a key. A private room always needs a key (a room key, a key issued
+  for the live traversal, or the runtime's break-glass `global_key`); there is
+  no bypass by owner identity, so gating is testable. `global_key` is
+  daemon-local: set it in the runtime's `ma.yaml`, never over CRUD. A room
+  created by `:dig` starts `public: false` ("under construction"), and `:dig`
+  reports that room's admission key.
+
   `roll-call-children` is the deliberate transient exception. While a
   roll-call is active it is a temporary working map containing children that
   have answered. It is used to reconstruct a replacement `children` map when
@@ -77,7 +96,7 @@ There is no human/actor distinction, and no subset of occupants distinguished
 by "having a DID" — they all have one.
 
 `kind` (`/ma/thing/0.0.1`, `/ma/container/0.0.1`, `/ma/agent/0.0.1`,
-`/ma/exit/0.0.1`, `/ma/room/0.0.1`) is a protocol — the verbs an actor
+`/ma/passage/0.0.1`, `/ma/room/0.0.1`) is a protocol — the verbs an actor
 understands and the state it keeps — never a human/non-human classification.
 
 Events (`:say`, `:emote`, `:arrive`, `:leave`) are broadcast to every actor

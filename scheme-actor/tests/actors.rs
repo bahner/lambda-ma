@@ -79,6 +79,14 @@ fn room_env() -> Rc<ma_scheme_actor::env::Env> {
           (set-prop! (string-append "reply-term:" (number->string (get-prop "reply-count"))) term))
         (define (ma-save-state!) #f)
         (define (ma-random n) 42)
+        (define (ma-create-actor kind behaviour init fragment)
+          (inc-prop! "created-count" 1)
+          (let ((n (number->string (get-prop "created-count"))))
+            (set-prop! (string-append "created-kind:" n) kind)
+            (set-prop! (string-append "created-fragment:" n) fragment)
+            (set-prop! (string-append "created-behaviour:" n) behaviour)
+            (set-prop! (string-append "created-init:" n) init))
+          (string-append "did:ma:runtime#" fragment))
         (define (test-agent-claim! actor nick)
           (remember-child!
             (make-map "actor" actor
@@ -120,7 +128,7 @@ fn exit_env() -> Rc<ma_scheme_actor::env::Env> {
     eval_all(include_str!("../actor.ma"), &env).unwrap();
     eval_all(include_str!("../state.ma"), &env).unwrap();
     eval_all(include_str!("../node.ma"), &env).unwrap();
-    eval_all(include_str!("../../actors/exit.ma"), &env).unwrap();
+    eval_all(include_str!("../../actors/passage.ma"), &env).unwrap();
     eval_all(
         r#"
         (define (ma-send! target term)
@@ -2398,135 +2406,20 @@ fn room_thing_alias_set_and_cleared_by_owner() {
     assert!(eval_bool("(not (thing-ref \"lamp\"))", &env));
 }
 
-// ── Exit `:use` / `:bless` / `:reply` ─────────────────────────────────────
+// ── Exit lock and message props ───────────────────────────────────────────
 
-#[test]
-fn exit_use_unlocked_blesses_destination_and_waits() {
-    let env = exit_env();
-    let mut config = make_config("did:ma:runtime", "did:ma:runtime#north-exit");
-    config.insert("kind".to_string(), "/ma/exit/0.0.1".to_string());
-    ma_scheme_actor::state::set_config(config);
-    eval_all(
-        r#"
-        (set-prop! "src"      "did:ma:runtime#room")
-        (set-prop! "dst" "did:ma:runtime#kitchen")
-        "#,
-        &env,
-    )
-    .unwrap();
 
-    env.define(
-        Rc::from("msg"),
-        sample_msg(
-            "did:ma:alice",
-            "did:ma:runtime#north-exit",
-            Value::list(vec![
-                Value::symbol(":use"),
-                eval_all(
-                    r#"(make-map "did" "did:ma:alice" "parent" "did:ma:runtime#room")"#,
-                    &env,
-                )
-                .unwrap(),
-            ]),
-        ),
-    );
-    eval_all("(on-message msg)", &env).unwrap();
-
-    // No reply yet: the exit waits for the destination's decision.
-    assert_eq!(
-        eval_all("(get-prop \"reply-count\")", &env).unwrap(),
-        Value::Bool(false)
-    );
-    // A bless carrying the narration intent went to the target room.
-    assert_eq!(
-        eval_str("(get-prop \"sent-target:1\")", &env),
-        "did:ma:runtime#kitchen"
-    );
-    assert_eq!(
-        eval_all("(car (get-prop \"sent-term:1\"))", &env).unwrap(),
-        Value::symbol(":bless")
-    );
-    assert_eq!(
-        eval_str(
-            "(ctx-text (car (cdr (get-prop \"sent-term:1\"))) \"did\")",
-            &env
-        ),
-        "did:ma:alice"
-    );
-    assert_eq!(
-        eval_str(
-            "(ctx-text (car (cdr (get-prop \"sent-term:1\"))) \"src\")",
-            &env
-        ),
-        "did:ma:runtime#room"
-    );
-}
-
-#[test]
-fn exit_use_locked_refuses_at_once_with_nogo() {
-    let env = exit_env();
-    let mut config = make_config("did:ma:runtime", "did:ma:runtime#north-exit");
-    config.insert("kind".to_string(), "/ma/exit/0.0.1".to_string());
-    ma_scheme_actor::state::set_config(config);
-    eval_all(
-        r#"
-        (set-prop! "src"      "did:ma:runtime#room")
-        (set-prop! "dst" "did:ma:runtime#kitchen")
-        (set-prop! "locked"      "true")
-        "#,
-        &env,
-    )
-    .unwrap();
-
-    env.define(
-        Rc::from("msg"),
-        sample_msg(
-            "did:ma:alice",
-            "did:ma:runtime#north-exit",
-            Value::list(vec![
-                Value::symbol(":use"),
-                eval_all(
-                    r#"(make-map "did" "did:ma:alice" "parent" "did:ma:runtime#room")"#,
-                    &env,
-                )
-                .unwrap(),
-            ]),
-        ),
-    );
-    eval_all("(on-message msg)", &env).unwrap();
-
-    // Refused immediately with the nogo text; nothing blessed.
-    assert_eq!(
-        eval_all("(car (get-prop \"reply-term:1\"))", &env).unwrap(),
-        Value::symbol(":ok")
-    );
-    assert_eq!(
-        eval_str(
-            "(ctx-text (car (cdr (get-prop \"reply-term:1\"))) \"text\")",
-            &env
-        ),
-        "This is not the way."
-    );
-    assert_eq!(
-        eval_str("(get-prop \"sent-target:1\")", &env),
-        "did:ma:alice"
-    );
-    assert_eq!(
-        eval_all("(car (get-prop \"sent-term:1\"))", &env).unwrap(),
-        Value::symbol(":event")
-    );
-}
 
 #[test]
 fn exit_unlock_with_matching_secret_unlocks_for_everyone() {
     let env = exit_env();
     let mut config = make_config("did:ma:runtime", "did:ma:runtime#north-exit");
-    config.insert("kind".to_string(), "/ma/exit/0.0.1".to_string());
+    config.insert("kind".to_string(), "/ma/passage/0.0.1".to_string());
     ma_scheme_actor::state::set_config(config);
     eval_all(
         r#"
-        (set-prop! "src"      "did:ma:runtime#room")
-        (set-prop! "dst" "did:ma:runtime#kitchen")
+        (set-prop! "entrance"      "did:ma:runtime#room")
+        (set-prop! "exit" "did:ma:runtime#kitchen")
         (set-prop! "locked"      "true")
         (set-prop! "lock-secret" "open sesame")
         "#,
@@ -2534,7 +2427,7 @@ fn exit_unlock_with_matching_secret_unlocks_for_everyone() {
     )
     .unwrap();
 
-    // Wrong secret: refused, nothing blessed.
+    // Wrong secret: refused.
     env.define(
         Rc::from("msg"),
         sample_msg(
@@ -2566,76 +2459,16 @@ fn exit_unlock_with_matching_secret_unlocks_for_everyone() {
     assert!(eval_bool("(not (locked?))", &env));
 }
 
-#[test]
-fn exit_use_locked_narrates_refusal_to_traveller() {
-    let env = exit_env();
-    let mut config = make_config("did:ma:runtime", "did:ma:runtime#north-exit");
-    config.insert("kind".to_string(), "/ma/exit/0.0.1".to_string());
-    ma_scheme_actor::state::set_config(config);
-    eval_all(
-        r#"
-        (set-prop! "src"      "did:ma:runtime#room")
-        (set-prop! "dst" "did:ma:runtime#kitchen")
-        (set-prop! "locked"      "true")
-        (set-prop! "nogo_msg"    "None shall pass!")
-        "#,
-        &env,
-    )
-    .unwrap();
-
-    env.define(
-        Rc::from("msg"),
-        sample_msg(
-            "did:ma:alice",
-            "did:ma:runtime#north-exit",
-            Value::list(vec![
-                Value::symbol(":use"),
-                eval_all(
-                    r#"(make-map "did" "did:ma:alice" "parent" "did:ma:runtime#room")"#,
-                    &env,
-                )
-                .unwrap(),
-            ]),
-        ),
-    );
-    eval_all("(on-message msg)", &env).unwrap();
-
-    // The refusal is narrated to the traveller as an in-world :event :say,
-    // not an inbox message; the :use reply stays the structured channel.
-    assert_eq!(
-        eval_str("(get-prop \"sent-target:1\")", &env),
-        "did:ma:alice"
-    );
-    assert_eq!(
-        eval_all("(car (get-prop \"sent-term:1\"))", &env).unwrap(),
-        Value::symbol(":event")
-    );
-    assert_eq!(
-        eval_all("(car (cdr (get-prop \"sent-term:1\")))", &env).unwrap(),
-        Value::symbol(":say")
-    );
-    assert_eq!(
-        eval_all("(car (cdr (cdr (cdr (get-prop \"sent-term:1\")))))", &env).unwrap(),
-        Value::str("None shall pass!")
-    );
-    assert_eq!(
-        eval_str(
-            "(ctx-text (car (cdr (get-prop \"reply-term:1\"))) \"text\")",
-            &env
-        ),
-        "None shall pass!"
-    );
-}
 
 #[test]
 fn exit_prop_nogo_msg_settable_by_source_room_or_owner() {
     let env = exit_env();
     let mut config = make_config("did:ma:runtime", "did:ma:runtime#north-exit");
-    config.insert("kind".to_string(), "/ma/exit/0.0.1".to_string());
+    config.insert("kind".to_string(), "/ma/passage/0.0.1".to_string());
     ma_scheme_actor::state::set_config(config);
     eval_all(
         r#"
-        (set-prop! "src" "did:ma:runtime#room")
+        (set-prop! "entrance" "did:ma:runtime#room")
         (set-prop! "owner" "did:ma:owner")
         "#,
         &env,
@@ -2721,12 +2554,12 @@ fn exit_prop_nogo_msg_settable_by_source_room_or_owner() {
 fn exit_use_rejects_foreign_caller() {
     let env = exit_env();
     let mut config = make_config("did:ma:runtime", "did:ma:runtime#north-exit");
-    config.insert("kind".to_string(), "/ma/exit/0.0.1".to_string());
+    config.insert("kind".to_string(), "/ma/passage/0.0.1".to_string());
     ma_scheme_actor::state::set_config(config);
     eval_all(
         r#"
-        (set-prop! "src"      "did:ma:runtime#room")
-        (set-prop! "dst" "did:ma:runtime#kitchen")
+        (set-prop! "entrance"      "did:ma:runtime#room")
+        (set-prop! "exit" "did:ma:runtime#kitchen")
         "#,
         &env,
     )
@@ -2739,7 +2572,7 @@ fn exit_use_rejects_foreign_caller() {
             "did:ma:intruder",
             "did:ma:runtime#north-exit",
             Value::list(vec![
-                Value::symbol(":use"),
+                Value::symbol(":move"),
                 eval_all(
                     r#"(make-map "did" "did:ma:alice" "parent" "did:ma:runtime#room")"#,
                     &env,
@@ -2756,173 +2589,25 @@ fn exit_use_rejects_foreign_caller() {
     );
 }
 
-#[test]
-fn exit_reply_accept_answers_traveller_and_narrates_departure() {
-    let env = exit_env();
-    let mut config = make_config("did:ma:runtime", "did:ma:runtime#north-exit");
-    config.insert("kind".to_string(), "/ma/exit/0.0.1".to_string());
-    ma_scheme_actor::state::set_config(config);
-    eval_all(
-        r#"
-        (set-prop! "src"      "did:ma:runtime#room")
-        (set-prop! "dst" "did:ma:runtime#kitchen")
-        "#,
-        &env,
-    )
-    .unwrap();
 
-    env.define(
-        Rc::from("msg"),
-        sample_msg(
-            "did:ma:alice",
-            "did:ma:runtime#north-exit",
-            Value::list(vec![
-                Value::symbol(":use"),
-                eval_all(
-                    r#"(make-map "did" "did:ma:alice" "parent" "did:ma:runtime#room")"#,
-                    &env,
-                )
-                .unwrap(),
-            ]),
-        ),
-    );
-    eval_all("(on-message msg)", &env).unwrap();
-
-    // Destination accepts: it answers the exit with the traveller's DID + ticket.
-    env.define(
-        Rc::from("msg2"),
-        sample_msg(
-            "did:ma:runtime#kitchen",
-            "did:ma:runtime#north-exit",
-            Value::list(vec![
-                Value::symbol(":reply"),
-                Value::str("did:ma:alice"),
-                Value::str("ticket-123"),
-            ]),
-        ),
-    );
-    eval_all("(on-message msg2)", &env).unwrap();
-
-    // The traveller gets the correlated reply carrying dst + secret.
-    assert_eq!(
-        eval_all("(car (get-prop \"reply-term:1\"))", &env).unwrap(),
-        Value::symbol(":ok")
-    );
-    assert_eq!(
-        eval_str(
-            "(ctx-text (car (cdr (get-prop \"reply-term:1\"))) \"dst\")",
-            &env
-        ),
-        "did:ma:runtime#kitchen"
-    );
-    assert_eq!(
-        eval_str(
-            "(ctx-text (car (cdr (get-prop \"reply-term:1\"))) \"secret\")",
-            &env
-        ),
-        "ticket-123"
-    );
-
-    // And the source room is told to remove + narrate the departure.
-    assert_eq!(
-        eval_str("(get-prop \"sent-target:2\")", &env),
-        "did:ma:runtime#room"
-    );
-    assert_eq!(
-        eval_all("(car (get-prop \"sent-term:2\"))", &env).unwrap(),
-        Value::symbol(":leave")
-    );
-    assert_eq!(
-        eval_str(
-            "(ctx-text (car (cdr (get-prop \"sent-term:2\"))) \"did\")",
-            &env
-        ),
-        "did:ma:alice"
-    );
-}
-
-#[test]
-fn exit_reply_deny_relays_room_nogo() {
-    let env = exit_env();
-    let mut config = make_config("did:ma:runtime", "did:ma:runtime#north-exit");
-    config.insert("kind".to_string(), "/ma/exit/0.0.1".to_string());
-    ma_scheme_actor::state::set_config(config);
-    eval_all(
-        r#"
-        (set-prop! "src"      "did:ma:runtime#room")
-        (set-prop! "dst" "did:ma:runtime#kitchen")
-        "#,
-        &env,
-    )
-    .unwrap();
-
-    env.define(
-        Rc::from("msg"),
-        sample_msg(
-            "did:ma:alice",
-            "did:ma:runtime#north-exit",
-            Value::list(vec![
-                Value::symbol(":use"),
-                eval_all(
-                    r#"(make-map "did" "did:ma:alice" "parent" "did:ma:runtime#room")"#,
-                    &env,
-                )
-                .unwrap(),
-            ]),
-        ),
-    );
-    eval_all("(on-message msg)", &env).unwrap();
-
-    // Destination refuses: it answers the exit with a ctx carrying nogo_msg.
-    env.define(
-        Rc::from("msg2"),
-        sample_msg(
-            "did:ma:runtime#kitchen",
-            "did:ma:runtime#north-exit",
-            Value::list(vec![
-                Value::symbol(":reply"),
-                Value::str("did:ma:alice"),
-                eval_all(r#"(make-map "nogo_msg" "The room is full.")"#, &env).unwrap(),
-            ]),
-        ),
-    );
-    eval_all("(on-message msg2)", &env).unwrap();
-
-    assert_eq!(
-        eval_all("(car (get-prop \"reply-term:1\"))", &env).unwrap(),
-        Value::symbol(":ok")
-    );
-    assert_eq!(
-        eval_str(
-            "(ctx-text (car (cdr (get-prop \"reply-term:1\"))) \"text\")",
-            &env
-        ),
-        "The room is full."
-    );
-    // Only the bless was sent; no departure.
-    assert_eq!(
-        eval_all("(get-prop \"sent-count\")", &env).unwrap(),
-        Value::Int(1)
-    );
-}
 
 // ── Exit `:lock` / `:unlock` ──────────────────────────────────────────────
 
 #[test]
-fn exit_lock_unlock_only_allowed_from_source_room() {
+fn exit_lock_requires_source_room_and_unlock_requires_a_key() {
     let env = exit_env();
     let mut config = make_config("did:ma:runtime", "did:ma:runtime#north-exit");
-    config.insert("kind".to_string(), "/ma/exit/0.0.1".to_string());
+    config.insert("kind".to_string(), "/ma/passage/0.0.1".to_string());
     ma_scheme_actor::state::set_config(config);
-    eval_all(r#"(set-prop! "src" "did:ma:runtime#room")"#, &env).unwrap();
+    eval_all(r#"(set-prop! "entrance" "did:ma:runtime#room")"#, &env).unwrap();
 
-    // Source room may lock.
+    // Source room may lock with a secret.
     env.define(
         Rc::from("msg"),
         sample_msg(
             "did:ma:runtime#room",
             "did:ma:runtime#north-exit",
-            Value::symbol(":lock"),
+            Value::list(vec![Value::symbol(":lock"), Value::str("open sesame")]),
         ),
     );
     eval_all("(on-message msg)", &env).unwrap();
@@ -2932,14 +2617,15 @@ fn exit_lock_unlock_only_allowed_from_source_room() {
         Value::symbol(":ok")
     );
     assert!(eval_bool("(locked?)", &env));
+    assert_eq!(eval_str("(lock-secret)", &env), "open sesame");
 
-    // Intruder may not unlock.
+    // Intruder may not lock.
     env.define(
         Rc::from("msg2"),
         sample_msg(
             "did:ma:intruder",
             "did:ma:runtime#north-exit",
-            Value::symbol(":unlock"),
+            Value::list(vec![Value::symbol(":lock"), Value::str("intruder")]),
         ),
     );
     eval_all("(on-message msg2)", &env).unwrap();
@@ -2949,8 +2635,9 @@ fn exit_lock_unlock_only_allowed_from_source_room() {
         Value::symbol(":error")
     );
     assert!(eval_bool("(locked?)", &env));
+    assert_eq!(eval_str("(lock-secret)", &env), "open sesame");
 
-    // Source room may unlock.
+    // The source room has no bare unlock bypass: it presents the key too.
     env.define(
         Rc::from("msg3"),
         sample_msg(
@@ -2963,6 +2650,23 @@ fn exit_lock_unlock_only_allowed_from_source_room() {
 
     assert_eq!(
         eval_all("(car (get-prop \"reply-term:3\"))", &env).unwrap(),
+        Value::symbol(":error")
+    );
+    assert!(eval_bool("(locked?)", &env));
+
+    // The stored secret opens it.
+    env.define(
+        Rc::from("msg4"),
+        sample_msg(
+            "did:ma:runtime#room",
+            "did:ma:runtime#north-exit",
+            Value::list(vec![Value::symbol(":unlock"), Value::str("open sesame")]),
+        ),
+    );
+    eval_all("(on-message msg4)", &env).unwrap();
+
+    assert_eq!(
+        eval_all("(car (get-prop \"reply-term:4\"))", &env).unwrap(),
         Value::symbol(":ok")
     );
     assert!(eval_bool("(not (locked?))", &env));
@@ -2972,12 +2676,12 @@ fn exit_lock_unlock_only_allowed_from_source_room() {
 fn exit_lock_secret_lets_non_owner_unlock() {
     let env = exit_env();
     let mut config = make_config("did:ma:runtime", "did:ma:runtime#north-exit");
-    config.insert("kind".to_string(), "/ma/exit/0.0.1".to_string());
+    config.insert("kind".to_string(), "/ma/passage/0.0.1".to_string());
     ma_scheme_actor::state::set_config(config);
     eval_all(
         r#"
-        (set-prop! "src"      "did:ma:runtime#room")
-        (set-prop! "dst" "did:ma:runtime#kitchen")
+        (set-prop! "entrance"      "did:ma:runtime#room")
+        (set-prop! "exit" "did:ma:runtime#kitchen")
         "#,
         &env,
     )
@@ -3040,9 +2744,9 @@ fn exit_lock_secret_lets_non_owner_unlock() {
 fn exit_bare_lock_preserves_existing_secret() {
     let env = exit_env();
     let mut config = make_config("did:ma:runtime", "did:ma:runtime#north-exit");
-    config.insert("kind".to_string(), "/ma/exit/0.0.1".to_string());
+    config.insert("kind".to_string(), "/ma/passage/0.0.1".to_string());
     ma_scheme_actor::state::set_config(config);
-    eval_all(r#"(set-prop! "src" "did:ma:runtime#room")"#, &env).unwrap();
+    eval_all(r#"(set-prop! "entrance" "did:ma:runtime#room")"#, &env).unwrap();
 
     // Lock with a secret, then re-lock bare: the stored secret must survive.
     env.define(
@@ -3099,9 +2803,9 @@ fn exit_locked_query_reflects_current_state() {
 fn exit_where_returns_its_parent_room() {
     let env = exit_env();
     let mut config = make_config("did:ma:runtime", "did:ma:runtime#north-exit");
-    config.insert("kind".to_string(), "/ma/exit/0.0.1".to_string());
+    config.insert("kind".to_string(), "/ma/passage/0.0.1".to_string());
     ma_scheme_actor::state::set_config(config);
-    eval_all(r#"(set-prop! "src" "did:ma:runtime#room")"#, &env).unwrap();
+    eval_all(r#"(set-prop! "entrance" "did:ma:runtime#room")"#, &env).unwrap();
 
     env.define(
         Rc::from("msg"),
@@ -3121,13 +2825,13 @@ fn exit_where_returns_its_parent_room() {
 fn exit_about_returns_descriptive_text() {
     let env = exit_env();
     let mut config = make_config("did:ma:runtime", "did:ma:runtime#north-exit");
-    config.insert("kind".to_string(), "/ma/exit/0.0.1".to_string());
+    config.insert("kind".to_string(), "/ma/passage/0.0.1".to_string());
     ma_scheme_actor::state::set_config(config);
     eval_all(
         r#"
         (set-prop! "name" "north")
-        (set-prop! "src"      "did:ma:runtime#room")
-        (set-prop! "dst" "did:ma:runtime#kitchen")
+        (set-prop! "entrance"      "did:ma:runtime#room")
+        (set-prop! "exit" "did:ma:runtime#kitchen")
         "#,
         &env,
     )
@@ -3160,9 +2864,9 @@ fn exit_about_returns_descriptive_text() {
 fn exit_message_source_room_can_update_leave_message() {
     let env = exit_env();
     let mut config = make_config("did:ma:runtime", "did:ma:runtime#north-exit");
-    config.insert("kind".to_string(), "/ma/exit/0.0.1".to_string());
+    config.insert("kind".to_string(), "/ma/passage/0.0.1".to_string());
     ma_scheme_actor::state::set_config(config);
-    eval_all(r#"(set-prop! "src" "did:ma:runtime#room")"#, &env).unwrap();
+    eval_all(r#"(set-prop! "entrance" "did:ma:runtime#room")"#, &env).unwrap();
 
     env.define(
         Rc::from("msg"),
@@ -3192,9 +2896,9 @@ fn exit_message_source_room_can_update_leave_message() {
 fn exit_message_rejects_unknown_slot_and_non_source_caller() {
     let env = exit_env();
     let mut config = make_config("did:ma:runtime", "did:ma:runtime#north-exit");
-    config.insert("kind".to_string(), "/ma/exit/0.0.1".to_string());
+    config.insert("kind".to_string(), "/ma/passage/0.0.1".to_string());
     ma_scheme_actor::state::set_config(config);
-    eval_all(r#"(set-prop! "src" "did:ma:runtime#room")"#, &env).unwrap();
+    eval_all(r#"(set-prop! "entrance" "did:ma:runtime#room")"#, &env).unwrap();
 
     // Unknown slot.
     env.define(
@@ -3239,115 +2943,16 @@ fn exit_message_rejects_unknown_slot_and_non_source_caller() {
 
 // ── Room entry blessings ──────────────────────────────────────────────────
 
+
+
+
 #[test]
-fn room_bless_issues_ticket_and_replies_to_exit() {
+fn room_private_room_refuses_keyless_enter() {
     let env = room_env();
     let mut config = make_config("did:ma:runtime", "did:ma:runtime#room");
     config.insert("kind".to_string(), "/ma/room/0.0.1".to_string());
     ma_scheme_actor::state::set_config(config);
-
-    env.define(
-        Rc::from("msg"),
-        sample_msg(
-            "did:ma:runtime#north-exit",
-            "did:ma:runtime#room",
-            Value::list(vec![
-                Value::symbol(":bless"),
-                eval_all(
-                    r#"(make-map "did" "did:ma:alice" "src" "did:ma:runtime#room" "arrive_msg" "You step in." "oarrive_msg" "Alice steps in.")"#,
-                    &env,
-                )
-                .unwrap(),
-            ]),
-        ),
-    );
-    eval_all("(on-message msg)", &env).unwrap();
-
-    // The room answers the exit `:reply <did> <ticket>` and stores the blessing.
-    assert_eq!(
-        eval_all("(car (get-prop \"reply-term:1\"))", &env).unwrap(),
-        Value::symbol(":reply")
-    );
-    assert_eq!(
-        eval_str("(car (cdr (get-prop \"reply-term:1\")))", &env),
-        "did:ma:alice"
-    );
-    assert_eq!(
-        eval_str("(car (cdr (cdr (get-prop \"reply-term:1\"))))", &env),
-        "42"
-    );
-    assert_eq!(
-        eval_str(
-            "(ctx-text (map-ref blessed \"did:ma:alice\") \"ticket\")",
-            &env
-        ),
-        "42"
-    );
-}
-
-#[test]
-fn room_blessed_enter_admits_with_ticket_and_narrates() {
-    let env = room_env();
-    let mut config = make_config("did:ma:runtime", "did:ma:runtime#room");
-    config.insert("kind".to_string(), "/ma/room/0.0.1".to_string());
-    ma_scheme_actor::state::set_config(config);
-    eval_all(
-        r#"
-        (set! blessed
-          (map-set blessed "did:ma:alice"
-            (make-map "did" "did:ma:alice" "ticket" "42"
-                      "arrive_msg" "You step in."
-                      "oarrive_msg" "Alice steps in.")))
-        "#,
-        &env,
-    )
-    .unwrap();
-
-    env.define(
-        Rc::from("msg"),
-        sample_msg(
-            "did:ma:alice",
-            "did:ma:runtime#room",
-            Value::list(vec![
-                Value::symbol(":enter"),
-                eval_all(
-                    r#"(make-map "secret" "42" "name" "Alice" "nick" "Alice")"#,
-                    &env,
-                )
-                .unwrap(),
-            ]),
-        ),
-    );
-    eval_all("(on-message msg)", &env).unwrap();
-
-    // Admitted: the child is stored and the traveller hears the arrival line.
-    // (sent:1 is the room's :child ack to the new child; the narration follows.)
-    assert!(eval_bool("(map? (claim-ctx \"did:ma:alice\"))", &env));
-    assert_eq!(
-        eval_str("(get-prop \"sent-target:2\")", &env),
-        "did:ma:alice"
-    );
-    assert_eq!(
-        eval_all("(car (get-prop \"sent-term:2\"))", &env).unwrap(),
-        Value::symbol(":event")
-    );
-    assert_eq!(
-        eval_all("(car (cdr (get-prop \"sent-term:2\")))", &env).unwrap(),
-        Value::symbol(":narrate")
-    );
-    assert_eq!(
-        eval_all("(car (cdr (cdr (get-prop \"sent-term:2\"))))", &env).unwrap(),
-        Value::str("You step in.")
-    );
-}
-
-#[test]
-fn room_keyed_room_refuses_keyless_enter() {
-    let env = room_env();
-    let mut config = make_config("did:ma:runtime", "did:ma:runtime#room");
-    config.insert("kind".to_string(), "/ma/room/0.0.1".to_string());
-    ma_scheme_actor::state::set_config(config);
-    eval_all(r#"(set-prop! "free_entry" "false")"#, &env).unwrap();
+    eval_all(r#"(set-prop! "public" "false")"#, &env).unwrap();
 
     env.define(
         Rc::from("msg"),
@@ -3839,4 +3444,684 @@ fn roll_call_begin_accepts_integer_seconds_and_schedules_the_end() {
         &env,
     );
     assert_eq!(spec, "10s");
+}
+
+// ── Exits: creation via `:dig` ────────────────────────────────────────────
+
+/// Digging an exit to an existing room must request one `/ma/passage/0.0.1` actor
+/// with the deterministic exit fragment and NO per-entity behaviour (the kind
+/// carries `exit.ma`). The generated init source must compile as a Scheme actor
+/// program — this is exactly the payload the runtime evaluates on the freshly
+/// created entity's first load, so a compile error here would make the exit
+/// silently vanish even though `ma-create-actor` returned a DID-URL.
+#[test]
+fn room_dig_to_existing_room_creates_exit_with_compilable_init() {
+    let env = room_env();
+    ma_scheme_actor::state::set_config(make_config("did:ma:runtime", "did:ma:runtime#room"));
+    eval_all(r#"(set-prop! "owner" "did:ma:owner")"#, &env).unwrap();
+
+    env.define(
+        Rc::from("msg"),
+        rpc_msg("did:ma:owner", "did:ma:runtime#room", ":dig"),
+    );
+    eval_all(
+        "((find-method :dig) (list \"north\" \"to\" \"did:ma:runtime#northroom\") msg)",
+        &env,
+    )
+    .unwrap();
+
+    // Exactly one actor creation was requested, of the exit kind.
+    assert_eq!(eval_int("(get-prop \"created-count\")", &env), 1);
+    assert_eq!(
+        eval_str("(get-prop \"created-kind:1\")", &env),
+        "/ma/passage/0.0.1"
+    );
+
+    // No per-entity behaviour: the kind's own `exit.ma` layer supplies it.
+    assert_eq!(
+        eval_str(
+            "(if (get-prop \"created-behaviour:1\") \"given\" \"none\")",
+            &env
+        ),
+        "none"
+    );
+
+    // Deterministic fragment: `passage-` + blake3(source room, direction).
+    let expected_fragment = eval_str("(passage-fragment \"north\")", &env);
+    assert!(expected_fragment.starts_with("passage-"));
+    assert_eq!(
+        eval_str("(get-prop \"created-fragment:1\")", &env),
+        expected_fragment
+    );
+
+    // The init payload names both endpoints: this room as `src`, the target as `dst`.
+    let init = eval_str("(get-prop \"created-init:1\")", &env);
+    assert!(
+        init.contains("(set-init-prop! \"entrance\" \"did:ma:runtime#room\")"),
+        "init should set src to the source room, got: {init}"
+    );
+    assert!(
+        init.contains("(set-init-prop! \"exit\" \"did:ma:runtime#northroom\")"),
+        "init should set dst to the target room, got: {init}"
+    );
+
+    // The exit is registered under its local name in the room's `exits` map,
+    // and the far room was told to register the same passage from its side.
+    let exit_did = eval_str("(exit-target \"north\")", &env);
+    assert_eq!(exit_did, format!("did:ma:runtime#{expected_fragment}"));
+    // sent:1 is `:report-parent` to root; sent:2 is the `:exit` mirror.
+    assert_eq!(
+        eval_str("(get-prop \"sent-target:2\")", &env),
+        "did:ma:runtime#northroom"
+    );
+    assert_eq!(
+        eval_all("(car (get-prop \"sent-term:2\"))", &env).unwrap(),
+        Value::symbol(":exit")
+    );
+
+    // The init source compiles and lands the endpoints as real props on a fresh
+    // exit actor — the same source the runtime evaluates on first load.
+    let exit = exit_env();
+    eval_all(&init, &exit).unwrap();
+    assert_eq!(eval_str("(get-prop \"entrance\")", &exit), "did:ma:runtime#room");
+    assert_eq!(
+        eval_str("(get-prop \"exit\")", &exit),
+        "did:ma:runtime#northroom"
+    );
+}
+
+/// The room fragment and the exit fragment are derived from different inputs so
+/// a source-room `:fill <direction>` can never collide the two.
+#[test]
+fn room_and_exit_fragments_are_distinct() {
+    let env = room_env();
+    ma_scheme_actor::state::set_config(make_config("did:ma:runtime", "did:ma:runtime#room"));
+    let room = eval_str("(room-fragment \"north\")", &env);
+    let passage = eval_str("(passage-fragment \"north\")", &env);
+    assert!(room.starts_with("room-"));
+    assert!(passage.starts_with("passage-"));
+    assert_ne!(room, passage);
+}
+
+// ── Exits: read-only introspection ────────────────────────────────────────
+
+/// Exercise the exit introspection verbs against a real exit environment.
+///
+/// This is the check the isolated per-actor tests cannot make: the exit builds
+/// the bless ctx and the room consumes it, and the room builds the reply term
+/// and the exit consumes it. A field-name or arity drift on either side is what
+/// makes `go <direction>` time out in a running world, so it is asserted here.
+
+// ── Passage lock key and the global owner key ─────────────────────────────
+
+/// Digging a brand-new room mints the passage's 6-digit lock key, stashes it
+/// for the exit that child-alive will install, and tells the digger
+/// (`Dug <dir> to <room> with key <key>`).
+#[test]
+fn room_dig_new_room_reports_its_lock_key() {
+    let env = room_env();
+    ma_scheme_actor::state::set_config(make_config("did:ma:runtime", "did:ma:runtime#room"));
+    eval_all(r#"(set-prop! "owner" "did:ma:owner")"#, &env).unwrap();
+
+    env.define(
+        Rc::from("msg"),
+        sample_msg("did:ma:owner", "did:ma:runtime#room", Value::symbol(":dig")),
+    );
+    eval_all("((find-method :dig) (list \"north\") msg)", &env).unwrap();
+
+    // The new ROOM was requested; its init carries no key (the key is the
+    // passage's, not the room's).
+    assert_eq!(
+        eval_str("(get-prop \"created-kind:1\")", &env),
+        "/ma/room/0.0.1"
+    );
+    let room_init = eval_str("(get-prop \"created-init:1\")", &env);
+    assert!(
+        !room_init.contains("lock-secret") && !room_init.contains("\"key\""),
+        "room init must not carry the passage key, got: {room_init}"
+    );
+    assert!(
+        room_init.contains("(set-init-prop! \"public\" \"false\")"),
+        "a newly dug room must start under construction, got: {room_init}"
+    );
+
+    // The lock key is stashed until child-alive installs the exit.
+    assert_eq!(
+        eval_str("(get-prop \"pending-new-room-lock-key:north\")", &env),
+        "42"
+    );
+
+    // The digger is told the key.
+    assert_eq!(
+        eval_str("(get-prop \"sent-target:1\")", &env),
+        "did:ma:owner"
+    );
+    assert_eq!(
+        eval_all("(car (get-prop \"sent-term:1\"))", &env).unwrap(),
+        Value::symbol(":print")
+    );
+    let text = eval_str("(car (cdr (get-prop \"sent-term:1\")))", &env);
+    assert!(text.starts_with("Dug north to room-"), "got: {text}");
+    assert!(text.ends_with("with key 42"), "got: {text}");
+
+    // The exit installed from that key carries it as `lock-secret`.
+    eval_all(
+        "(create-exit! \"north\" \"did:ma:runtime#northroom\" \"42\")",
+        &env,
+    )
+    .unwrap();
+    let exit_init = eval_str("(get-prop \"created-init:2\")", &env);
+    assert!(
+        exit_init.contains("(set-init-prop! \"lock-secret\" \"42\")"),
+        "exit init should carry the lock key, got: {exit_init}"
+    );
+}
+
+/// A private room admits `:enter { secret }` when the secret is the runtime's
+/// global owner key — there is no bypass by owner identity.
+#[test]
+fn room_private_room_admits_with_global_key() {
+    let env = room_env();
+    let mut config = make_config("did:ma:runtime", "did:ma:runtime#room");
+    config.insert("global_key".to_string(), "sekrit".to_string());
+    ma_scheme_actor::state::set_config(config);
+    eval_all(r#"(set-prop! "public" "false")"#, &env).unwrap();
+
+    env.define(
+        Rc::from("msg"),
+        sample_msg(
+            "did:ma:stranger",
+            "did:ma:runtime#room",
+            Value::list(vec![
+                Value::symbol(":enter"),
+                eval_all(
+                    r#"(make-map "traverseId" "t1" "key" "sekrit" "name" "Eve" "nick" "Eve")"#,
+                    &env,
+                )
+                .unwrap(),
+            ]),
+        ),
+    );
+    eval_all("(on-message msg)", &env).unwrap();
+
+    assert!(eval_bool("(map? (claim-ctx \"did:ma:stranger\"))", &env));
+}
+
+/// A locked exit may be opened with the runtime global key, not just its own
+/// lock secret.
+#[test]
+fn exit_unlock_accepts_global_key() {
+    let env = exit_env();
+    let mut config = make_config("did:ma:runtime", "did:ma:runtime#north-exit");
+    config.insert("kind".to_string(), "/ma/passage/0.0.1".to_string());
+    config.insert("global_key".to_string(), "master".to_string());
+    ma_scheme_actor::state::set_config(config);
+    eval_all(
+        r#"
+        (set-prop! "entrance" "did:ma:runtime#room")
+        (set-prop! "exit" "did:ma:runtime#kitchen")
+        (set-prop! "locked" "true")
+        (set-prop! "lock-secret" "local")
+        "#,
+        &env,
+    )
+    .unwrap();
+
+    env.define(
+        Rc::from("msg"),
+        sample_msg(
+            "did:ma:stranger",
+            "did:ma:runtime#north-exit",
+            Value::list(vec![Value::symbol(":unlock"), Value::str("master")]),
+        ),
+    );
+    eval_all("(on-message msg)", &env).unwrap();
+
+    assert!(!eval_bool("(locked?)", &env));
+    assert_eq!(
+        eval_all("(car (get-prop \"reply-term:1\"))", &env).unwrap(),
+        Value::symbol(":ok")
+    );
+}
+
+// ── The traversal protocol: `:move` routes, `:enter` admits ───────────────
+
+fn passage_props(env: &Rc<ma_scheme_actor::env::Env>) {
+    eval_all(
+        r#"
+        (set-prop! "entrance" "did:ma:runtime#room")
+        (set-prop! "exit" "did:ma:runtime#kitchen")
+        "#,
+        env,
+    )
+    .unwrap();
+}
+
+fn request(tid: &str) -> String {
+    format!(r#"(make-map "did" "did:ma:alice" "traverseId" "{tid}" "entrance" "did:ma:runtime#room")"#)
+}
+
+fn answer(tid: &str, extra: &str) -> String {
+    format!(r#"(make-map "traverseId" "{tid}" {extra})"#)
+}
+
+#[test]
+fn passage_move_sends_the_ctx_to_the_far_end() {
+    let env = exit_env();
+    let mut config = make_config("did:ma:runtime", "did:ma:runtime#north-passage");
+    config.insert("kind".to_string(), "/ma/passage/0.0.1".to_string());
+    ma_scheme_actor::state::set_config(config);
+    passage_props(&env);
+
+    env.define(
+        Rc::from("msg"),
+        sample_msg(
+            "did:ma:runtime#room",
+            "did:ma:runtime#north-passage",
+            Value::list(vec![
+                Value::symbol(":move"),
+                eval_all(&request("t1"), &env).unwrap(),
+            ]),
+        ),
+    );
+    eval_all("(on-message msg)", &env).unwrap();
+
+    assert_eq!(
+        eval_str("(get-prop \"sent-target:1\")", &env),
+        "did:ma:runtime#kitchen"
+    );
+    assert_eq!(
+        eval_all("(car (get-prop \"sent-term:1\"))", &env).unwrap(),
+        Value::symbol(":move")
+    );
+    assert_eq!(
+        eval_str(
+            "(ctx-text (car (cdr (get-prop \"sent-term:1\"))) \"exit\")",
+            &env
+        ),
+        "did:ma:runtime#kitchen"
+    );
+}
+
+#[test]
+fn passage_only_the_entrance_room_may_move() {
+    let env = exit_env();
+    let mut config = make_config("did:ma:runtime", "did:ma:runtime#north-passage");
+    config.insert("kind".to_string(), "/ma/passage/0.0.1".to_string());
+    ma_scheme_actor::state::set_config(config);
+    passage_props(&env);
+
+    env.define(
+        Rc::from("msg"),
+        sample_msg(
+            "did:ma:alice",
+            "did:ma:runtime#north-passage",
+            Value::list(vec![
+                Value::symbol(":move"),
+                eval_all(&request("t1"), &env).unwrap(),
+            ]),
+        ),
+    );
+    eval_all("(on-message msg)", &env).unwrap();
+
+    assert_eq!(
+        eval_all("(car (get-prop \"reply-term:1\"))", &env).unwrap(),
+        Value::symbol(":error")
+    );
+}
+
+#[test]
+fn passage_answer_relays_the_accepted_ctx_to_the_source_room() {
+    let env = exit_env();
+    let mut config = make_config("did:ma:runtime", "did:ma:runtime#north-passage");
+    config.insert("kind".to_string(), "/ma/passage/0.0.1".to_string());
+    ma_scheme_actor::state::set_config(config);
+    passage_props(&env);
+
+    env.define(
+        Rc::from("msg"),
+        sample_msg(
+            "did:ma:runtime#room",
+            "did:ma:runtime#north-passage",
+            Value::list(vec![
+                Value::symbol(":move"),
+                eval_all(&request("t1"), &env).unwrap(),
+            ]),
+        ),
+    );
+    eval_all("(on-message msg)", &env).unwrap();
+
+    env.define(
+        Rc::from("msg"),
+        sample_msg(
+            "did:ma:runtime#kitchen",
+            "did:ma:runtime#north-passage",
+            Value::list(vec![
+                Value::symbol(":move"),
+                eval_all(
+                    &answer("t1", r#""exit" "did:ma:runtime#kitchen" "key" "k1""#),
+                    &env,
+                )
+                .unwrap(),
+            ]),
+        ),
+    );
+    eval_all("(on-message msg)", &env).unwrap();
+
+    assert_eq!(
+        eval_str("(get-prop \"sent-target:2\")", &env),
+        "did:ma:runtime#room"
+    );
+    assert_eq!(
+        eval_str(
+            "(ctx-text (car (cdr (get-prop \"sent-term:2\"))) \"key\")",
+            &env
+        ),
+        "k1"
+    );
+}
+
+#[test]
+fn passage_answer_with_another_exit_redirects() {
+    let env = exit_env();
+    let mut config = make_config("did:ma:runtime", "did:ma:runtime#north-passage");
+    config.insert("kind".to_string(), "/ma/passage/0.0.1".to_string());
+    ma_scheme_actor::state::set_config(config);
+    passage_props(&env);
+
+    env.define(
+        Rc::from("msg"),
+        sample_msg(
+            "did:ma:runtime#room",
+            "did:ma:runtime#north-passage",
+            Value::list(vec![
+                Value::symbol(":move"),
+                eval_all(&request("t1"), &env).unwrap(),
+            ]),
+        ),
+    );
+    eval_all("(on-message msg)", &env).unwrap();
+
+    env.define(
+        Rc::from("msg"),
+        sample_msg(
+            "did:ma:runtime#kitchen",
+            "did:ma:runtime#north-passage",
+            Value::list(vec![
+                Value::symbol(":move"),
+                eval_all(&answer("t1", r#""exit" "did:ma:runtime#hall""#), &env).unwrap(),
+            ]),
+        ),
+    );
+    eval_all("(on-message msg)", &env).unwrap();
+
+    assert_eq!(
+        eval_str("(get-prop \"sent-target:2\")", &env),
+        "did:ma:runtime#hall"
+    );
+}
+
+#[test]
+fn passage_answer_deny_is_relayed_and_terminal() {
+    let env = exit_env();
+    let mut config = make_config("did:ma:runtime", "did:ma:runtime#north-passage");
+    config.insert("kind".to_string(), "/ma/passage/0.0.1".to_string());
+    ma_scheme_actor::state::set_config(config);
+    passage_props(&env);
+
+    env.define(
+        Rc::from("msg"),
+        sample_msg(
+            "did:ma:runtime#room",
+            "did:ma:runtime#north-passage",
+            Value::list(vec![
+                Value::symbol(":move"),
+                eval_all(&request("t1"), &env).unwrap(),
+            ]),
+        ),
+    );
+    eval_all("(on-message msg)", &env).unwrap();
+
+    env.define(
+        Rc::from("msg"),
+        sample_msg(
+            "did:ma:runtime#kitchen",
+            "did:ma:runtime#north-passage",
+            Value::list(vec![
+                Value::symbol(":move"),
+                eval_all(&answer("t1", r#""deny" "No shoes.""#), &env).unwrap(),
+            ]),
+        ),
+    );
+    eval_all("(on-message msg)", &env).unwrap();
+
+    assert_eq!(
+        eval_str("(get-prop \"sent-target:2\")", &env),
+        "did:ma:runtime#room"
+    );
+    assert_eq!(
+        eval_str(
+            "(ctx-text (car (cdr (get-prop \"sent-term:2\"))) \"deny\")",
+            &env
+        ),
+        "No shoes."
+    );
+}
+
+#[test]
+fn passage_locked_reports_a_denial_to_the_entrance_room() {
+    let env = exit_env();
+    let mut config = make_config("did:ma:runtime", "did:ma:runtime#north-passage");
+    config.insert("kind".to_string(), "/ma/passage/0.0.1".to_string());
+    ma_scheme_actor::state::set_config(config);
+    passage_props(&env);
+    eval_all(
+        r#"(set-prop! "locked" "true") (set-prop! "nogo_msg" "None shall pass!")"#,
+        &env,
+    )
+    .unwrap();
+
+    env.define(
+        Rc::from("msg"),
+        sample_msg(
+            "did:ma:runtime#room",
+            "did:ma:runtime#north-passage",
+            Value::list(vec![
+                Value::symbol(":move"),
+                eval_all(&request("t1"), &env).unwrap(),
+            ]),
+        ),
+    );
+    eval_all("(on-message msg)", &env).unwrap();
+
+    assert_eq!(
+        eval_str("(get-prop \"sent-target:1\")", &env),
+        "did:ma:runtime#room"
+    );
+    assert_eq!(
+        eval_str(
+            "(ctx-text (car (cdr (get-prop \"sent-term:1\"))) \"deny\")",
+            &env
+        ),
+        "None shall pass!"
+    );
+}
+
+// ── Room side ─────────────────────────────────────────────────────────────
+
+#[test]
+fn room_move_requires_a_present_traveller() {
+    let env = room_env();
+    let mut config = make_config("did:ma:runtime", "did:ma:runtime#room");
+    config.insert("kind".to_string(), "/ma/room/0.0.1".to_string());
+    ma_scheme_actor::state::set_config(config);
+    eval_all(
+        r#"(set-prop! "exits" (make-map "north" "did:ma:runtime#north-passage"))"#,
+        &env,
+    )
+    .unwrap();
+
+    env.define(
+        Rc::from("msg"),
+        sample_msg(
+            "did:ma:alice",
+            "did:ma:runtime#room",
+            eval_all(
+                r#"(list :move (make-map "traverseId" "t1" "direction" "north"))"#,
+                &env,
+            )
+            .unwrap(),
+        ),
+    );
+    eval_all("(on-message msg)", &env).unwrap();
+
+    assert_eq!(
+        eval_all("(car (get-prop \"reply-term:1\"))", &env).unwrap(),
+        Value::symbol(":error")
+    );
+}
+
+#[test]
+fn room_move_result_removes_the_traveller_and_hands_over_the_ctx() {
+    let env = room_env();
+    let mut config = make_config("did:ma:runtime", "did:ma:runtime#room");
+    config.insert("kind".to_string(), "/ma/room/0.0.1".to_string());
+    ma_scheme_actor::state::set_config(config);
+    eval_all(
+        r#"
+        (set-prop! "exits" (make-map "north" "did:ma:runtime#north-passage"))
+        (remember-child! (did-child-ctx "did:ma:alice" "Alice" "Alice"))
+        "#,
+        &env,
+    )
+    .unwrap();
+
+    env.define(
+        Rc::from("msg"),
+        sample_msg(
+            "did:ma:alice",
+            "did:ma:runtime#room",
+            eval_all(
+                r#"(list :move (make-map "traverseId" "t1" "direction" "north"))"#,
+                &env,
+            )
+            .unwrap(),
+        ),
+    );
+    eval_all("(on-message msg)", &env).unwrap();
+
+    assert_eq!(
+        eval_str("(get-prop \"sent-target:1\")", &env),
+        "did:ma:runtime#north-passage"
+    );
+
+    env.define(
+        Rc::from("msg"),
+        sample_msg(
+            "did:ma:runtime#north-passage",
+            "did:ma:runtime#room",
+            eval_all(
+                r#"(list :move (make-map "traverseId" "t1" "entrance" "did:ma:runtime#room" "exit" "did:ma:runtime#kitchen" "key" "k1"))"#,
+                &env,
+            )
+            .unwrap(),
+        ),
+    );
+    eval_all("(on-message msg)", &env).unwrap();
+
+    assert!(!eval_bool(
+        "(map-has-key? (children-map) \"did:ma:alice\")",
+        &env
+    ));
+}
+
+#[test]
+fn room_move_result_deny_keeps_the_traveller() {
+    let env = room_env();
+    let mut config = make_config("did:ma:runtime", "did:ma:runtime#room");
+    config.insert("kind".to_string(), "/ma/room/0.0.1".to_string());
+    ma_scheme_actor::state::set_config(config);
+    eval_all(
+        r#"
+        (set-prop! "exits" (make-map "north" "did:ma:runtime#north-passage"))
+        (remember-child! (did-child-ctx "did:ma:alice" "Alice" "Alice"))
+        "#,
+        &env,
+    )
+    .unwrap();
+
+    env.define(
+        Rc::from("msg"),
+        sample_msg(
+            "did:ma:alice",
+            "did:ma:runtime#room",
+            eval_all(
+                r#"(list :move (make-map "traverseId" "t1" "direction" "north"))"#,
+                &env,
+            )
+            .unwrap(),
+        ),
+    );
+    eval_all("(on-message msg)", &env).unwrap();
+
+    env.define(
+        Rc::from("msg"),
+        sample_msg(
+            "did:ma:runtime#north-passage",
+            "did:ma:runtime#room",
+            eval_all(
+                r#"(list :move (make-map "traverseId" "t1" "entrance" "did:ma:runtime#room" "deny" "Not today."))"#,
+                &env,
+            )
+            .unwrap(),
+        ),
+    );
+    eval_all("(on-message msg)", &env).unwrap();
+
+    assert!(eval_bool(
+        "(map-has-key? (children-map) \"did:ma:alice\")",
+        &env
+    ));
+}
+
+#[test]
+fn room_delegated_move_answers_with_an_exit_and_a_key() {
+    let env = room_env();
+    let mut config = make_config("did:ma:runtime", "did:ma:runtime#room");
+    config.insert("kind".to_string(), "/ma/room/0.0.1".to_string());
+    ma_scheme_actor::state::set_config(config);
+
+    env.define(
+        Rc::from("msg"),
+        sample_msg(
+            "did:ma:runtime#north-passage",
+            "did:ma:runtime#room",
+            eval_all(
+                r#"(list :move (make-map "did" "did:ma:alice" "traverseId" "t1" "entrance" "did:ma:runtime#hall" "exit" "did:ma:runtime#room"))"#,
+                &env,
+            )
+            .unwrap(),
+        ),
+    );
+    eval_all("(on-message msg)", &env).unwrap();
+
+    assert_eq!(
+        eval_str("(get-prop \"sent-target:1\")", &env),
+        "did:ma:runtime#north-passage"
+    );
+    assert_eq!(
+        eval_all("(car (get-prop \"sent-term:1\"))", &env).unwrap(),
+        Value::symbol(":move")
+    );
+    assert_eq!(
+        eval_str(
+            "(ctx-text (car (cdr (get-prop \"sent-term:1\"))) \"exit\")",
+            &env
+        ),
+        "did:ma:runtime#room"
+    );
+    assert!(!eval_bool(
+        "(map-has-key? (children-map) \"did:ma:alice\")",
+        &env
+    ));
 }
