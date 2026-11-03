@@ -40,7 +40,11 @@ Claimed containers support owner-controlled locks. An owner may use `:lock` or
 to `:unlock <secret>`, until the owner replaces it with another `:lock` call.
 
 An exit is one top-level two-ended node; a room references it by a cosmetic
-local name in its own `exits` map. Exits use the same `:lock <secret>` contract
+local name in its own `exits` map. A dug passage is named separately by each
+room: `dig down to "Top of a very large tree" back up` names it `down` here
+and `up` in the new room, and a plain `dig down` names it `down` at both ends.
+`dig <passage-did-url> <name>` renames this room's local entry later without
+touching the passage or the far room. Exits use the same `:lock <secret>` contract
 as containers, addressed directly: the owner or the source room locks it, and a
 traveller holding the secret presents it with `unlock <direction> with <secret>`
 to open the exit (a lock is global: locked is locked, unlocked is unlocked, for

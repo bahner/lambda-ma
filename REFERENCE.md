@@ -33,14 +33,15 @@ Every `:enter` carries a movement ctx; there is no bare or argument-free form.
 
 | Receiver | Verb | Result |
 | --- | --- | --- |
-| room | `:enter <move-ctx>` | Commits presence when `msg.from` equals `ctx.did` and replies with the DID ctx: `did`, `parent`, `name`, `nick`, `description`, `rev`. A delegated form authorises only and never commits. A public room admits directly; a private room requires a `key` equal to a room key, to `pending[did].key` for the same `traverseId`, or to `global_key`. |
+| room | `:enter <move-ctx>` | Commits presence when `msg.from` equals `ctx.did` and replies with the DID ctx: `did`, `parent`, `name`, `nick`, `description`, `rev`. A delegated form authorises only and never commits. A public room admits directly; a private room requires a `key` equal to a room key, to `pending[did].key` for the same `traverseId`, or to `global_key`. A DID that already holds committed presence is re-admitted without a key: a repeat entry is a presence refresh, not a new admission. |
 | room | `:move <move-ctx>` | Movement. A walk request from a present traveller is forwarded to the passage; the passage's answer removes the traveller and hands it the move ctx; a delegated `:move` (`exit` names this room) issues a key and commits nothing. |
-| room | `:dig <ctx>` | Owner-only. Creates a passage and, when the ctx names no `dst`, a new room. Replies `[:ok, { passage, room?, key? }]`. |
-| room | `:exit <name> <passage-did-url>` | Owner-only. Binds a local (cosmetic) name to an existing passage in this room's `exits` map. |
+| room | `:dig <direction> [to <room-or-name>] [back <direction>] [with <code>]` | Owner-only. Creates a passage and, when `to` names no DID-URL, a new room. `back` is the local name the destination room gives the same passage; it defaults to `<direction>`, so the two ends need not share a word. Replies `Dug <direction> to <room> with key <key>`, then broadcasts `:dig <digger-ctx> <direction>` once the passage is installed. The digger's client follows that broadcast by walking the direction. |
+| room | `:dig <passage-did-url> <name>` | Owner-only. Re-binds a passage in this room's `exits` map under `<name>`, dropping that passage's previous local name. A local rename only: the passage, its lock, and the far room are untouched, and the two rooms name the passage independently. |
+| room | `:exit <name> <passage-did-url>` | Binds a local (cosmetic) name to an existing passage in this room's `exits` map; the destination side of a dig uses it. Registering the same passage again replaces its local name. |
 | room | `:look`, `:who?`, `:occupants?`, `:things?`, `:exits?` | Direct room presentation. |
 | room | `:say`, `:emote` | Broadcasts an in-world event to present DID identities. |
 | room | `:narrate <text>` | Owner-only ambient narration. |
-| passage | `:move <move-ctx>` | Routes a movement and relays the destination's answer to `entrance`. Only the `entrance` room may start one. |
+| passage | `:move <move-ctx>` | Routes a movement and relays the destination's answer to the `entrance` room, adding `entrance` back onto the answer. Only the `entrance` room may start one. |
 | passage | `:to?` | The far end relative to the caller, or `"(none)"`. |
 | passage | `:locked?`, `:lock [secret]`, `:unlock [secret]` | Lock state. |
 | passage | `:message <slot> <text>` | Sets a narration proposal by short slot. |
@@ -97,7 +98,9 @@ Two general props modulate relocation and visibility on every node:
   owner clears the prop. `:recycle` is a destroy, not a move, and remains
   available to the owner. An unowned node has no owner to defend it, so any
   caller may set its props (mirroring the transfer gate's unowned openness);
-  once claimed, only the owner may.
+  once claimed, only the owner may. Rooms are deliberately stricter: a room's
+  props are owner-only and an unowned room refuses every `:prop`, so a room
+  must be claimed before it can be named, described, or given a trigger.
 - `visible: false` — the node remains a room child (it still receives
   broadcasts and answers direct RPCs such as `:trigger?`) but is never
   published: the room excludes it from `:look`'s children map, from the
@@ -295,14 +298,17 @@ traveller → source room    [:move, { traverseId, direction, key? }]
 source room → passage      [:move, { did, traverseId, name, nick, key?, entrance }]
 passage → destination      [:move, { …, exit }]
 destination → passage      [:move, { traverseId, exit, key }]  |  [ … "deny" … ]
-passage → source room      [:move, { traverseId, exit, key }]  |  [ … "deny" … ]
+passage → source room      [:move, { traverseId, exit, key, entrance }]  |  [ … "deny" … ]
 source room → traveller    [:move, { traverseId, exit, key }]  |  [ … "deny" … ]
 traveller → exit room      [:enter, { did, traverseId, name, nick, key }]
 ```
 
 `traverseId` is minted by the traveller, is ephemeral, and identifies one
 intended movement. Every hop carries it unchanged and ignores anything else.
-`key` is an admission credential, opaque to forwarders and read only by the
+`entrance` on the answer names the room that started the walk, so a room can
+recognise the passage's relay as the outcome of its own live traversal rather
+than a new walk request. `key` is an admission credential, opaque to forwarders
+and read only by the
 destination. `entrance` names the room the traveller leaves; `exit` names the
 room it enters.
 
@@ -310,6 +316,11 @@ room it enters.
 `pending[did] = { traverseId, key, arrive, oarrive }`, in memory only, and the
 traveller's `:enter` consumes it. A passage keeps one in-flight record per
 `traverseId` so it can match the destination's answer and bound redirects.
+
+A DID already present in the destination room is admitted again regardless of
+`key`: presence is the claim, so a repeat entry (for example a client
+reconnecting or republishing its identity) refreshes the existing child
+instead of requiring a key that first entry already consumed.
 
 **Registration is not admission.** A room's `exits` map decides only what the
 room shows. A passage is two-way when both endpoint rooms have registered it;

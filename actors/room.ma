@@ -386,6 +386,15 @@
     (broadcast-room-ctx!)
     (ma-reply! msg (list :ok ctx))))
 
+; A DID already holding a place here needs no entry key again. Its presence is
+; the claim: a repeat entry (`.ma` republish, reconnect) refreshes the same
+; child ctx rather than admitting a new traveller, and first-entry keys such as
+; a traversal grant are consumed, so they may no longer exist. This is the
+; idempotent repeat required by "Direct entry and admission".
+(define (present-entry? actor)
+  (let ((ctx (claim-ctx actor)))
+    (and (map? ctx) (room-claim? ctx))))
+
 ; The traveller of a movement ctx, with msg.from as the last resort.
 (define (move-traveller ctx msg)
   (let ((did (ctx-text ctx "did")))
@@ -745,10 +754,23 @@
 (define (exit-directions)
   (map-keys (exits-map)))
 
+; A passage carries at most one local name in a room. Registering it again
+; under a different name is how an exit is renamed: the previous local name is
+; dropped first, so `exits` never lists the same passage twice.
 (define (register-exit! name exit-did)
-  (begin
-    (set-exits! (map-set (exits-map) name (canonical-actor exit-did)))
+  (let ((did (canonical-actor exit-did)))
+    (set-exits! (map-set (exits-without did) name did))
     (broadcast-room-ctx!)))
+
+; The `exits` map without any local name pointing at `exit-did`.
+(define (exits-without exit-did)
+  (let loop ((entries (map->alist (exits-map))) (out (make-map)))
+    (if (null? entries)
+        out
+        (let ((entry (car entries)))
+          (if (same-actor? (cdr entry) exit-did)
+              (loop (cdr entries) out)
+              (loop (cdr entries) (map-set out (car entry) (cdr entry))))))))
 
 (define (unregister-exit! name)
   (begin
@@ -895,13 +917,14 @@
     "  move              move through one available exit\n"
     "  claim             claim this room if it is unowned\n"
     "  owner [did]       show or transfer ownership\n"
-    "  dig <dir> [to name] [with code] create a two-ended exit\n"
+    "  dig <dir> [to name] [back dir] [with code] create a two-ended exit\n"
+    "  dig <passage-did> <name> rename a local exit\n"
     "  fill <dir>        remove an exit\n"
     "  :exit <name> <did> register an exit dug from the far side\n"
     "  :dids?            owner lists occupants, things, and exits with DIDs\n"
     "  :thing <name> [did] set/list local occupant alias\n"
     "  :behaviour /ipfs/<cid> add or replace this actor's own code\n"
-    "  :prop <key> [value] set or reset room text\n"
+    "  :prop <key> [value] set or reset room text (owner)\n"
     "Agents and things enter with :enter ctx; their own parent state is the authority.\n"
     "Commands with and without : target this place directly."))
 
@@ -916,6 +939,12 @@
 
 (define (owner-message? msg)
   (msg-from-owner? (owner) msg))
+
+; Room props are owner-only, and an unowned room has no editable text at all:
+; it must be claimed first. This is deliberately stricter than the shared
+; node.ma gate, which leaves an unowned node's props open to any caller.
+(define (prop-caller-authorised? msg)
+  (and (owned?) (owner-message? msg)))
 
 (define (set-owner! did)
   (set-prop! "owner" did)
@@ -1145,20 +1174,22 @@
 ; destination's :enter is the admission authority, not a link handshake).
 (define (pending-new-room-key direction) (string-append "pending-new-room:" direction))
 (define (pending-new-room-did-key direction) (string-append "pending-new-room-did:" direction))
-(define (pending-new-room-requester-key direction) (string-append "pending-new-room-requester:" direction))
 (define (pending-new-room-target-name-key direction) (string-append "pending-new-room-target-name:" direction))
 (define (pending-new-room-nonce-key direction) (string-append "pending-new-room-nonce:" direction))
 (define (pending-new-room-lock-key-key direction) (string-append "pending-new-room-lock-key:" direction))
+(define (pending-new-room-back-key direction) (string-append "pending-new-room-back:" direction))
 
 (define (clear-pending-new-room! direction)
   (begin
     (del-prop! (pending-new-room-key direction))
     (del-prop! (pending-new-room-did-key direction))
-    (del-prop! (pending-new-room-requester-key direction))
     (del-prop! (pending-new-room-target-name-key direction))
     (del-prop! (pending-new-room-nonce-key direction))
-    (del-prop! (pending-new-room-lock-key-key direction))))
+    (del-prop! (pending-new-room-lock-key-key direction))
+    (del-prop! (pending-new-room-back-key direction))))
 
+; The exit this room remembers for a direction. Dig fragments are deterministic,
+; so a direction always names the same passage and destination room.
 (define (remembered-new-room-target direction)
   (exit-target direction))
 
@@ -1216,9 +1247,24 @@
             (cdr rest)
             rest))))
 
+; `dig` grammar: `dig <direction> [to <name>] [back <direction>] [with <code>]`.
+; `to`, `back`, and `with` are hard separators, so a multi-word room name
+; cannot swallow the return direction. The far room names the same passage
+; `back` when given and the source direction otherwise, so a plain dig stays
+; symmetric; `dig <passage-did-url> <name>` renames a local exit later.
+(define (dig-payload-args args)
+  (take-before "with" (dig-target-args args)))
+
 (define (dig-target-text args)
-  (let ((target-args (take-before "with" (dig-target-args args))))
+  (let ((target-args (take-before "back" (dig-payload-args args))))
     (if (null? target-args) #f (join-words target-args))))
+
+(define (dig-back-direction args)
+  (let ((back-args (drop-through "back" (dig-payload-args args))))
+    (if (null? back-args) #f (car back-args))))
+
+(define (dig-back-name direction back)
+  (if (non-empty-string? back) back direction))
 
 (define (take-before marker words)
   (cond ((null? words) '())
@@ -1251,16 +1297,16 @@
                          did "\n"
                          (if target-name target-name "")) 16))
 
-(define (remember-pending-new-room! direction target-room requester did target-name nonce lock-key)
+(define (remember-pending-new-room! direction target-room did target-name back nonce lock-key)
   (begin
     (set-prop! (pending-new-room-key direction) (canonical-actor target-room))
     (set-prop! (pending-new-room-did-key direction) did)
-    (set-prop! (pending-new-room-requester-key direction) (canonical-actor requester))
     (if target-name
         (set-prop! (pending-new-room-target-name-key direction) target-name)
         (del-prop! (pending-new-room-target-name-key direction)))
     (set-prop! (pending-new-room-nonce-key direction) nonce)
     (set-prop! (pending-new-room-lock-key-key direction) lock-key)
+    (set-prop! (pending-new-room-back-key direction) back)
     (ma-save-state!)))
 
 (define (pending-new-room-matches? direction nonce target-room)
@@ -1283,36 +1329,25 @@
         (if (and (equal? kind ROOM_KIND)
                  (same-actor? actor target-room)
                  (pending-new-room-matches? direction nonce target-room))
-            (let ((requester (get-prop (pending-new-room-requester-key direction)))
-                  (did (get-prop (pending-new-room-did-key direction)))
-                  (lock-key (get-prop (pending-new-room-lock-key-key direction))))
+            (let* ((did (get-prop (pending-new-room-did-key direction)))
+                   (lock-key (get-prop (pending-new-room-lock-key-key direction)))
+                   (pending-back (get-prop (pending-new-room-back-key direction)))
+                   (back (if (non-empty-string? pending-back) pending-back direction)))
               (begin
                 (let ((exit (create-exit! direction target-room lock-key)))
                   (register-exit! direction exit)
-                  (ma-send! (canonical-actor target-room) (list :exit direction exit)))
+                  (ma-send! (canonical-actor target-room) (list :exit back exit)))
                 (clear-pending-new-room! direction)
                 (ma-save-state!)
                 (let ((ctx (claim-ctx did)))
                   (if (and (map? ctx) (room-child-visible? ctx))
                       (broadcast-term (list :dig ctx direction))
-                      #f))
-                (enter-dig-target! requester did target-room)))
+                      #f))))
             #f))))
-
-; After a dig the digger moves itself. A room MUST NOT commit another actor's
-; presence by delegation, so it reports the destination it created and the
-; traveller performs the move.
-(define (enter-dig-target! requester did target-room)
-  (if (member-entry? requester (occupants))
-      (ma-send! (canonical-actor requester)
-                (list :move-result
-                      (make-map "traverseId" (string-append "dig-" (canonical-actor target-room))
-                                "entrance" (canonical-actor target-room))))
-      #f))
 
 ; Start a new-room dig and persist pending state until the child-alive callback
 ; arrives from the freshly created room.
-(define (request-new-room! msg did direction target custom-init custom-behaviour)
+(define (request-new-room! msg did direction back target custom-init custom-behaviour)
   (let* ((target-fragment (room-fragment direction))
          (requester (canonical-actor (msg-from msg)))
          (nonce (pending-new-room-nonce direction requester did target))
@@ -1323,7 +1358,7 @@
                                        custom-behaviour
                                        (room-init target did custom-init (child-alive-init nonce direction))
                                        target-fragment)))
-    (remember-pending-new-room! direction target-room requester did target nonce lock-key)
+    (remember-pending-new-room! direction target-room did target back nonce lock-key)
     (reply-to-sender msg (string-append "Dug " direction " to " target-fragment " with key " lock-key))
     (reply-ok msg)))
 
@@ -1587,38 +1622,60 @@
 
 ; ── Building, movement, and direct entry methods ──────────────────────────
 
+; `dig <passage-did-url> <name>` re-binds a passage in this room's `exits`
+; map under a new local name, dropping the old name for that same passage. It is
+; a local rename only: the passage and the far room are untouched, and each
+; room names the same passage independently.
+(define (handle-dig-rebind! args msg)
+  (let ((exit-did (car args))
+        (name (if (null? (cdr args)) #f (car (cdr args)))))
+    (cond ((not (non-empty-string? name))
+           (reply-error msg "usage: dig <passage-did-url> <name>"))
+          ((not (null? (cdr (cdr args))))
+           (reply-error msg "usage: dig <passage-did-url> <name>"))
+          ((is-did-url? name)
+           (reply-error msg "the local exit name must not be a DID-URL"))
+          (else
+           (begin
+             (register-exit! name exit-did)
+             (reply-ok-with msg (string-append "Exit " name " -> " (canonical-actor exit-did))))))))
+
+(define (handle-dig-build! did args msg)
+  (let* ((dig-args args)
+         (direction (if (null? dig-args) "out" (car dig-args)))
+         (target (dig-target-text dig-args))
+         (back (dig-back-name direction (dig-back-direction dig-args)))
+         (custom-init (dig-custom-init-text dig-args))
+         (custom-behaviour (dig-custom-behaviour-ref dig-args))
+         (existing-room (existing-room-target target)))
+    (cond ((remembered-new-room-target direction)
+           (let ((existing (remembered-new-room-target direction)))
+             (reply-error msg (string-append "An exit " direction " already exists here (" existing
+                                            "). Rename it with: dig <passage-did-url> <new-name>."))))
+          ((and existing-room (or custom-init custom-behaviour))
+           (reply-error msg "Custom room code only applies when digging a new room."))
+          (existing-room
+           (let* ((lock-key (generate-lock-key))
+                  (exit (create-exit! direction existing-room lock-key)))
+             (register-exit! direction exit)
+             (ma-send! (canonical-actor existing-room) (list :exit back exit))
+             (let ((ctx (claim-ctx did)))
+               (if (map? ctx) (broadcast-term (list :dig ctx direction)) #f))
+             (reply-to-sender msg (string-append "Dug " direction " to " existing-room " with key " lock-key))
+             (reply-ok msg)))
+          (else
+           (request-new-room! msg did direction back target custom-init custom-behaviour)))))
+
 (set-cmd-method! :dig
   (lambda (args msg)
-    (let* ((did (owner))
-           (dig-args args)
-           (direction (if (null? dig-args) "out" (car dig-args))))
+    (let ((did (owner)))
       (require-valid-owner did msg
         (lambda ()
           (require-owner msg
             (lambda ()
-              (let* ((target (dig-target-text dig-args))
-                     (custom-init (dig-custom-init-text dig-args))
-                     (custom-behaviour (dig-custom-behaviour-ref dig-args))
-                     (existing-room (existing-room-target target))
-                     (remembered-room (if (or existing-room custom-init custom-behaviour)
-                                          #f
-                                          (remembered-new-room-target direction))))
-                (cond ((exit-target direction)
-                       (reply-error msg (string-append "An exit " direction " already exists here.")))
-                      ((and existing-room (or custom-init custom-behaviour))
-                       (reply-error msg "Custom room code only applies when digging a new room."))
-                      (existing-room
-                       (let* ((lock-key (generate-lock-key))
-                              (exit (create-exit! direction existing-room lock-key)))
-                         (register-exit! direction exit)
-                         (ma-send! (canonical-actor existing-room) (list :exit direction exit))
-                         (let ((ctx (claim-ctx did)))
-                           (if (map? ctx) (broadcast-term (list :dig ctx direction)) #f))
-                         (enter-dig-target! (msg-from msg) did existing-room)
-                         (reply-to-sender msg (string-append "Dug " direction " to " existing-room " with key " lock-key))
-                         (reply-ok msg)))
-                      (else
-                       (request-new-room! msg did direction target custom-init custom-behaviour)))))))))))
+              (if (and (pair? args) (is-did-url? (car args)))
+                  (handle-dig-rebind! args msg)
+                  (handle-dig-build! did args msg)))))))))
 
 (set-cmd-method! :fill
   (lambda (args msg)
@@ -1687,6 +1744,8 @@
              (if (self-entry? (car args) msg)
                  (handle-enter-ctx! msg (car args))
                  (reply-error msg "agent, h00man and thing entries must be self-sent")))
+            ((present-entry? (msg-from msg))
+             (commit-did-entry! msg args))
             ((public?)
              (commit-did-entry! msg args))
             (else

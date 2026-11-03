@@ -297,12 +297,12 @@ fn room_prop_rejects_non_owner_and_missing_key() {
 }
 
 #[test]
-fn room_prop_unowned_accepts_any_caller() {
+fn room_prop_unowned_rejects_any_caller() {
     let env = room_env();
     ma_scheme_actor::state::set_config(make_config("did:ma:runtime", "did:ma:runtime#room"));
 
-    // An unowned node has no owner to defend it: any caller may set its props
-    // (mirroring the transfer gate's unowned openness).
+    // A room has no editable text until it has an owner: unlike a general node,
+    // an unowned room refuses `:prop` outright, so it must be claimed first.
     env.define(
         Rc::from("msg"),
         sample_msg(
@@ -318,10 +318,13 @@ fn room_prop_unowned_accepts_any_caller() {
     eval_all("(on-message msg)", &env).unwrap();
 
     assert_eq!(
-        eval_all("(get-prop \"reply-term:1\")", &env).unwrap(),
-        Value::symbol(":ok")
+        eval_all("(car (get-prop \"reply-term:1\"))", &env).unwrap(),
+        Value::symbol(":error")
     );
-    assert_eq!(eval_str("(get-prop \"visible\")", &env), "false");
+    assert_eq!(
+        eval_all("(get-prop \"visible\")", &env).unwrap(),
+        Value::Bool(false)
+    );
 }
 
 // ── Room `:emote` ─────────────────────────────────────────────────────────
@@ -2408,8 +2411,6 @@ fn room_thing_alias_set_and_cleared_by_owner() {
 
 // ── Exit lock and message props ───────────────────────────────────────────
 
-
-
 #[test]
 fn exit_unlock_with_matching_secret_unlocks_for_everyone() {
     let env = exit_env();
@@ -2458,7 +2459,6 @@ fn exit_unlock_with_matching_secret_unlocks_for_everyone() {
     );
     assert!(eval_bool("(not (locked?))", &env));
 }
-
 
 #[test]
 fn exit_prop_nogo_msg_settable_by_source_room_or_owner() {
@@ -2588,8 +2588,6 @@ fn exit_use_rejects_foreign_caller() {
         Value::symbol(":error")
     );
 }
-
-
 
 // ── Exit `:lock` / `:unlock` ──────────────────────────────────────────────
 
@@ -2943,9 +2941,6 @@ fn exit_message_rejects_unknown_slot_and_non_source_caller() {
 
 // ── Room entry blessings ──────────────────────────────────────────────────
 
-
-
-
 #[test]
 fn room_private_room_refuses_keyless_enter() {
     let env = room_env();
@@ -2969,6 +2964,49 @@ fn room_private_room_refuses_keyless_enter() {
         Value::symbol(":error")
     );
     assert!(eval_bool("(not (map? (claim-ctx \"did:ma:alice\")))", &env));
+}
+
+#[test]
+fn room_private_room_readmits_present_did_without_key() {
+    let env = room_env();
+    let mut config = make_config("did:ma:runtime", "did:ma:runtime#room");
+    config.insert("kind".to_string(), "/ma/room/0.0.1".to_string());
+    ma_scheme_actor::state::set_config(config);
+    eval_all(
+        r#"
+        (set-prop! "public" "false")
+        (test-did-presence! "did:ma:alice"
+          (make-map "did" "did:ma:alice"
+                    "parent" "did:ma:runtime#room"
+                    "name" "Alice"
+                    "nick" "Alice"
+                    "description" "A visitor."
+                    "rev" 1))
+        "#,
+        &env,
+    )
+    .unwrap();
+
+    env.define(
+        Rc::from("msg"),
+        sample_msg(
+            "did:ma:alice",
+            "did:ma:runtime#room",
+            Value::list(vec![Value::symbol(":enter"), Value::str("Alice")]),
+        ),
+    );
+    eval_all("(on-message msg)", &env).unwrap();
+
+    // Presence is the claim: the first-entry key was consumed, so a repeat
+    // entry refreshes the existing child instead of being refused.
+    assert_eq!(
+        eval_all("(car (get-prop \"reply-term:1\"))", &env).unwrap(),
+        Value::symbol(":ok")
+    );
+    assert_eq!(
+        eval_str("(ctx-text (claim-ctx \"did:ma:alice\") \"nick\")", &env),
+        "Alice"
+    );
 }
 
 #[test]
@@ -3523,7 +3561,10 @@ fn room_dig_to_existing_room_creates_exit_with_compilable_init() {
     // exit actor — the same source the runtime evaluates on first load.
     let exit = exit_env();
     eval_all(&init, &exit).unwrap();
-    assert_eq!(eval_str("(get-prop \"entrance\")", &exit), "did:ma:runtime#room");
+    assert_eq!(
+        eval_str("(get-prop \"entrance\")", &exit),
+        "did:ma:runtime#room"
+    );
     assert_eq!(
         eval_str("(get-prop \"exit\")", &exit),
         "did:ma:runtime#northroom"
@@ -3584,6 +3625,10 @@ fn room_dig_new_room_reports_its_lock_key() {
         room_init.contains("(set-init-prop! \"public\" \"false\")"),
         "a newly dug room must start under construction, got: {room_init}"
     );
+    assert!(
+        room_init.contains("(set-init-prop! \"owner\" \"did:ma:owner\")"),
+        "a dug room is born owned by its digger, got: {room_init}"
+    );
 
     // The lock key is stashed until child-alive installs the exit.
     assert_eq!(
@@ -3615,6 +3660,143 @@ fn room_dig_new_room_reports_its_lock_key() {
         exit_init.contains("(set-init-prop! \"lock-secret\" \"42\")"),
         "exit init should carry the lock key, got: {exit_init}"
     );
+}
+
+/// The far room names the shared passage with the `back` direction, not the
+/// source room's word: `dig north to <room> back south` is `north` here and
+/// `south` there. The trailing `back` word must not leak into the room name.
+#[test]
+fn room_dig_to_existing_room_uses_supplied_return_direction() {
+    let env = room_env();
+    ma_scheme_actor::state::set_config(make_config("did:ma:runtime", "did:ma:runtime#room"));
+    eval_all(r#"(set-prop! "owner" "did:ma:owner")"#, &env).unwrap();
+
+    env.define(
+        Rc::from("msg"),
+        rpc_msg("did:ma:owner", "did:ma:runtime#room", ":dig"),
+    );
+    eval_all(
+        "((find-method :dig) (list \"north\" \"to\" \"did:ma:runtime#cellar\" \"back\" \"south\") msg)",
+        &env,
+    )
+    .unwrap();
+
+    let exit_did = eval_str("(exit-target \"north\")", &env);
+    assert!(
+        exit_did.starts_with("did:ma:runtime#passage-"),
+        "got: {exit_did}"
+    );
+
+    // sent:1 is `:report-parent` to root; sent:2 is the `:exit` mirror.
+    assert_eq!(
+        eval_str("(get-prop \"sent-target:2\")", &env),
+        "did:ma:runtime#cellar"
+    );
+    assert_eq!(
+        eval_all("(car (get-prop \"sent-term:2\"))", &env).unwrap(),
+        Value::symbol(":exit")
+    );
+    assert_eq!(
+        eval_all("(car (cdr (get-prop \"sent-term:2\")))", &env).unwrap(),
+        Value::str("south")
+    );
+    assert_eq!(
+        eval_all("(car (cdr (cdr (get-prop \"sent-term:2\"))))", &env).unwrap(),
+        Value::str(exit_did.clone())
+    );
+}
+
+/// A new-room dig keeps the return direction across the asynchronous
+/// child-alive callback, so the destination is registered as `south`, not the
+/// source direction `north`.
+#[test]
+fn room_dig_new_room_mirrors_supplied_return_direction() {
+    let env = room_env();
+    ma_scheme_actor::state::set_config(make_config("did:ma:runtime", "did:ma:runtime#room"));
+    eval_all(r#"(set-prop! "owner" "did:ma:owner")"#, &env).unwrap();
+
+    env.define(
+        Rc::from("msg"),
+        rpc_msg("did:ma:owner", "did:ma:runtime#room", ":dig"),
+    );
+    eval_all(
+        "((find-method :dig) (list \"north\" \"to\" \"Cellar\" \"back\" \"south\") msg)",
+        &env,
+    )
+    .unwrap();
+
+    assert_eq!(
+        eval_str("(get-prop \"pending-new-room-target-name:north\")", &env),
+        "Cellar",
+        "`back` must not be folded into the room name"
+    );
+    assert_eq!(
+        eval_str("(get-prop \"pending-new-room-back:north\")", &env),
+        "south"
+    );
+
+    let target = eval_str("(get-prop \"pending-new-room:north\")", &env);
+    let nonce = eval_str("(get-prop \"pending-new-room-nonce:north\")", &env);
+    env.define(
+        Rc::from("msg"),
+        sample_msg(&target, "did:ma:runtime#room", Value::Nil),
+    );
+    eval_all(
+        &format!(
+            "(handle-child-alive! msg (list \"{target}\" \"/ma/room/0.0.1\" \"{nonce}\" \"north\"))"
+        ),
+        &env,
+    )
+    .unwrap();
+
+    // sent:1 is the `Dug …` print; child-alive then sends `:report-parent` to
+    // root (sent:2) and the `:exit` mirror to the new room (sent:3).
+    assert_eq!(
+        eval_str("(get-prop \"sent-target:3\")", &env),
+        target.clone()
+    );
+    assert_eq!(
+        eval_all("(car (cdr (get-prop \"sent-term:3\")))", &env).unwrap(),
+        Value::str("south")
+    );
+    assert!(
+        !eval_bool("(get-prop \"pending-new-room-back:north\")", &env),
+        "pending return direction must be cleared with the rest of the build state"
+    );
+}
+
+/// `dig <passage-did-url> <name>` renames an existing local exit in place:
+/// the old local name is dropped and the passage is listed exactly once.
+#[test]
+fn room_dig_with_passage_did_renames_local_exit() {
+    let env = room_env();
+    ma_scheme_actor::state::set_config(make_config("did:ma:runtime", "did:ma:runtime#room"));
+    eval_all(r#"(set-prop! "owner" "did:ma:owner")"#, &env).unwrap();
+    eval_all(
+        r#"(set-prop! "exits" (make-map "down" "did:ma:runtime#passage-x"))"#,
+        &env,
+    )
+    .unwrap();
+
+    env.define(
+        Rc::from("msg"),
+        rpc_msg("did:ma:owner", "did:ma:runtime#room", ":dig"),
+    );
+    eval_all(
+        "((find-method :dig) (list \"did:ma:runtime#passage-x\" \"up\") msg)",
+        &env,
+    )
+    .unwrap();
+
+    assert_eq!(
+        eval_str("(exit-target \"up\")", &env),
+        "did:ma:runtime#passage-x"
+    );
+    assert!(
+        !eval_bool("(map-has-key? (exits-map) \"down\")", &env),
+        "the passage's previous local name must be dropped"
+    );
+    assert_eq!(eval_int("(list-length (exit-directions))", &env), 1);
 }
 
 /// A private room admits `:enter { secret }` when the secret is the runtime's
@@ -3698,7 +3880,9 @@ fn passage_props(env: &Rc<ma_scheme_actor::env::Env>) {
 }
 
 fn request(tid: &str) -> String {
-    format!(r#"(make-map "did" "did:ma:alice" "traverseId" "{tid}" "entrance" "did:ma:runtime#room")"#)
+    format!(
+        r#"(make-map "did" "did:ma:alice" "traverseId" "{tid}" "entrance" "did:ma:runtime#room")"#
+    )
 }
 
 fn answer(tid: &str, extra: &str) -> String {
@@ -3818,6 +4002,16 @@ fn passage_answer_relays_the_accepted_ctx_to_the_source_room() {
             &env
         ),
         "k1"
+    );
+    // The source room identifies an answer by `entrance` naming itself, so the
+    // passage must add that marker on the way back even though the destination
+    // never saw it.
+    assert_eq!(
+        eval_str(
+            "(ctx-text (car (cdr (get-prop \"sent-term:2\"))) \"entrance\")",
+            &env
+        ),
+        "did:ma:runtime#room"
     );
 }
 

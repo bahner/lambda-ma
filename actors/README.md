@@ -66,11 +66,15 @@ default `This is not the way.`), and the traveller stays in the source room.
 
 Walking a passage is `:move` → `:move` → `:enter` → `:ok`. The traveller sends
 `:move { direction, traverseId }` to the room, which sends `:move <move-ctx>` to
-the exit. The exit routes and authorises: it sends `:enter <move-ctx>` to the
-destination, follows `[:entrance, <room>]` redirects, and answers the source
-room. The source room then hands the traveller `{ entrance, key }`, and the
-traveller enters the destination with `:enter <move-ctx>`. The exit never moves
-anyone; it orchestrates.
+the passage. The passage routes and authorises: it sends `:move <move-ctx>` to
+the destination, follows `[:entrance, <room>]` redirects, and answers the source
+room with `{ traverseId, exit, key, entrance }`. The source room then hands the
+traveller `{ exit, key }`, and the traveller enters the destination with
+`:enter <move-ctx>`. The passage never moves anyone; it orchestrates.
+
+A dig reports its direction in the room's `:dig` broadcast only after the
+passage is installed. The digger's own client follows that broadcast by walking
+the named direction; other occupants only see the narration.
 
 A room is public unless `public` is `false`. A room created by `:dig` starts
 `public: false` (under construction), so travellers need a key until its
@@ -83,6 +87,11 @@ decides only what it shows, never who may enter. The `global_key` is
 daemon-local: set it in the runtime's `ma.yaml`, where it is protected from
 CRUD, and it is injected into the actor config map read by
 `(ma-get-config-key "global_key")`.
+
+A DID that already holds committed presence in the room is re-admitted without
+a key: a repeat `:enter` is a presence refresh, not a new admission, and
+first-entry keys (such as a traversal grant) are consumed. A DID that is not
+already present still needs a key.
 
 ## Replies and events
 

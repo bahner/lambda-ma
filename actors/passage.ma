@@ -86,11 +86,17 @@
   (map-set ctx "entrance" (canonical-actor target)))
 
 ; Relay a terminal move ctx to the source room and forget the traversal.
+; The source room identifies an answer by `entrance` naming itself, so the
+; relay adds it explicitly rather than relying on the destination's answer to
+; carry a field it never saw.
 (define (finish-move! tid ctx)
   (let ((entry (map-ref pending-traversals tid #f)))
     (set! pending-traversals (map-delete pending-traversals tid))
     (if (map? entry)
-        (ma-send! (map-ref entry "source") (list :move (map-set ctx "traverseId" tid)))
+        (let ((source (map-ref entry "source")))
+          (ma-send! source
+                    (list :move (map-set (map-set ctx "traverseId" tid)
+                                         "entrance" source))))
         #f)))
 
 (define (refuse-move! tid ctx reason)

@@ -67,7 +67,9 @@ exists.
   one lock. A room's `public` prop decides whether it admits directly or
   requires a key. A private room always needs a key (a room key, a key issued
   for the live traversal, or the runtime's break-glass `global_key`); there is
-  no bypass by owner identity, so gating is testable. `global_key` is
+  no bypass by owner identity, so gating is testable. A DID that already holds
+  committed presence is re-admitted without a key, because that presence is the
+  claim; the key is only required for a fresh admission. `global_key` is
   daemon-local: set it in the runtime's `ma.yaml`, never over CRUD. A room
   created by `:dig` starts `public: false` ("under construction"), and `:dig`
   reports that room's admission key.
@@ -151,6 +153,14 @@ property is not authoritative child state and must not be used for presence,
 parentage, inventory, or ownership decisions. Room-level `claim-ctx` and
 `set-claim!` are children-map operations used while admitting room children;
 they are not a second claim store.
+
+Room props are owner-only even before the room is claimed: an unowned room
+refuses `:prop` outright, which is stricter than the shared node gate. A room
+created by `:dig` is born owned by its digger (`room-init` writes the owner
+taken from the source room, which `require-owner` has already bound to
+`msg.from`), so a newly dug room is always editable by whoever dug it. The
+bootstrap room (`#concourse`) is unowned, so it must be claimed before it can
+be named or extended with `dig`.
 
 ## RPC and events
 

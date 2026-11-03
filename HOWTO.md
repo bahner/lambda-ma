@@ -57,6 +57,17 @@ client supplies `did` and a fresh `traverseId` for you.
 The room's reply is the current DID ctx. Plain focused commands and direct
 methods both address that confirmed room; there is no intermediate actor.
 
+The bootstrap `#concourse` is unowned. Claim it before naming, describing, or
+digging from it, because room props and `:dig` are owner-only:
+
+```text
+@runtime#concourse:claim
+@runtime#concourse:prop name Concourse
+@runtime#concourse:dig north
+```
+
+A room created by `dig` is automatically owned by the digger.
+
 ## Lock a container
 
 After claiming a container, its owner may lock it directly. A supplied secret
@@ -67,6 +78,35 @@ secret replaces the old one immediately.
 @runtime#bag:lock supersecret
 @runtime#bag:unlock supersecret
 ```
+
+## Dig an exit
+
+`dig <direction>` creates a passage and, unless `to` names an existing room
+DID-URL, a new room. The destination room may name the same passage with a
+different word: `back <direction>` sets that word. Without `back`, both ends
+use the source direction.
+
+```text
+dig down to "Top of a very large tree" back up
+dig north to did:ma:<runtime>#library back south
+```
+
+The two rooms name the passage independently, so renaming one end never changes
+the other. `dig <passage-did-url> <name>` replaces this room's local name for a
+passage; the old local name and the passage itself are left untouched except
+for the rename:
+
+```text
+dig did:ma:<runtime>#passage-… up
+```
+
+`exits?` shows each local name and its passage DID-URL when you need the
+address. The far room keeps its own word.
+
+Digging an existing direction again is refused and reports the passage DID so
+you can rename or `fill` it. Actor DIDs are deterministic per source room and
+direction, so a filled direction re-dug later reuses the same passage and room
+identity.
 
 ## Lock an exit
 

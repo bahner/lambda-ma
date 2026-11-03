@@ -1369,49 +1369,6 @@ mod tests {
         assert_eq!(eval_int("(get-prop \"reply-count\")", &env), 1);
     }
 
-    fn room_enter_dispatch_classifies_by_sender_not_argument_shape() {
-        let env = room_env();
-        install_send_reply_recorders(&env);
-        let mut config = std::collections::HashMap::new();
-        config.insert("runtime".to_string(), "did:ma:runtime".to_string());
-        config.insert("self".to_string(), "did:ma:runtime#room".to_string());
-        crate::state::set_config(config);
-
-        let duckie = r#"(make-map "actor" "did:ma:runtime#duckie"
-                                  "kind" "agent"
-                                  "protocol" "/ma/agent/0.0.1"
-                                  "parent" "did:ma:runtime#room"
-                                  "name" "Duckie"
-                                  "nick" "Duckie"
-                                  "description" "A duckie.")"#;
-
-        // A delegate authorises but never commits presence.
-        env.define(
-            Rc::from("msg"),
-            Value::Msg(sample_msg("did:ma:alice", "did:ma:runtime#room")),
-        );
-        eval_all(&format!("((find-method :enter) (list {duckie}) msg)"), &env).unwrap();
-        assert!(!eval_bool(
-            "(map-has-key? (children-map) \"did:ma:runtime#duckie\")",
-            &env
-        ));
-
-        // The traveller itself commits.
-        env.define(
-            Rc::from("msg"),
-            Value::Msg(sample_msg("did:ma:runtime#duckie", "did:ma:runtime#room")),
-        );
-        eval_all(&format!("((find-method :enter) (list {duckie}) msg)"), &env).unwrap();
-        assert!(eval_bool(
-            "(map-has-key? (children-map) \"did:ma:runtime#duckie\")",
-            &env
-        ));
-        assert_eq!(
-            eval_str("(speaker-name \"did:ma:runtime#duckie\")", &env),
-            "Duckie"
-        );
-    }
-
     #[test]
     fn room_who_replies_with_cbor_encodable_occupant_list() {
         let env = room_env();
